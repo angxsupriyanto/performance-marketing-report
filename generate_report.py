@@ -93,16 +93,24 @@ def parse_period(value: str) -> Period:
     raise ValueError(f"periode {value!r} tidak valid; gunakan YYYY-Www (mingguan) atau YYYY-MM (bulanan)")
 
 
+ISO_DATETIME = re.compile(r"(\d{4}-\d{2}-\d{2})(?:[T ]\d{1,2}:\d{2}(?::\d{2}(?:\.\d+)?)?\s?(?:Z|[+-]\d{2}:?\d{2})?)?")
+US_DATETIME = re.compile(r"(\d{1,2}/\d{1,2}/\d{4})(?:[ T]\d{1,2}:\d{2}(?::\d{2})?(?:\s?[AaPp][Mm])?)?")
+
+
 def parse_date(value: str, context: str) -> date | None:
+    """Dates are taken as written in the cell. A time part is ignored, never converted between time zones, which
+    matches how the Tracker's own pivots group a date-time cell by its date."""
     value = (value or "").strip()
     if not value:
         return None
-    for pattern in ("%m/%d/%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(value, pattern).date()
-        except ValueError:
-            pass
-    raise ValueError(f"{context}: tanggal tidak valid {value!r}; gunakan M/D/YYYY atau YYYY-MM-DD")
+    for pattern, fmt in ((ISO_DATETIME, "%Y-%m-%d"), (US_DATETIME, "%m/%d/%Y")):
+        match = pattern.fullmatch(value)
+        if match:
+            try:
+                return datetime.strptime(match.group(1), fmt).date()
+            except ValueError:
+                break
+    raise ValueError(f"{context}: tanggal tidak valid {value!r}; gunakan M/D/YYYY atau YYYY-MM-DD (jam di belakang tanggal boleh)")
 
 
 def decimal_amount(compact: str) -> Decimal | None:
@@ -165,19 +173,52 @@ def read_csv_rows(path: Path, wanted: set[str]) -> tuple[list[str], list[tuple[i
     return fields, rows
 
 
+def summarize_issues(label: str, issues: dict) -> str:
+    """One line: per column, how many rows are bad and one example. Values shown are dates or amounts, capped."""
+    groups = sorted(issues.items(), key=lambda item: (-item[1][0], item[0]))
+    parts = []
+    for (column, kind), (count, number, value) in groups[:10]:
+        shown = value if len(value) <= 40 else value[:37] + "..."
+        hint = "; gunakan M/D/YYYY atau YYYY-MM-DD" if kind == "tanggal tidak valid" else ""
+        parts.append(f"kolom {column}: {count} baris {kind} (contoh baris {number}: {shown!r}{hint})")
+    more = f" (+{len(groups) - 10} kelompok lain)" if len(groups) > 10 else ""
+    return f"{label}: " + " | ".join(parts) + more
+
+
 def check_stage_rows(rows: list[tuple[int, dict[str, str]]], label: str, stage: str) -> list[dict[str, str]]:
+    """Validates every row and reports all problems at once, grouped by column, instead of stopping at the first."""
     kept = []
+    issues: dict[tuple[str, str], list] = {}
+
+    def note(column: str, number: int, value: str, kind: str) -> None:
+        entry = issues.setdefault((column, kind), [0, number, value])
+        entry[0] += 1
+
     for number, clean in rows:
         if not any(clean.values()) or (clean.get("Company", "").casefold()=="grand total" and not clean.get(STAGES[stage], "")):
             continue
+        ok = True
         for column in ("Inbound Date", STAGES[stage]):
             if column in clean:
-                parse_date(clean[column], f"{label} baris {number} kolom {column}")
-        if not parse_date(clean[STAGES[stage]], f"{label} baris {number}"):
-            raise ValueError(f"{label} baris {number}: {STAGES[stage]} wajib terisi")
+                try:
+                    parse_date(clean[column], "")
+                except ValueError:
+                    note(column, number, clean[column], "tanggal tidak valid")
+                    ok = False
+        if ok and not parse_date(clean[STAGES[stage]], ""):
+            note(STAGES[stage], number, "", "wajib terisi")
+            ok = False
         if stage in ("SQL", "Deal Won"):
-            parse_money(clean[SQL_VALUE if stage == "SQL" else WON_VALUE], f"{label} baris {number}")
-        kept.append(clean)
+            column = SQL_VALUE if stage == "SQL" else WON_VALUE
+            try:
+                parse_money(clean[column], "")
+            except ValueError:
+                note(column, number, clean[column], "nilai uang tidak valid")
+                ok = False
+        if ok:
+            kept.append(clean)
+    if issues:
+        raise ValueError(summarize_issues(label, issues))
     return kept
 
 
@@ -215,9 +256,15 @@ def read_table(path: Path, allow_duplicate_keys: bool = False) -> tuple[dict[str
         if duplicates and not allow_duplicate_keys:
             raise ValueError(f"{path}: {len(duplicates)} {key_column} muncul lebih dari sekali dalam {PROFILE['name']} (contoh: {', '.join(duplicates[:3])}); perbaiki sumber atau pakai --allow-duplicate-keys setelah memastikan itu disengaja")
     data = {}
+    problems = []
     for stage in STAGES:
         candidates = [(n, r) for n, r in in_bu if r.get(STAGES[stage])]
-        data[stage] = check_stage_rows(candidates, path.name, stage)
+        try:
+            data[stage] = check_stage_rows(candidates, f"{path.name} [{stage}]", stage)
+        except ValueError as exc:
+            problems.append(str(exc))
+    if problems:
+        raise ValueError(" || ".join(problems))
     info = {
         "rows_total": len(rows),
         "rows_in_bu": len(in_bu),

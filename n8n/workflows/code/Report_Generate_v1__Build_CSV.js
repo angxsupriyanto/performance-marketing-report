@@ -10,7 +10,12 @@ const normalize = (name) => String(name).replace(/\s+/g, ' ').trim();
 function cell(column, value) {
   if (value === null || value === undefined) return '';
   if (typeof value === 'number') {
-    if (DATE_COLUMNS.has(column)) return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);
+    if (DATE_COLUMNS.has(column)) {
+      // Serial 30000 is 1982 and 80000 is 2118. Anything else (for example 20260119 typed as a number) is left as
+      // text so the generator reports it instead of turning it into a nonsense date.
+      if (value < 30000 || value > 80000) return String(value);
+      return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);
+    }
     if (MONEY_COLUMNS.has(column)) return String(Math.round(value * 100) / 100);
     return String(value);
   }

@@ -184,7 +184,7 @@ class CodeNodeTests(unittest.TestCase):
         self.assertIn("connect ECONNREFUSED", self.format_error({"error": {"message": "The service refused the connection", "cause": {"message": "connect ECONNREFUSED"}}}))
         self.assertIn("plain text failure", self.format_error({"error": "plain text failure"}))
         self.assertIn("penyebab tidak diketahui", self.format_error({"error": {}}))
-        self.assertLessEqual(len(self.format_error({"error": {"message": "x" * 5000}})), 700)
+        self.assertLessEqual(len(self.format_error({"error": {"message": "x" * 5000}})), 1300)
 
     def build_csv(self, rows, plans=None):
         code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
@@ -212,6 +212,15 @@ class CodeNodeTests(unittest.TestCase):
         table = list(csv.DictReader(io.StringIO(self.build_csv(rows)["result"][0]["json"]["csv"])))
         self.assertEqual(table[0]["Total Contract SQL"], "765032431.55")
         self.assertEqual(table[0]["Company"], 'PT "Maju", Jaya\nTbk')
+
+    def test_implausible_serial_numbers_stay_text_so_the_generator_can_report_them(self):
+        rows = sheet_rows(LEADS)
+        rows[2]["Inbound Date"] = 20260119  # a BU2 row; BU1 rows are filtered out before validation
+        text = self.build_csv(rows)["result"][0]["json"]["csv"]
+        self.assertEqual(list(csv.DictReader(io.StringIO(text)))[2]["Inbound Date"], "20260119")
+        with self.assertRaises(server.HttpError) as caught:
+            server.generate(text.encode(), "bu2", "2026-W39", False)
+        self.assertIn("Inbound Date", caught.exception.message)
 
     def test_empty_cells_may_be_omitted_by_the_sheets_api(self):
         # A column that is empty in EVERY row cannot be told apart from a missing one, so give Remark one value.

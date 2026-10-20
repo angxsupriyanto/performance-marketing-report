@@ -44,6 +44,18 @@ def run(*args):
     return subprocess.run([sys.executable, str(ROOT / "generate_report.py"), *map(str, args)], capture_output=True, text=True)
 
 
+class DateTests(unittest.TestCase):
+    def test_times_are_ignored_and_ambiguous_forms_are_still_rejected(self):
+        from datetime import date
+        parse = lambda v: report.parse_date(v, "x")
+        for text in ("2026-01-19", "2026-01-19 00:00:00", "2026-01-19 17:30", "2026-01-19T00:00:00", "2026-01-19T00:00:00.000Z", "2026-01-19 00:00:00+07:00", "2026-01-19 9:05:01", "1/19/2026", "1/19/2026 5:30 PM", "01/19/2026 17:30:00"):
+            self.assertEqual(parse(text), date(2026, 1, 19), text)
+        self.assertIsNone(parse(""))
+        for bad in ("19/01/2026", "2026-13-01", "2026-02-30", "19 Jan 2026", "2026/01/19", "2026-01-19 25:00x", "20260119", "#N/A"):
+            with self.assertRaises(ValueError, msg=bad):
+                parse(bad)
+
+
 class MoneyTests(unittest.TestCase):
     def tearDown(self):
         report.use_profile(report.load_profile("bu1"))
@@ -164,6 +176,31 @@ class TableModeTests(unittest.TestCase):
         result = run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--allow-duplicate-keys", "--output", out)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.audit(out)["inputs"]["table"]["duplicate_record_keys"], 1)
+
+    def test_all_problems_are_reported_at_once_grouped_by_column(self):
+        leads = [dict(r) for r in LEADS]
+        leads[0]["Proposal Price Quote Date"] = "19/09/2026"
+        leads[1]["Inbound Date"] = "kemarin"
+        leads[2][" Total Contract SQL"] = "#N/A"
+        leads[3][" Total Contract SQL"] = "Rp ??"
+        write_table(self.table, leads)
+        result = run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", self.root / "bad.html")
+        self.assertEqual(result.returncode, 2)
+        message = result.stderr
+        self.assertIn("Total Contract SQL: 2 baris nilai uang tidak valid", message)
+        self.assertEqual(message.count("\n"), 1, "one line, so the service can return it whole")
+        self.assertNotIn("Traceback", message)
+
+    def test_date_time_text_in_the_tracker_is_accepted(self):
+        leads = [dict(r) for r in LEADS]
+        leads[2]["SQL Date"] = "2026-09-25 00:00:00"
+        leads[4]["Deal Won Date"] = "2026-09-27 08:15:00"
+        write_table(self.table, leads)
+        out = self.root / "dt.html"
+        result = run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.audit(out)["metrics"]["now"]["SQL Value"], 8000000)
+        self.assertEqual(self.audit(out)["metrics"]["now"]["Deal Won"], 1)
 
     def test_missing_required_column_is_named(self):
         headers = [h for h in HEADERS if h != "SQL Date"]

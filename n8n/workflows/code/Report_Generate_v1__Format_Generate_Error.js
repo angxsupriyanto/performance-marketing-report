@@ -20,5 +20,5 @@ if (typeof err === 'string') {
   add(err.cause && err.cause.message);
   add(err.context && err.context.data);
 }
-const detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\s+/g, ' ').slice(0, 600);
+const detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\s+/g, ' ').slice(0, 1200);
 return { json: { text: `Laporan ${String(plan.bu).toUpperCase()} ${plan.period} GAGAL dibuat: ${detail}` } };

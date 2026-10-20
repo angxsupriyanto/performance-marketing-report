@@ -76,7 +76,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
             raise HttpError(504, "pembuatan laporan melebihi batas waktu")
         if result.returncode != 0:
             message = (result.stderr or "").strip().splitlines()
-            raise HttpError(422, (message[-1] if message else "pembuatan laporan gagal")[:1000])
+            raise HttpError(422, (message[-1] if message else "pembuatan laporan gagal")[:2500])
         html = output.read_text(encoding="utf-8")
         audit = json.loads(output.with_suffix(".audit.json").read_text(encoding="utf-8"))
         facts = json.loads(output.with_suffix(".facts.json").read_text(encoding="utf-8"))
