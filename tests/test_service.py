@@ -185,3 +185,43 @@ class SecretFileTests(unittest.TestCase):
         self.addCleanup(lambda: os.environ.pop("REPORT_SERVICE_TOKEN_FILE", None))
         with self.assertRaises(SystemExit):
             server.load_token()
+
+
+class SelftestStartupTests(unittest.TestCase):
+    """The self-test must wait for a service that is still starting, and say clearly when nothing answers."""
+
+    def run_selftest(self, port, wait):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            token = Path(tmp) / "token"
+            token.write_text(TOKEN)
+            return subprocess.run([sys.executable, "-m", "service.selftest", "--url", f"http://127.0.0.1:{port}", "--token-file", str(token), "--wait", str(wait)],
+                                  capture_output=True, text=True, cwd=ROOT, timeout=120)
+
+    def free_port(self):
+        import socket
+        with socket.socket() as sock:
+            sock.bind(("127.0.0.1", 0))
+            return sock.getsockname()[1]
+
+    def test_waits_for_a_service_that_starts_late(self):
+        import time
+        port = self.free_port()
+        def late():
+            time.sleep(3)
+            httpd = server.make_server(TOKEN, "127.0.0.1", port)
+            self.addCleanup(httpd.shutdown)
+            httpd.serve_forever()
+        threading.Thread(target=late, daemon=True).start()
+        result = self.run_selftest(port, wait=20)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("PASS:"), 5)
+
+    def test_reports_one_clear_failure_when_nothing_answers(self):
+        result = self.run_selftest(self.free_port(), wait=2)
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout.count("FAIL:"), 1)
+        self.assertIn("did not answer", result.stdout)
+        self.assertIn("docker logs report-service", result.stdout)
+        self.assertNotIn(TOKEN, result.stdout + result.stderr)

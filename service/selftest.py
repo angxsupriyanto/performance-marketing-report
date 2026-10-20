@@ -14,6 +14,7 @@ import io
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -58,6 +59,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--url", default=f"http://127.0.0.1:{os.environ.get('PORT', '8080')}")
     parser.add_argument("--token-file", default=os.environ.get("REPORT_SERVICE_TOKEN_FILE", "/run/secrets/report_service_token"))
+    parser.add_argument("--wait", type=int, default=30, help="seconds to wait for the service to start answering")
     args = parser.parse_args()
 
     failures = 0
@@ -73,7 +75,15 @@ def main() -> int:
         print(f"FAIL: token file cannot be used: {exc}")
         return 1
 
+    deadline = time.monotonic() + args.wait
     status, body = call(args.url, "/healthz")
+    while status == 0 and time.monotonic() < deadline:  # connection refused: the service is still starting
+        time.sleep(1)
+        status, body = call(args.url, "/healthz")
+    if status == 0:
+        print(f"FAIL: the service did not answer at {args.url} within {args.wait}s ({body}). Check: docker logs report-service")
+        print("1 CHECK(S) FAILED")
+        return 1
     report(status == 200 and "bu1" in body and "bu2" in body, "health endpoint answers and lists bu1 and bu2")
     report(call(args.url, "/v1/analysis/apply", b"{}")[0] == 401, "request without token is refused (401)")
     report(call(args.url, "/v1/analysis/apply", b"{}", "x" * 40)[0] == 401, "request with wrong token is refused (401)")
