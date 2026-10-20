@@ -37,8 +37,11 @@ FASE 0 - temukan (hanya membaca)
 3. TANYA SAYA: tampilkan ketiga hal itu dan minta saya mengonfirmasi sebelum lanjut.
 
 FASE 1 - layanan laporan
-1. Dari folder repo ini, buat token tanpa menampilkannya:
+1. Dari folder repo ini, buat token tanpa menampilkannya. Di bash/WSL:
      cd deploy && openssl rand -hex 32 > report_service_token.txt && chmod 600 report_service_token.txt
+   Di PowerShell, JANGAN pakai ">" (PowerShell 5 menulis UTF-16 dengan BOM). Pakai:
+     openssl rand -hex 32 | Set-Content -NoNewline -Encoding ascii deploy\report_service_token.txt
+   Layanan kini mengenali berkas ber-BOM dan CRLF, tetapi tetap menolak berkas dengan spasi atau karakter non-ASCII.
 2. Salin deploy/docker-compose.report-service.example.yml menjadi deploy/docker-compose.report-service.local.yml
    dan ubah HANYA nama network menjadi network n8n dari Fase 0. Jangan ubah pengaturan keamanan di dalamnya.
 3. Bangun dan jalankan hanya layanan ini sebagai proyek terpisah:

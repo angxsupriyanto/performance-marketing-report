@@ -24,6 +24,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import apply_analysis  # noqa: E402
 import generate_report  # noqa: E402
+from service.secretfile import read_secret  # noqa: E402
 
 MAX_BODY_BYTES = int(os.environ.get("REPORT_MAX_BODY_BYTES", 32 * 1024 * 1024))
 GENERATOR_TIMEOUT_SECONDS = int(os.environ.get("REPORT_GENERATOR_TIMEOUT", 180))
@@ -42,10 +43,15 @@ class HttpError(Exception):
 
 def load_token() -> str:
     path = os.environ.get("REPORT_SERVICE_TOKEN_FILE")
-    token = Path(path).read_text(encoding="utf-8").strip() if path else os.environ.get("REPORT_SERVICE_TOKEN", "").strip()
-    if len(token) < 24:
-        raise SystemExit("REPORT_SERVICE_TOKEN_FILE (atau REPORT_SERVICE_TOKEN) wajib diisi dengan minimal 24 karakter; layanan tidak dijalankan tanpa token")
-    return token
+    try:
+        if path:
+            return read_secret(path)
+        token = os.environ.get("REPORT_SERVICE_TOKEN", "").strip()
+        if len(token) < 24 or not token.isascii() or not token.isprintable() or " " in token:
+            raise ValueError("REPORT_SERVICE_TOKEN must be at least 24 printable ASCII characters without spaces")
+        return token
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"layanan tidak dijalankan tanpa token yang valid: {exc}")
 
 
 def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool) -> dict:

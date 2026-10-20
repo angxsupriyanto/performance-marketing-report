@@ -127,3 +127,61 @@ class ServiceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SecretFileTests(unittest.TestCase):
+    """Token files written on Windows must give the same token a person copies into n8n."""
+
+    CLEAN = "0123456789abcdef" * 4
+
+    def write(self, data: bytes) -> str:
+        import tempfile
+        handle = tempfile.NamedTemporaryFile(delete=False)
+        handle.write(data)
+        handle.close()
+        self.addCleanup(lambda: Path(handle.name).unlink(missing_ok=True))
+        return handle.name
+
+    def test_every_windows_encoding_yields_the_same_clean_token(self):
+        from service.secretfile import read_secret
+        variants = {
+            "plain": self.CLEAN.encode(),
+            "lf": (self.CLEAN + "\n").encode(),
+            "crlf": (self.CLEAN + "\r\n").encode(),
+            "utf8-bom": b"\xef\xbb\xbf" + self.CLEAN.encode() + b"\r\n",
+            "utf16-le-bom (PowerShell 5 '>')": "﻿".encode("utf-16-le") + (self.CLEAN + "\r\n").encode("utf-16-le"),
+            "utf16-be-bom": b"\xfe\xff" + (self.CLEAN + "\n").encode("utf-16-be"),
+        }
+        for name, data in variants.items():
+            self.assertEqual(read_secret(self.write(data)), self.CLEAN, name)
+
+    def test_unusable_secrets_are_refused_without_echoing_them(self):
+        from service.secretfile import read_secret
+        for data in (b"short", ("a" * 30 + " " + "b" * 30).encode(), ("a" * 30 + "​").encode("utf-8"), ("a" * 30 + "\nb" * 5).encode(), b"\xff\xfe\x00"):
+            with self.assertRaises(ValueError) as caught:
+                read_secret(self.write(data))
+            self.assertNotIn("a" * 30, str(caught.exception))
+
+    def test_service_start_reads_a_bom_token_and_authenticates_with_the_clean_one(self):
+        import os
+        path = self.write(b"\xef\xbb\xbf" + self.CLEAN.encode() + b"\r\n")
+        os.environ["REPORT_SERVICE_TOKEN_FILE"] = path
+        self.addCleanup(lambda: os.environ.pop("REPORT_SERVICE_TOKEN_FILE", None))
+        token = server.load_token()
+        self.assertEqual(token, self.CLEAN)
+        httpd = server.make_server(token, "127.0.0.1", 0)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+        self.addCleanup(httpd.shutdown)
+        request = urllib.request.Request(f"http://127.0.0.1:{httpd.server_address[1]}/v1/analysis/apply", data=b"{}", method="POST")
+        request.add_header("Authorization", "Bearer " + self.CLEAN)
+        with self.assertRaises(urllib.error.HTTPError) as caught:
+            urllib.request.urlopen(request, timeout=30)
+        caught.exception.close()
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_unusable_token_file_stops_the_service_from_starting(self):
+        import os
+        os.environ["REPORT_SERVICE_TOKEN_FILE"] = self.write(b"short")
+        self.addCleanup(lambda: os.environ.pop("REPORT_SERVICE_TOKEN_FILE", None))
+        with self.assertRaises(SystemExit):
+            server.load_token()

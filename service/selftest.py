@@ -18,6 +18,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from service.secretfile import read_secret  # noqa: E402
+
 SAMPLE_COLUMNS = ["Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Remark", "Inbound Date", "MQL Date",
                   "Proposal Price Quote Date", "ARR + OTF (Tanpa PPN)", "Deal Won Date", "Total Contract Deal Won", "BU", "Record Key",
                   "SQL Date", "Total Contract SQL"]
@@ -65,9 +68,9 @@ def main() -> int:
         failures += 0 if ok else 1
 
     try:
-        token = Path(args.token_file).read_text(encoding="utf-8").strip()
-    except OSError:
-        print("FAIL: token file cannot be read")
+        token = read_secret(args.token_file)
+    except (OSError, ValueError) as exc:
+        print(f"FAIL: token file cannot be used: {exc}")
         return 1
 
     status, body = call(args.url, "/healthz")
