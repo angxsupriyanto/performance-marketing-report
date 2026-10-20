@@ -61,7 +61,8 @@ FASE 2 - database laporan (tahap pemeriksaan dulu)
 FASE 3 - verifikasi (perintah ini tidak bergantung pada shell, aman dari PowerShell)
 1. Layanan, dari dalam container (harus 5 baris PASS dan "ALL CHECKS PASSED"):
      docker exec report-service python -m service.selftest
-2. Database, read-only (harus 12 baris PASS):
+2. Database, read-only (harus 12 baris PASS; jika repo sudah memuat tabel target dan install-viewer-db.sh belum dijalankan,
+   baris 13-16 akan FAIL. Itu wajar, bukan kerusakan; baris 1-12 yang menentukan di fase ini):
      docker cp database/verify_install.sql <container postgres>:/tmp/verify_install.sql
      docker exec <container postgres> psql -U <user admin> -d marketing_reports -f /tmp/verify_install.sql
      docker exec <container postgres> rm /tmp/verify_install.sql

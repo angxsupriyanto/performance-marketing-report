@@ -43,12 +43,12 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
   UNION ALL SELECT 14, 'table target_entries and view targets_latest exist',
          (SELECT count(*) = 2 FROM information_schema.tables WHERE table_schema = 'reports' AND table_name IN ('target_entries', 'targets_latest'))
   UNION ALL SELECT 15, 'report_viewer can SELECT reports and INSERT targets, and nothing else',
-         has_table_privilege(to_regrole('report_viewer'), 'reports.latest_reports', 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'INSERT')
+         has_table_privilege(to_regrole('report_viewer'), 'reports.latest_reports', 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.target_entries'), 'INSERT')
          AND NOT (has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'INSERT') OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_analyses', 'INSERT')
-                  OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'DELETE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'TRUNCATE')
+                  OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.target_entries'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.target_entries'), 'DELETE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.target_entries'), 'TRUNCATE')
                   OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'DELETE'))
   UNION ALL SELECT 16, 'report_writer and report_reader cannot change targets',
-         NOT (has_table_privilege('report_writer', 'reports.target_entries', 'INSERT') OR has_table_privilege('report_writer', 'reports.target_entries', 'UPDATE')
-              OR has_table_privilege('report_reader', 'reports.target_entries', 'INSERT') OR has_table_privilege('report_reader', 'reports.target_entries', 'UPDATE'))
+         NOT (has_table_privilege('report_writer', to_regclass('reports.target_entries'), 'INSERT') OR has_table_privilege('report_writer', to_regclass('reports.target_entries'), 'UPDATE')
+              OR has_table_privilege('report_reader', to_regclass('reports.target_entries'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.target_entries'), 'UPDATE'))
 ) checks
 ORDER BY n;
