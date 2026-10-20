@@ -98,8 +98,24 @@ class ServiceTests(unittest.TestCase):
         self.assertEqual(ok.returncode, 0, ok.stdout)
         self.assertIn("ALL CHECKS PASSED", ok.stdout)
         self.assertEqual(nope.returncode, 1)
-        self.assertIn("FAIL: the real token was not accepted", nope.stdout)
+        self.assertIn("FAIL: the real token is accepted", nope.stdout)
         self.assertNotIn(TOKEN, ok.stdout + ok.stderr + nope.stdout)
+
+    def test_selftest_module_covers_auth_and_a_real_report(self):
+        import subprocess
+        import tempfile
+        from service import selftest
+        with tempfile.TemporaryDirectory() as tmp:
+            token = Path(tmp) / "token"
+            token.write_text(TOKEN)
+            result = subprocess.run([sys.executable, "-m", "service.selftest", "--url", self.base, "--token-file", str(token)], capture_output=True, text=True, cwd=ROOT, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout.count("PASS:"), 5)
+        self.assertIn("ALL CHECKS PASSED", result.stdout)
+        self.assertNotIn(TOKEN, result.stdout + result.stderr)
+        sys.path.insert(0, str(ROOT / "n8n"))
+        import build_workflows
+        self.assertEqual(set(selftest.SAMPLE_COLUMNS), set(build_workflows.tracker_columns()[0]))
 
     def test_token_is_required_to_start(self):
         import os

@@ -22,34 +22,12 @@ pass() { echo "PASS: $1"; }
 fail() { echo "FAIL: $1"; failures=$((failures + 1)); }
 check() { if [ "$1" = "ok" ]; then pass "$2"; else fail "$2"; fi; }
 
-# Python probe used both inside the container and (via curl-free fallback) on the host.
-probe='
-import json, os, sys, urllib.request, urllib.error
-base, token_path = sys.argv[1], sys.argv[2]
-token = open(token_path).read().strip() if token_path else ""
-def call(path, body=None, bearer=None):
-    req = urllib.request.Request(base + path, data=body, method="POST" if body is not None else "GET")
-    if bearer is not None:
-        req.add_header("Authorization", "Bearer " + bearer)
-    try:
-        with urllib.request.urlopen(req, timeout=15) as r:
-            return r.status, r.read().decode()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode()
-status, body = call("/healthz")
-print("health", status, "bu1" in body and "bu2" in body)
-print("no_token", call("/v1/analysis/apply", b"{}")[0])
-print("wrong_token", call("/v1/analysis/apply", b"{}", "x" * 40)[0])
-print("good_token", call("/v1/analysis/apply", b"{}", token)[0])
-'
-
-report_probe() {
-  # $1 = interpreter command prefix, $2 = base URL, $3 = token path
-  out=$($1 python3 -c "$probe" "$2" "$3" 2>/dev/null) || { fail "probe could not run"; return; }
-  echo "$out" | grep -q '^health 200 True$' && pass "health endpoint answers and lists bu1 and bu2" || fail "health endpoint did not answer 200 with bu1 and bu2"
-  echo "$out" | grep -q '^no_token 401$' && pass "request without token is refused (401)" || fail "request without token was not refused"
-  echo "$out" | grep -q '^wrong_token 401$' && pass "request with wrong token is refused (401)" || fail "request with wrong token was not refused"
-  case "$(echo "$out" | sed -n 's/^good_token //p')" in 400|422) pass "request with the real token is accepted (rejected only for its empty body)" ;; *) fail "the real token was not accepted" ;; esac
+# The functional checks live in service/selftest.py so no shell quoting is involved.
+selftest_output() {
+  # $@ = command that runs the self-test; prints its PASS/FAIL lines and counts failures.
+  out=$("$@" 2>&1) || true
+  echo "$out" | grep -E '^(PASS|FAIL):' || fail "self-test could not run: $(echo "$out" | tail -1)"
+  n=$(echo "$out" | grep -c '^FAIL:') ; failures=$((failures + n))
 }
 
 if [ -n "$container" ]; then
@@ -62,7 +40,7 @@ if [ -n "$container" ]; then
   [ -n "$uid" ] && [ "$uid" != "0" ] && check ok "process does not run as root (uid $uid)" || check no "process does not run as root (uid ${uid:-unknown})"
   ro=$(docker inspect -f '{{.HostConfig.ReadonlyRootfs}}' "$container" 2>/dev/null)
   [ "$ro" = "true" ] && check ok "root filesystem is read-only" || check no "root filesystem is read-only (got: ${ro:-unknown})"
-  report_probe "docker exec $container" "http://127.0.0.1:8080" "/run/secrets/report_service_token"
+  selftest_output docker exec "$container" python -m service.selftest
   if [ -n "$n8n" ]; then
     reach=$(docker exec "$n8n" wget -qO- -T 5 http://report-service:8080/healthz 2>/dev/null)
     case "$reach" in *'"status": "ok"'*) pass "n8n container reaches http://report-service:8080 over the Docker network" ;; *) fail "n8n container cannot reach http://report-service:8080 (is it on the same network, and is the service named report-service?)" ;; esac
@@ -70,7 +48,9 @@ if [ -n "$container" ]; then
     echo "SKIP: pass --n8n-container to test the path from n8n"
   fi
 elif [ -n "$url" ] && [ -n "$token_file" ]; then
-  report_probe "env" "$url" "$token_file"
+  here=$(cd "$(dirname "$0")/.." && pwd)
+  run_local() { (cd "$here" && python3 -m service.selftest --url "$url" --token-file "$token_file"); }
+  selftest_output run_local
 else
   echo "usage: --container NAME [--n8n-container NAME] | --url URL --token-file FILE" >&2; exit 64
 fi

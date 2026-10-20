@@ -55,11 +55,22 @@ FASE 2 - database laporan (tahap pemeriksaan dulu)
    jalankan perintah yang sama dengan --yes. Jika ada baris PROBLEM atau REVIEW, jangan lanjut.
 3. Setelah instal, jangan membuka berkas password. Cukup laporkan path folder reports_db_secrets.
 
-FASE 3 - verifikasi
-1. Jalankan:
-     deploy/verify-report-service.sh --container report-service --n8n-container <container n8n>
-2. Laporkan setiap baris PASS/FAIL. Jika ada FAIL, jelaskan penyebab paling mungkin dan perbaiki hanya yang
-   terkait container report-service, setelah saya setuju.
+FASE 3 - verifikasi (perintah ini tidak bergantung pada shell, aman dari PowerShell)
+1. Layanan, dari dalam container (harus 5 baris PASS dan "ALL CHECKS PASSED"):
+     docker exec report-service python -m service.selftest
+2. Database, read-only (harus 12 baris PASS):
+     docker cp database/verify_install.sql <container postgres>:/tmp/verify_install.sql
+     docker exec <container postgres> psql -U <user admin> -d marketing_reports -f /tmp/verify_install.sql
+     docker exec <container postgres> rm /tmp/verify_install.sql
+3. Pemeriksaan container: status healthy, tidak ada port ter-publish (docker port report-service kosong), proses
+   bukan root (docker exec report-service id -u bukan 0), root filesystem read-only (docker inspect -f
+   "{{.HostConfig.ReadonlyRootfs}}" report-service bernilai true), dan n8n menjangkau layanan:
+     docker exec <container n8n> wget -qO- -T 5 http://report-service:8080/healthz
+   (Di WSL atau Git Bash, langkah 1 dan 3 bisa diganti satu perintah:
+    deploy/verify-report-service.sh --container report-service --n8n-container <container n8n>.)
+4. Laporkan setiap baris PASS/FAIL apa adanya. Jangan menyebut "PASS (manual)" untuk pemeriksaan yang tidak
+   benar-benar dijalankan. Jika ada FAIL, jelaskan penyebab paling mungkin dan perbaiki hanya yang terkait
+   container report-service, setelah saya setuju.
 
 LAPORAN AKHIR (ringkas)
 - Nama container dan network yang dipakai, hasil pemeriksaan database, hasil verifikasi.
@@ -79,4 +90,4 @@ LAPORAN AKHIR (ringkas)
 
 ## Catatan
 
-Skrip di folder ini diuji tanpa Docker daemon: skrip database terhadap server PostgreSQL sementara dengan perintah `docker exec` ditiru, dan skrip pemeriksaan terhadap server lokal. Perintah Docker yang sebenarnya (build, healthcheck, network, `docker exec`) belum pernah dijalankan; itulah yang akan diuji Gordon pertama kali. Bila Gordon versi Anda tidak bisa menjalankan perintah, perintah di atas bisa Anda jalankan sendiri dengan urutan yang sama.
+Pemeriksaan fungsional kini ada di `service/selftest.py` (di dalam image) dan `database/verify_install.sql`, supaya tidak ada kutipan shell yang rapuh. Skrip di folder ini diuji tanpa Docker daemon: skrip database terhadap server PostgreSQL sementara dengan perintah `docker exec` ditiru, dan skrip pemeriksaan terhadap server lokal. Perintah Docker yang sebenarnya (build, healthcheck, network, `docker exec`) belum pernah dijalankan; itulah yang akan diuji Gordon pertama kali. Bila Gordon versi Anda tidak bisa menjalankan perintah, perintah di atas bisa Anda jalankan sendiri dengan urutan yang sama.
