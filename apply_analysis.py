@@ -2,10 +2,11 @@
 """Optional second pass: insert reviewed prose after numeric report verification."""
 import argparse
 import json
+import re
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-SELECTORS = {
+STATIC_SELECTORS = {
     "executive_summary": ".executive-prose",
     "funnel_analysis": ".funnel .analysis-body",
     "pipeline_insight": ".timing-section .analysis-body",
@@ -15,12 +16,19 @@ SELECTORS = {
     "stage_deal_won": ".breakdown-section .stage-table:nth-child(4) .analysis-body",
     "cross_stage_insight": ".cross-stage .analysis-body",
     "hardware_summary": ".hardware-analysis-summary p",
-    "hardware_dashcam": ".hardware-product-analysis .product-analysis:nth-of-type(2) p",
-    "hardware_gps_tracker": ".hardware-product-analysis .product-analysis:nth-of-type(3) p",
-    "hardware_fuel": ".hardware-product-analysis .product-analysis:nth-of-type(4) p",
-    "hardware_mdvr": ".hardware-product-analysis .product-analysis:nth-of-type(5) p",
-    "hardware_obd": ".hardware-product-analysis .product-analysis:nth-of-type(6) p",
 }
+
+
+def slug(name):
+    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+
+
+def selectors_for(soup):
+    """Product slots come from the report itself, so each BU keeps its own product list."""
+    selectors = dict(STATIC_SELECTORS)
+    for position, block in enumerate(soup.select(".hardware-product-analysis .product-analysis"), 2):
+        selectors["hardware_" + slug(block.select_one("strong").get_text())] = f".hardware-product-analysis .product-analysis:nth-of-type({position}) p"
+    return selectors
 
 
 def main():
@@ -32,10 +40,11 @@ def main():
     if args.report.resolve()==args.output.resolve():
         parser.error("--output harus berbeda dari --report agar laporan numerik tetap utuh")
     data=json.loads(args.analysis.read_text(encoding="utf-8"))
-    unknown=set(data)-set(SELECTORS)
-    if unknown:parser.error("Kunci JSON tidak dikenal: "+", ".join(sorted(unknown)))
     soup=BeautifulSoup(args.report.read_text(encoding="utf-8"),"html.parser")
-    for key,selector in SELECTORS.items():
+    selectors=selectors_for(soup)
+    unknown=set(data)-set(selectors)
+    if unknown:parser.error("Kunci JSON tidak dikenal untuk laporan ini: "+", ".join(sorted(unknown)))
+    for key,selector in selectors.items():
         target=soup.select_one(selector)
         if target is None:parser.error("Template tidak cocok: "+selector)
         value=data.get(key,"")

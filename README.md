@@ -1,6 +1,6 @@
 # Performance Marketing Dashboard (weekly & monthly, per BU)
 
-Template HTML 960 px dan generator laporan mingguan atau bulanan per BU. Saat ini hanya profil **BU1** yang tersedia; BU2 menunggu contoh header CSV-nya (lihat bagian *Menambah BU baru*). Proses angka **deterministik**: empat CSV Campaign Tracker masuk, minggu ISO ditentukan secara eksplisit, dan satu HTML mandiri serta berkas audit dihasilkan. Script tidak memakai AI, tidak mencari data di internet, dan tidak menulis analisis deskriptif.
+Template HTML 960 px dan generator laporan mingguan atau bulanan per BU. Profil yang tersedia: **BU1** dan **BU2** (lihat `profiles/`). Proses angka **deterministik**: empat CSV Campaign Tracker masuk, minggu ISO ditentukan secara eksplisit, dan satu HTML mandiri serta berkas audit dihasilkan. Script tidak memakai AI, tidak mencari data di internet, dan tidak menulis analisis deskriptif.
 
 Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis kosong**. Repo GitHub saat ini bersifat publik. Jangan commit CSV lead, HTML laporan terisi, audit run, atau JSON analisis berisi informasi internal. `.gitignore` mengecualikan berkas tersebut secara default.
 
@@ -9,7 +9,7 @@ Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis 
 | File | Fungsi |
 |---|---|
 | `dashboard_template.html` | Tampilan kosong dengan layout dan panel analisis kosong. Bisa dibuka langsung sebagai preview desain. |
-| `profiles/bu1.json` | Profil BU: nama, daftar produk hardware, nama kolom nilai, kolom wajib. |
+| `profiles/bu1.json`, `profiles/bu2.json` | Profil BU: nama, produk hardware, kolom tanggal SQL, kolom nilai, kolom wajib. |
 | `skill/SKILL.md` | Draf skill Claude yang memanggil generator ini (menggantikan skill lama berbasis pandas). |
 | `generate_report.py` | Membaca dan memvalidasi empat CSV, menghitung angka, lalu menghasilkan HTML. |
 | `METRIC_RULES.md` | Sumber aturan hitung dan pengecualian. Ubah ini bersama kode bila definisi bisnis berubah. |
@@ -98,17 +98,42 @@ python generate_report.py --input-dir input/BU1 --period 2026-W39  # mingguan
 
 Audit JSON kini memuat `bu`, `period`, `period_kind`, dan `comparison_end`. Kunci `same_week` tetap bernama itu untuk kompatibilitas; pada laporan bulanan artinya "inbound dan event dalam bulan yang sama".
 
+## Sumber satu tabel: NEW Customers List (`--table`)
+
+Bila semua data ada di satu tabel dengan satu baris per lead (tab *NEW Customers List*), ekspor tab itu ke CSV dan jalankan:
+
+```bash
+python generate_report.py --table input/customers.csv --bu bu2 --period 2026-W39
+```
+
+Generator memfilter baris menurut kolom `BU` (nilai harus sama dengan nama profil, mis. `BU2`, spasi dan huruf besar-kecil diabaikan; nilai lain bisa didaftarkan di `bu_values` pada profil), lalu membentuk empat tampilan stage dari kolom tanggal masing-masing. Hasilnya identik dengan memakai empat CSV stage untuk lead yang sama; ini diuji. Aturan tambahan:
+
+- `Record Key` ganda dalam satu BU **ditolak**, karena akan menghitung lead dua kali. Pakai `--allow-duplicate-keys` hanya bila ganda itu disengaja.
+- Bila tidak ada baris untuk BU yang diminta, pesan error menampilkan nilai kolom `BU` yang ditemukan.
+- Header `ARR + OTF (Tanpa PPN)` dan `Total Contract Deal Won` (tanpa awalan "SUM of") dikenali lewat `value_column_aliases` di profil.
+- Tanggal harus `M/D/YYYY` atau `YYYY-MM-DD`. Jika sheet berformat D/M/YYYY, tanggal seperti `3/4/2026` akan terbaca salah tanpa error; pastikan format ekspor sebelum dipakai.
+- Audit mencatat `rows_total`, `rows_in_bu`, `rows_without_bu`, jumlah baris per stage, dan SHA-256 file.
+
+## Perbedaan BU1 dan BU2
+
+| | BU1 | BU2 |
+|---|---|---|
+| Tanggal SQL | `Proposal Price Quote Date` | `SQL Date` |
+| SQL Value | `ARR + OTF (Tanpa PPN)` | `Total Contract SQL` |
+| Produk | Dashcam, GPS Tracker, Fuel, MDVR, OBD | sama, ditambah **Ecosystem** |
+
+Ecosystem diambil dari nilai `Ecosystem` pada kolom `Campaign Hardware` (diisi manual). Slot analisis produk dan tombol filter dibentuk dari daftar produk profil; untuk BU2 salin `analysis.bu2.example.json` yang memiliki kunci `hardware_ecosystem`. Kunci JSON yang tidak ada di laporan ditolak.
+
 ## Menambah BU baru
 
-1. Ambil **hanya baris header** keempat CSV BU baru (tanpa data lead) dan bandingkan dengan `profiles/bu1.json`.
-2. Salin `profiles/bu1.json` menjadi `profiles/<bu>.json`, lalu ubah nama, produk, nama kolom nilai, dan kolom wajib.
-3. Jika definisi stage atau rumus BU baru berbeda, ubah `METRIC_RULES.md` **dulu**, baru kode. Profil hanya mengatur nama dan label, bukan rumus.
-4. Template saat ini memiliki lima slot analisis produk (Dashcam, GPS Tracker, Fuel, MDVR, OBD). BU dengan jumlah atau jenis produk lain perlu penyesuaian `dashboard_template.html` dan `apply_analysis.py`.
-5. Jalankan dengan `--bu <bu>` dan tambahkan uji untuk profil tersebut.
+1. Ambil **hanya baris header** tabel dan bandingkan dengan `profiles/bu1.json`.
+2. Salin profil terdekat menjadi `profiles/<bu>.json`, lalu ubah nama, produk, `stage_date_columns`, kolom nilai, dan alias.
+3. Jika definisi stage atau rumus berbeda lebih dari kolom dan label, ubah `METRIC_RULES.md` **dulu**, baru kode. Profil mengatur nama kolom dan label, bukan rumus.
+4. Tambahkan uji untuk profil tersebut di `tests/test_table_mode.py` dan jalankan dengan `--bu <bu>`.
 
 ## Analisis deskriptif: langkah kedua setelah angka benar
 
-Salin `analysis.example.json` menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.
+Salin `analysis.example.json` (BU2: `analysis.bu2.example.json`) menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.
 
 **PowerShell**
 

@@ -1,0 +1,151 @@
+import csv
+import json
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+from bs4 import BeautifulSoup
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+import generate_report as report
+
+HEADERS = ["Record Key", "No", "Company", "BU", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Remark",
+           "Inbound Date", "MQL Date", "SQL Date", "Proposal Price Quote Date", " Total Contract SQL", " ARR + OTF (Tanpa PPN) ",
+           "Deal Won Date", " Total Contract Deal Won", "Deals Number", "Deals Number2"]
+
+
+def lead(key, bu, hw, inbound, mql="", sql_date="", ppq="", contract="", arr="", won="", won_value="", company=None, campaign="Camp A"):
+    return {"Record Key": key, "No": key, "Company": company or f"Co{key}", "BU": bu, "Channel": "Paid", "Source": "Google Ads",
+            "Campaign": campaign, "Campaign Hardware": hw, "Industry": "Mfg", "Remark": "", "Inbound Date": inbound, "MQL Date": mql,
+            "SQL Date": sql_date, "Proposal Price Quote Date": ppq, " Total Contract SQL": contract, " ARR + OTF (Tanpa PPN) ": arr,
+            "Deal Won Date": won, " Total Contract Deal Won": won_value, "Deals Number": "", "Deals Number2": ""}
+
+
+LEADS = [
+    lead("1", "BU1", "GPS", "9/21/2026", mql="9/22/2026", ppq="9/24/2026", arr="Rp 1.000.000", contract="Rp 9.000.000", sql_date="9/23/2026"),
+    lead("2", "BU1", "Dashcam", "9/14/2026", mql="9/15/2026"),
+    lead("3", "BU2", "Ecosystem", "9/22/2026", mql="9/23/2026", sql_date="9/25/2026", contract="Rp 5.000.000", ppq="9/26/2026", arr="Rp 111.000"),
+    lead("4", "BU2", "Fuel", "9/10/2026", mql="9/11/2026", sql_date="9/16/2026", contract="Rp 700.000"),
+    lead("5", "BU2", "GPS", "9/23/2026", won="9/27/2026", won_value="Rp 2.500.000", sql_date="9/24/2026", contract="Rp 3.000.000"),
+]
+
+
+def write_table(path, leads, headers=HEADERS):
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers)
+        writer.writeheader()
+        writer.writerows(leads)
+
+
+def run(*args):
+    return subprocess.run([sys.executable, str(ROOT / "generate_report.py"), *map(str, args)], capture_output=True, text=True)
+
+
+class TableModeTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.table = self.root / "customers.csv"
+        write_table(self.table, LEADS)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def audit(self, out):
+        return json.loads(out.with_suffix(".audit.json").read_text())
+
+    def test_bu1_uses_proposal_date_and_arr_and_ignores_bu2_rows(self):
+        out = self.root / "bu1.html"
+        result = run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        audit = self.audit(out)
+        self.assertEqual(audit["source"], "table")
+        self.assertEqual(audit["metrics"]["now"]["Submission"], 1)
+        self.assertEqual(audit["metrics"]["now"]["SQL"], 1)
+        self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1000000)
+        self.assertEqual(audit["inputs"]["table"]["rows_in_bu"], 2)
+        self.assertNotIn("Ecosystem", out.read_text())
+
+    def test_bu2_uses_sql_date_total_contract_sql_and_ecosystem(self):
+        out = self.root / "bu2.html"
+        result = run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        audit = self.audit(out)
+        self.assertEqual(audit["stage_date_columns"]["SQL"], "SQL Date")
+        self.assertEqual(audit["metrics"]["now"]["SQL"], 2)
+        self.assertEqual(audit["metrics"]["now"]["SQL Value"], 8000000)
+        self.assertEqual(audit["metrics"]["now"]["Deal Won Value"], 2500000)
+        self.assertEqual(audit["metrics"]["prev"]["SQL Value"], 700000)
+        html = out.read_text()
+        soup = BeautifulSoup(html, "html.parser")
+        self.assertIn("Ecosystem", [b.get("data-hardware") for b in soup.select(".detail-filters button")])
+        self.assertEqual(soup.select(".hardware-product-analysis .product-analysis strong")[-1].get_text(), "Ecosystem")
+        self.assertIn("TOTAL 6 PRODUK", html)
+        self.assertNotIn("Proposal Price Quote Date", html)
+        self.assertIn("Total Contract SQL", soup.select_one(".footer").get_text())
+
+    def test_table_mode_matches_four_stage_csvs(self):
+        stage_rows = {
+            "Submission": [dict(r, Remark="") for r in LEADS if r["BU"] == "BU2" and r["Inbound Date"]],
+            "MQL": [r for r in LEADS if r["BU"] == "BU2" and r["MQL Date"]],
+            "SQL": [r for r in LEADS if r["BU"] == "BU2" and r["SQL Date"]],
+            "Deal Won": [r for r in LEADS if r["BU"] == "BU2" and r["Deal Won Date"]],
+        }
+        paths = {}
+        for stage, rows in stage_rows.items():
+            paths[stage] = self.root / f"BU2 {stage}.csv"
+            write_table(paths[stage], rows)
+        from_table = self.root / "t.html"
+        from_stages = self.root / "s.html"
+        self.assertEqual(run("--table", self.table, "--bu", "bu2", "--period", "2026-09", "--output", from_table).returncode, 0)
+        result = run("--bu", "bu2", "--input-dir", self.root, "--period", "2026-09", "--output", from_stages)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.audit(from_table)["metrics"], self.audit(from_stages)["metrics"])
+        self.assertEqual(self.audit(from_stages)["source"], "stage_csv")
+        self.assertEqual(self.audit(from_stages)["metrics"]["now"]["SQL Value"], 8700000)
+
+    def test_unknown_bu_value_lists_what_exists(self):
+        write_table(self.table, [dict(r, BU="Bisnis Unit 9") for r in LEADS])
+        result = run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--output", self.root / "x.html")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Bisnis Unit 9", result.stderr)
+
+    def test_duplicate_record_key_is_rejected_unless_allowed(self):
+        write_table(self.table, LEADS + [dict(LEADS[0], Company="Copy")])
+        out = self.root / "d.html"
+        result = run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("Record Key", result.stderr)
+        result = run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--allow-duplicate-keys", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.audit(out)["inputs"]["table"]["duplicate_record_keys"], 1)
+
+    def test_missing_required_column_is_named(self):
+        headers = [h for h in HEADERS if h != "SQL Date"]
+        write_table(self.table, [{k: v for k, v in r.items() if k != "SQL Date"} for r in LEADS], headers)
+        result = run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", self.root / "m.html")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("SQL Date", result.stderr)
+
+    def test_analysis_keys_follow_report_products(self):
+        out = self.root / "bu2.html"
+        self.assertEqual(run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", out).returncode, 0)
+        analysis = self.root / "a.json"
+        analysis.write_text(json.dumps({"hardware_ecosystem": "Ekosistem <b>naik</b>"}))
+        final = self.root / "final.html"
+        apply = [sys.executable, str(ROOT / "apply_analysis.py"), "--report", str(out), "--analysis", str(analysis), "--output", str(final)]
+        self.assertEqual(subprocess.run(apply, capture_output=True, text=True).returncode, 0)
+        self.assertIn("Ekosistem &lt;b&gt;naik&lt;/b&gt;", final.read_text())
+        bu1 = self.root / "bu1.html"
+        self.assertEqual(run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--output", bu1).returncode, 0)
+        apply[apply.index("--report") + 1] = str(bu1)
+        rejected = subprocess.run(apply, capture_output=True, text=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertIn("hardware_ecosystem", rejected.stderr)
+
+
+if __name__ == "__main__":
+    unittest.main()

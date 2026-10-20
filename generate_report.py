@@ -10,17 +10,12 @@ import re
 import sys
 from collections import Counter, defaultdict
 import calendar
+import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-STAGES = {
-    "Submission": "Inbound Date",
-    "MQL": "MQL Date",
-    "SQL": "Proposal Price Quote Date",
-    "Deal Won": "Deal Won Date",
-}
 PROFILE_DIR = Path(__file__).with_name("profiles")
 
 
@@ -34,15 +29,17 @@ def load_profile(name: str) -> dict:
 
 def required_columns(profile: dict) -> dict[str, tuple[str, ...]]:
     common = tuple(profile["common_columns"])
+    dates = profile["stage_date_columns"]
     return {
-        "Submission": common + ("Remark", "Inbound Date", "MQL Date"),
-        "MQL": common + ("Inbound Date", "MQL Date"),
-        "SQL": common + ("Inbound Date", "Proposal Price Quote Date", profile["sql_value_column"]),
-        "Deal Won": common + ("Inbound Date", "Deal Won Date", profile["won_value_column"]),
+        "Submission": common + ("Remark", "Inbound Date", dates["Submission"]),
+        "MQL": common + ("Inbound Date", dates["MQL"]),
+        "SQL": common + ("Inbound Date", dates["SQL"], profile["sql_value_column"]),
+        "Deal Won": common + ("Inbound Date", dates["Deal Won"], profile["won_value_column"]),
     }
 
 
 PROFILE = load_profile("bu1")
+STAGES = dict(PROFILE["stage_date_columns"])
 SQL_VALUE = PROFILE["sql_value_column"]
 WON_VALUE = PROFILE["won_value_column"]
 PRODUCTS = tuple(PROFILE["products"])
@@ -50,8 +47,9 @@ REQUIRED = required_columns(PROFILE)
 
 
 def use_profile(profile: dict) -> None:
-    global PROFILE, SQL_VALUE, WON_VALUE, PRODUCTS, REQUIRED
+    global PROFILE, STAGES, SQL_VALUE, WON_VALUE, PRODUCTS, REQUIRED
     PROFILE = profile
+    STAGES = dict(profile["stage_date_columns"])
     SQL_VALUE = profile["sql_value_column"]
     WON_VALUE = profile["won_value_column"]
     PRODUCTS = tuple(profile["products"])
@@ -120,31 +118,94 @@ def normalize_header(name: str) -> str:
     return " ".join((name or "").strip().split())
 
 
-def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
+def read_csv_rows(path: Path, wanted: set[str]) -> tuple[list[str], list[tuple[int, dict[str, str]]]]:
+    """Read a CSV, normalize headers and map profile value-column aliases onto canonical names."""
     with path.open("r", encoding="utf-8-sig", newline="") as handle:
         reader = csv.DictReader(handle)
         if reader.fieldnames is None:
             raise ValueError(f"{path}: CSV kosong")
-        fields = [normalize_header(x) for x in reader.fieldnames]
-        if len(fields) != len(set(fields)):
-            raise ValueError(f"{path}: header duplikat setelah normalisasi")
-        missing = set(REQUIRED[stage]) - set(fields)
-        if missing:
-            raise ValueError(f"{path}: kolom wajib {stage} tidak ada: {', '.join(sorted(missing))}")
+        normalized = [normalize_header(x) for x in reader.fieldnames]
+        rename = {}
+        for canonical, alternatives in PROFILE.get("value_column_aliases", {}).items():
+            if canonical not in normalized:
+                found = next((alt for alt in alternatives if alt in normalized), None)
+                if found:
+                    rename[found] = canonical
+        fields = [rename.get(x, x) for x in normalized]
+        duplicated = sorted(name for name, count in Counter(fields).items() if count > 1 and name in wanted)
+        if duplicated:
+            raise ValueError(f"{path}: header duplikat setelah normalisasi: {', '.join(duplicated)}")
         rows = []
         for number, row in enumerate(reader, 2):
-            clean = {normalize_header(k): (v or "").strip() for k, v in row.items() if k is not None}
-            if not any(clean.values()) or (clean.get("Company", "").casefold()=="grand total" and not clean.get(STAGES[stage], "")):
-                continue
-            for column in ("Inbound Date", STAGES[stage]):
-                if column in clean:
-                    parse_date(clean[column], f"{path.name} baris {number} kolom {column}")
-            if not parse_date(clean[STAGES[stage]], f"{path.name} baris {number}"):
-                raise ValueError(f"{path.name} baris {number}: {STAGES[stage]} wajib terisi")
-            if stage in ("SQL", "Deal Won"):
-                parse_money(clean[SQL_VALUE if stage == "SQL" else WON_VALUE], f"{path.name} baris {number}")
-            rows.append(clean)
-    return rows
+            clean = {}
+            for key, value in row.items():
+                if key is not None:
+                    name = normalize_header(key)
+                    clean[rename.get(name, name)] = (value or "").strip()
+            rows.append((number, clean))
+    return fields, rows
+
+
+def check_stage_rows(rows: list[tuple[int, dict[str, str]]], label: str, stage: str) -> list[dict[str, str]]:
+    kept = []
+    for number, clean in rows:
+        if not any(clean.values()) or (clean.get("Company", "").casefold()=="grand total" and not clean.get(STAGES[stage], "")):
+            continue
+        for column in ("Inbound Date", STAGES[stage]):
+            if column in clean:
+                parse_date(clean[column], f"{label} baris {number} kolom {column}")
+        if not parse_date(clean[STAGES[stage]], f"{label} baris {number}"):
+            raise ValueError(f"{label} baris {number}: {STAGES[stage]} wajib terisi")
+        if stage in ("SQL", "Deal Won"):
+            parse_money(clean[SQL_VALUE if stage == "SQL" else WON_VALUE], f"{label} baris {number}")
+        kept.append(clean)
+    return kept
+
+
+def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
+    fields, rows = read_csv_rows(path, set(REQUIRED[stage]))
+    missing = set(REQUIRED[stage]) - set(fields)
+    if missing:
+        raise ValueError(f"{path}: kolom wajib {stage} tidak ada: {', '.join(sorted(missing))}")
+    return check_stage_rows(rows, path.name, stage)
+
+
+def bu_key(value: str) -> str:
+    return re.sub(r"\s+", "", value).casefold()
+
+
+def read_table(path: Path, allow_duplicate_keys: bool = False) -> tuple[dict[str, list[dict[str, str]]], dict]:
+    """One row per lead with all stage dates: filter by BU, then split into the four stage views."""
+    bu_column = PROFILE["bu_column"]
+    key_column = PROFILE.get("record_key_column")
+    wanted = set().union(*(set(cols) for cols in REQUIRED.values())) | {bu_column}
+    fields, rows = read_csv_rows(path, wanted)
+    missing = wanted - set(fields)
+    if missing:
+        raise ValueError(f"{path}: kolom wajib tidak ada: {', '.join(sorted(missing))}")
+    targets = {bu_key(PROFILE["name"])} | {bu_key(x) for x in PROFILE.get("bu_values", [])}
+    in_bu = [(n, r) for n, r in rows if bu_key(r.get(bu_column, "")) in targets]
+    if not in_bu:
+        seen = Counter(r.get(bu_column, "") or "(kosong)" for _, r in rows)
+        listing = ", ".join(f"{k!r}: {v}" for k, v in seen.most_common(10))
+        raise ValueError(f"{path}: tidak ada baris dengan {bu_column} = {PROFILE['name']}; nilai yang ada: {listing}. Tambahkan nilai yang benar ke bu_values di profil.")
+    duplicates = []
+    if key_column and key_column in fields:
+        counts = Counter(r[key_column] for _, r in in_bu if r.get(key_column))
+        duplicates = sorted(k for k, c in counts.items() if c > 1)
+        if duplicates and not allow_duplicate_keys:
+            raise ValueError(f"{path}: {len(duplicates)} {key_column} muncul lebih dari sekali dalam {PROFILE['name']} (contoh: {', '.join(duplicates[:3])}); perbaiki sumber atau pakai --allow-duplicate-keys setelah memastikan itu disengaja")
+    data = {}
+    for stage in STAGES:
+        candidates = [(n, r) for n, r in in_bu if r.get(STAGES[stage])]
+        data[stage] = check_stage_rows(candidates, path.name, stage)
+    info = {
+        "rows_total": len(rows),
+        "rows_in_bu": len(in_bu),
+        "rows_without_bu": sum(1 for _, r in rows if not r.get(bu_column) and any(r.values())),
+        "duplicate_record_keys": len(duplicates),
+    }
+    return data, info
 
 
 def product(row: dict[str, str]) -> str:
@@ -242,7 +303,7 @@ def date_label(start: date, end: date) -> str:
     return f"{start.day}–{end.day} {start.strftime('%b')} {start.year}"
 
 
-def set_period_copy(soup, period: Period):
+def set_period_copy(soup, period: Period, source_text: str | None = None):
     label, short, prev_label, prev_short = period.label, period.short, period.prev_label, period.prev_short
     current_range = date_label(period.start, period.end)
     previous_range = date_label(period.prev_start, period.prev_end)
@@ -271,25 +332,54 @@ def set_period_copy(soup, period: Period):
         for child in list(note.find_all(string=True)):
             value = str(child).replace("Week —", label).replace("W—", short)
             if value != str(child):child.replace_with(value)
-    text(soup.select_one(".footer"), f"Sumber: empat CSV {PROFILE['source_label']}. {label}: {current_range}; {prev_label}: {previous_range}. Stage memakai tanggal event. SQL Value = ARR + OTF tanpa PPN; Deal Value = Total Contract Deal Won.")
+    text(soup.select_one(".footer"), f"Sumber: {source_text or 'empat CSV ' + PROFILE['source_label']}. {label}: {current_range}; {prev_label}: {previous_range}. Stage memakai tanggal event. SQL Value = {PROFILE['sql_value_label']}; Deal Value = Total Contract Deal Won.")
 
 
 MONTHLY_WORDING = (("Same-week", "Same-month"), ("same-week", "same-month"), ("mingguan", "bulanan"), ("minggu", "bulan"), ("Weekly", "Monthly"))
 
 
-def localize_monthly(soup) -> None:
+def replace_wording(soup, pairs) -> None:
     for child in list(soup.find_all(string=True)):
         if child.parent.name in ("script", "style"):
             continue
         value = str(child)
-        for old, new in MONTHLY_WORDING:
+        for old, new in pairs:
             value = value.replace(old, new)
         if value != str(child):
             child.replace_with(value)
 
 
-def populate(soup, data: dict[str, list[dict[str, str]]], period: Period):
-    set_period_copy(soup, period)
+def rebuild_product_slots(soup) -> None:
+    """Make the analysis slots, filter buttons and scope note follow the profile's product list."""
+    aside = soup.select_one(".hardware-product-analysis")
+    blocks = aside.select(".product-analysis")
+    prototype = copy.copy(blocks[0])
+    for block in blocks:
+        block.extract()
+    for name in PRODUCTS:
+        block = copy.copy(prototype)
+        text(block.select_one("strong"), name)
+        aside.append(block)
+    filters = soup.select_one(".detail-filters")
+    buttons = filters.select("button")
+    prototype = copy.copy(buttons[1])
+    for button in buttons[1:]:
+        button.extract()
+    existing = [b.get("data-hardware") for b in buttons[1:]]
+    ordered = [n for n in existing if n in PRODUCTS] + [n for n in PRODUCTS if n not in existing]
+    for name in ordered:
+        button = copy.copy(prototype)
+        button["data-hardware"] = name
+        text(button, name)
+        filters.append(button)
+    names = ", ".join(PRODUCTS[:-1]) + ", dan " + PRODUCTS[-1] if len(PRODUCTS) > 1 else PRODUCTS[0]
+    note = soup.select_one(".hardware-section > .table-note")
+    text(note, f"Hanya Campaign Hardware {names}. Tag kosong, Unknown, dan Others dikecualikan.")
+
+
+def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source_text: str | None = None):
+    set_period_copy(soup, period, source_text)
+    rebuild_product_slots(soup)
     pair = lambda soup, a, b, currency=False: pair_cell(soup, a, b, period.prev_short, currency)
     weeks = {w: {stage: period_rows(rows, stage, period, previous=(w == "prev")) for stage, rows in data.items()} for w in ("now", "prev")}
     metrics = {}
@@ -372,7 +462,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period):
     td=node(soup,"td",f"TOTAL · {len(weeks['now']['SQL'])} SQL",colspan="3");footer.append(td)
     footer.append(node(soup,"td",money(metrics["now"]["SQL Value"]),**{"class":"num"}))
     footer.append(node(soup,"td",""))
-    text(soup.select_one(".sql-list .table-note"),f"Diurutkan menurut SQL Value. SQL dihitung dari Proposal Price Quote Date pada {period.label}; Same-week berarti Inbound Date juga pada minggu tersebut.")
+    text(soup.select_one(".sql-list .table-note"),f"Diurutkan menurut SQL Value. SQL dihitung dari {STAGES['SQL']} pada {period.label}; Same-week berarti Inbound Date juga pada minggu tersebut.")
     # Funnel: each pair of bars is normalized within its own metric.
     funnel_labels=[("Submission",""),("MQL","Submission → MQL"),("SQL","MQL → SQL"),("Deal Won","SQL → Deal Won"),("SQL Value",""),("Deal Won Value","")]
     for row,(name,conversion) in zip(soup.select(".funnel .metric-row"),funnel_labels):
@@ -454,9 +544,11 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period):
     tr.append(pair(soup,rate_text(totals["now"]["mql"],totals["now"]["sub"]),rate_text(totals["prev"]["mql"],totals["prev"]["sub"])))
     for key in ("junk","sql"):tr.append(pair(soup,totals["now"][key],totals["prev"][key]))
     tr.append(pair(soup,totals["now"]["value"],totals["prev"]["value"],True));foot.append(tr)
-    text(detail.select_one(".table-note"),"MQL Rate campaign = submission pada minggu tersebut yang sudah memiliki MQL Date pada snapshot CSV ÷ submission campaign. SQL Value mengikuti Proposal Price Quote Date masing-masing minggu; cohort dan SQL event dapat berbeda.")
+    text(detail.select_one(".table-note"),f"MQL Rate campaign = submission pada minggu tersebut yang sudah memiliki MQL Date pada snapshot CSV ÷ submission campaign. SQL Value mengikuti {STAGES['SQL']} masing-masing minggu; cohort dan SQL event dapat berbeda.")
+    if STAGES["SQL"] != "Proposal Price Quote Date":
+        replace_wording(soup, (("Proposal Price Quote Date", STAGES["SQL"]), ("tanggal proposal", f"tanggal {STAGES['SQL']}")))
     if period.kind == "month":
-        localize_monthly(soup)
+        replace_wording(soup, MONTHLY_WORDING)
     return metrics, same
 
 
@@ -475,6 +567,8 @@ def find_inputs(directory: Path) -> dict[str, Path]:
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bu",default="bu1",help="profil BU di folder profiles/, default bu1")
+    parser.add_argument("--table",type=Path,help="satu CSV (ekspor NEW Customers List) berisi semua stage, satu baris per lead; difilter menurut kolom BU")
+    parser.add_argument("--allow-duplicate-keys",action="store_true",help="izinkan Record Key ganda pada --table (default: ditolak)")
     parser.add_argument("--input-dir",type=Path,help="folder berisi empat CSV; alternatif dari --submission/--mql/--sql/--won")
     parser.add_argument("--submission",type=Path)
     parser.add_argument("--mql",type=Path)
@@ -487,18 +581,25 @@ def main():
         profile=load_profile(args.bu)
         use_profile(profile)
         period=parse_period(args.period)
-        if args.input_dir:
+        table_info=None
+        if args.table:
+            if args.input_dir or any((args.submission,args.mql,args.sql,args.won)):parser.error("--table tidak boleh digabung dengan --input-dir atau opsi per stage")
+            paths={}
+        elif args.input_dir:
             paths=find_inputs(args.input_dir)
         else:
             paths={"Submission":args.submission,"MQL":args.mql,"SQL":args.sql,"Deal Won":args.won}
-            if not all(paths.values()):parser.error("berikan --input-dir, atau keempat --submission --mql --sql --won")
+            if not all(paths.values()):parser.error("berikan --table, --input-dir, atau keempat --submission --mql --sql --won")
         output=args.output or Path("output")/f"{profile['name']}_{args.period.replace('-W','_W') if period.kind=='week' else args.period}.html"
-        data={stage:read_stage(path,stage) for stage,path in paths.items()}
+        if args.table:
+            data,table_info=read_table(args.table,args.allow_duplicate_keys)
+        else:
+            data={stage:read_stage(path,stage) for stage,path in paths.items()}
         template=Path(__file__).with_name("dashboard_template.html")
         soup=BeautifulSoup(template.read_text(encoding="utf-8"),"html.parser")
         if not period_rows(data["Submission"], "Submission", period):
             raise ValueError(f"tidak ada Submission pada {args.period}; periksa periode dan file input")
-        metrics,same=populate(soup,data,period)
+        metrics,same=populate(soup,data,period,f"tabel {args.table.name} (BU {profile['name'][2:] if profile['name'].startswith('BU') else profile['name']})" if args.table else None)
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(str(soup),encoding="utf-8")
         audit = {
@@ -509,7 +610,9 @@ def main():
             "period_end": period.end.isoformat(),
             "comparison_start": period.prev_start.isoformat(),
             "comparison_end": period.prev_end.isoformat(),
-            "inputs": {stage: {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "rows_excluding_totals": len(data[stage])} for stage,path in paths.items()},
+            "source": "table" if args.table else "stage_csv",
+            "stage_date_columns": dict(STAGES),
+            "inputs": {"table": {"file": args.table.name, "sha256": hashlib.sha256(args.table.read_bytes()).hexdigest(), **table_info, "stage_rows": {stage: len(rows) for stage,rows in data.items()}}} if args.table else {stage: {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "rows_excluding_totals": len(data[stage])} for stage,path in paths.items()},
             "metrics": metrics,
             "same_week": {"MQL": same["now"][0], "SQL": same["now"][1], "SQL Value": same["now"][2]},
             "descriptive_analysis": "blank",

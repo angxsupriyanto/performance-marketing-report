@@ -1,0 +1,50 @@
+{
+  "name": "BU2",
+  "tag": "BU2 · DATA AKTUAL",
+  "source_label": "BU2 Campaign Tracker",
+  "bu_column": "BU",
+  "record_key_column": "Record Key",
+  "products": [
+    "Dashcam",
+    "GPS Tracker",
+    "Fuel",
+    "MDVR",
+    "OBD",
+    "Ecosystem"
+  ],
+  "product_aliases": {
+    "GPS": "GPS Tracker"
+  },
+  "product_typo_fixes": [
+    {
+      "raw": "OND",
+      "campaign_contains": "OBD",
+      "to": "OBD"
+    }
+  ],
+  "stage_date_columns": {
+    "Submission": "Inbound Date",
+    "MQL": "MQL Date",
+    "SQL": "SQL Date",
+    "Deal Won": "Deal Won Date"
+  },
+  "sql_value_column": "Total Contract SQL",
+  "sql_value_label": "Total Contract SQL",
+  "won_value_column": "SUM of Total Contract Deal Won",
+  "value_column_aliases": {
+    "Total Contract SQL": [
+      "SUM of Total Contract SQL"
+    ],
+    "SUM of Total Contract Deal Won": [
+      "Total Contract Deal Won"
+    ]
+  },
+  "common_columns": [
+    "Company",
+    "Channel",
+    "Source",
+    "Campaign",
+    "Campaign Hardware",
+    "Industry"
+  ]
+}

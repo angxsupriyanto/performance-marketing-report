@@ -25,7 +25,23 @@ Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan da
 | Campaign Detail MQL Rate | Baris Submission pada campaign/minggu yang sudah memiliki MQL Date **pada snapshot CSV**, walaupun tanggal MQL jatuh pada minggu sesudahnya, ÷ Submission campaign/minggu. Ini berbeda dari Same-week MQL dan dari Cross-stage MQL Rate. Hanya campaign hardware yang memiliki Submission di minggu terbaru ditampilkan. |
 | Highlight | Top SQL Value campaign; campaign dengan Submission terbanyak namun 0 SQL event; campaign dengan jumlah Remark `Junk leads` terbanyak. Seri diputuskan alfabetis. Jika tidak ada kandidat, tampilkan `—`. |
 
-## Header wajib
+## Perbedaan per BU
+
+Rumus sama untuk semua BU; yang berbeda hanya kolom, dan itu ditetapkan di `profiles/<bu>.json`.
+
+| | BU1 | BU2 |
+|---|---|---|
+| Tanggal event SQL | `Proposal Price Quote Date` | `SQL Date` |
+| SQL Value | `ARR + OTF (Tanpa PPN)` | `Total Contract SQL` |
+| Produk (Campaign Hardware) | Dashcam, GPS Tracker, Fuel, MDVR, OBD | sama, ditambah Ecosystem |
+
+Ecosystem adalah campaign BU2 yang menargetkan existing user BU1. Ia hanya dikenali dari nilai `Ecosystem` pada kolom `Campaign Hardware` yang diisi manual; generator tidak mencocokkan nama perusahaan dengan daftar customer BU1.
+
+Pada sumber satu tabel (`--table`), baris difilter menurut kolom `BU`, lalu tiap stage = baris dengan tanggal stage tersebut terisi. `Record Key` ganda dalam satu BU ditolak.
+
+## Header wajib (BU1, empat CSV stage)
+
+Untuk BU2 ganti `Proposal Price Quote Date` dan `SUM of ARR + OTF (Tanpa PPN)` dengan `SQL Date` dan `Total Contract SQL`. Awalan `SUM of` pada kolom nilai bersifat opsional.
 
 Header dibaca setelah spasi berulang dan spasi di ujung dinormalisasi. Ejaan inti tetap harus cocok. `SUM of  ARR + OTF (Tanpa PPN) ` dalam ekspor akan menjadi `SUM of ARR + OTF (Tanpa PPN)`; `SUM of  Total Contract Deal Won` akan menjadi `SUM of Total Contract Deal Won`.
 
