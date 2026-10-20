@@ -91,6 +91,13 @@ class WorkflowStructureTests(unittest.TestCase):
             found = set(re.findall(r"<[A-Z_]+>", raw))
             self.assertTrue(found <= ALLOWED_PLACEHOLDERS, found - ALLOWED_PLACEHOLDERS)
 
+    def test_each_item_nodes_return_one_object_not_an_array(self):
+        for path in sorted(WORKFLOWS.glob("*.json")):
+            for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]:
+                if n["type"] == "n8n-nodes-base.code" and n["parameters"]["mode"] == "runOnceForEachItem":
+                    code = n["parameters"]["jsCode"]
+                    self.assertNotRegex(code, r"return\s*\[", f"{path.name}:{n['name']} must return a single { '{ json }' } object")
+
     def test_every_code_node_compiles(self):
         for path in sorted(WORKFLOWS.glob("*.json")):
             for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]:
@@ -159,6 +166,25 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual(query["result"][0]["json"]["requested_by"], "manual")
         for bad in ({"bu": "<BU>", "period": "2026-W39"}, {"bu": "bu1", "period": "<PERIOD>"}):
             self.assertFalse(run_code(code, [bad])["ok"], bad)
+
+    def format_error(self, item):
+        code = node(load("Report_Generate_v1.json"), "Format Generate Error")["parameters"]["jsCode"]
+        out = run_code(code, [item], {"Build CSV": {"items": [{"bu": "bu2", "period": "2026-W39", "csv": "SECRET,ROWS\n", "rows": 2}]}})
+        self.assertTrue(out["ok"], out)
+        self.assertIsInstance(out["result"], dict, "each-item mode needs a single object")
+        return out["result"]["json"]["text"]
+
+    def test_generate_error_message_carries_the_service_reason_and_status_but_never_the_csv(self):
+        text = self.format_error({"error": {"message": "Unprocessable Entity", "description": '{"error": "kolom wajib SQL tidak ada: SQL Date"}', "httpCode": "422"}, "request": {"body": "SECRET,ROWS"}})
+        self.assertIn("Laporan BU2 2026-W39 GAGAL dibuat", text)
+        self.assertIn("422", text)
+        self.assertIn("kolom wajib SQL tidak ada: SQL Date", text)
+        self.assertNotIn("SECRET", text)
+        self.assertIn("401", self.format_error({"error": {"message": "Authorization failed", "httpCode": "401"}}))
+        self.assertIn("connect ECONNREFUSED", self.format_error({"error": {"message": "The service refused the connection", "cause": {"message": "connect ECONNREFUSED"}}}))
+        self.assertIn("plain text failure", self.format_error({"error": "plain text failure"}))
+        self.assertIn("penyebab tidak diketahui", self.format_error({"error": {}}))
+        self.assertLessEqual(len(self.format_error({"error": {"message": "x" * 5000}})), 700)
 
     def build_csv(self, rows, plans=None):
         code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
