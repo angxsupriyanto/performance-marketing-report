@@ -1,7 +1,7 @@
 {
   "name": "BU2",
   "tag": "BU2 · DATA AKTUAL",
-  "source_label": "BU2 Campaign Tracker",
+  "source_label": "Campaign Tracker",
   "bu_column": "BU",
   "record_key_column": "Record Key",
   "products": [
