@@ -1,0 +1,62 @@
+# Example. Run it as its own Compose project, like the report service, so the n8n stack is never recreated:
+#   cp docker-compose.report-viewer.example.yml docker-compose.report-viewer.local.yml
+#   (change only the network name and the container names below to the ones your stack uses)
+#   docker compose -p report-viewer -f docker-compose.report-viewer.local.yml up -d --build
+# Do not publish a port. Cloudflare Tunnel reaches the viewer by name over the shared network:
+#   public hostname officehour.pesankopi.com  ->  service http://report-viewer:8090
+# Create the four secret files out of band (never commit them); see deploy/VIEWER.md.
+services:
+  report-viewer:
+    container_name: report-viewer
+    build:
+      context: ..
+      args:
+        REPORT_GENERATOR_VERSION: "${REPORT_GENERATOR_VERSION:-dev}"
+    command: ["python", "-m", "viewer.app"]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      PORT: "8090"
+      VIEWER_DB_HOST: n8n-postgres          # container name of the PostgreSQL that holds marketing_reports
+      VIEWER_DB_NAME: marketing_reports
+      VIEWER_DB_USER: report_viewer
+      VIEWER_DB_PASSWORD_FILE: /run/secrets/reports_db_viewer_password
+      VIEWER_PASSWORD_HASH_FILE: /run/secrets/viewer_password_hash
+      VIEWER_SESSION_SECRET_FILE: /run/secrets/viewer_session_secret
+      N8N_ANALYSIS_URL: http://n8n-service:5678/webhook/report-analysis   # production URL of the active Report_Analysis_Button_v1
+      N8N_WEBHOOK_HEADER_NAME: Authorization
+      N8N_WEBHOOK_HEADER_PREFIX: "Bearer "  # empty the prefix if the n8n Header Auth credential holds the bare token
+      N8N_WEBHOOK_TOKEN_FILE: /run/secrets/n8n_webhook_token
+      VIEWER_TRUST_PROXY_HEADERS: "true"    # only behind Cloudflare Tunnel: uses CF-Connecting-IP for the login limit
+      VIEWER_COOKIE_SECURE: "true"
+    secrets:
+      - reports_db_viewer_password
+      - viewer_password_hash
+      - viewer_session_secret
+      - n8n_webhook_token
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8090/healthz',timeout=4)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+    networks:
+      - n8n_internal            # replace with the network n8n, PostgreSQL and cloudflared already share
+
+secrets:
+  reports_db_viewer_password:
+    file: ./reports_db_secrets/reports_db_viewer_password
+  viewer_password_hash:
+    file: ./viewer_password_hash
+  viewer_session_secret:
+    file: ./viewer_session_secret
+  n8n_webhook_token:
+    file: ./n8n_webhook_token
+
+networks:
+  n8n_internal:
+    external: true

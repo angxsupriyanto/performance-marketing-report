@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY generate_report.py apply_analysis.py dashboard_template.html ./
 COPY profiles ./profiles
 COPY service ./service
+COPY viewer ./viewer
 
 ARG REPORT_GENERATOR_VERSION=dev
 ENV REPORT_GENERATOR_VERSION=${REPORT_GENERATOR_VERSION}

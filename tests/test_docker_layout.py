@@ -45,6 +45,26 @@ class DockerLayoutTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr.decode())
             self.assertEqual(result.stdout.decode().strip(), "8000000 True")
 
+    def test_viewer_imports_from_only_the_copied_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            app = Path(tmp)
+            for source in copied_paths():
+                target = app / source
+                if (ROOT / source).is_dir():
+                    shutil.copytree(ROOT / source, target, ignore=shutil.ignore_patterns("__pycache__"))
+                else:
+                    shutil.copy2(ROOT / source, target)
+            code = "import viewer.app, viewer.hash_password; print('ok')"
+            result = subprocess.run([sys.executable, "-c", code], capture_output=True, cwd=app, env={"PYTHONDONTWRITEBYTECODE": "1", "PATH": "/usr/bin:/bin"}, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_viewer_compose_is_hardened_and_publishes_no_port(self):
+        compose = (ROOT / "deploy" / "docker-compose.report-viewer.example.yml").read_text(encoding="utf-8")
+        self.assertNotRegex(compose, r"(?m)^\s+ports:")
+        for setting in ("read_only: true", "no-new-privileges:true", "cap_drop", "VIEWER_PASSWORD_HASH_FILE", "VIEWER_SESSION_SECRET_FILE", "VIEWER_DB_PASSWORD_FILE", "N8N_WEBHOOK_TOKEN_FILE"):
+            self.assertIn(setting, compose)
+        self.assertNotRegex(compose, r"(?m)^\s+(VIEWER_DB_PASSWORD|VIEWER_PASSWORD_HASH|VIEWER_SESSION_SECRET|N8N_WEBHOOK_TOKEN):")
+
     def test_dockerfile_follows_the_security_basics(self):
         text = (ROOT / "Dockerfile").read_text(encoding="utf-8")
         self.assertRegex(text, r"(?m)^USER report$")

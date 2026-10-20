@@ -6,6 +6,7 @@ The test skips when the variable is absent, and refuses to run if marketing_repo
 """
 import json
 import os
+from decimal import Decimal
 import re
 import shutil
 import subprocess
@@ -169,6 +170,30 @@ class DatabaseTests(unittest.TestCase):
             for row in bad:
                 with self.assertRaises(psycopg.errors.CheckViolation, msg=row):
                     conn.execute(insert, row)
+
+    def test_viewer_store_reads_reports_and_saves_targets_in_one_transaction(self):
+        sys.path.insert(0, str(ROOT))
+        from viewer.store import Store
+        store = Store(f"{ADMIN} dbname=marketing_reports user=report_viewer password=viewer-pw")
+        with self.writer() as conn:
+            run_id = conn.execute(sql("insert_run.sql"), self.run_params(period="2026-W43", sha=SHA_A, html="<p>viewer run</p>")).fetchone()[0]
+        listed = [r for r in store.list_reports() if r["period"] == "2026-W43"]
+        self.assertEqual((len(listed), listed[0]["has_analysis"]), (1, False))
+        report = store.get_report("bu2", "2026-W43")
+        self.assertEqual((str(report["run_id"]), report["html"], report["facts"]), (str(run_id), "<p>viewer run</p>", {}))
+        self.assertIsNone(store.get_report("bu2", "2030-W01"))
+        self.assertIsNone(store.latest_analysis_time("bu2", "2026-W43"))
+        with self.writer() as conn:
+            conn.execute(sql("insert_analysis.sql"), {"p1": str(run_id), "p2": "t", "p3": "m", "p4": "v", "p5": "{}", "p6": "<p>final</p>"})
+        self.assertIsNotNone(store.latest_analysis_time("bu2", "2026-W43"))
+        self.assertEqual(store.get_report("bu2", "2026-W43")["html"], "<p>final</p>")
+        before = len(store.target_history("bu1"))
+        with self.assertRaises(psycopg.errors.CheckViolation):
+            store.add_targets("bu1", [("hardware_month", "Fuel", "2026-10", "idr", 5), ("hardware_month", "Fuel", "2026-13", "idr", 6)])
+        self.assertEqual(len(store.target_history("bu1")), before)  # the first row was rolled back with the second
+        store.add_targets("bu1", [("hardware_month", "Fuel", "2026-10", "idr", 5)])
+        self.assertEqual([(r["product"], r["amount"]) for r in store.latest_targets("bu1") if r["product"] == "Fuel"], [("Fuel", Decimal("5.00"))])
+        self.assertTrue(store.ping())
 
     def test_end_to_end_from_sheet_rows_to_stored_report(self):
         sys.path.insert(0, str(ROOT / "tests"))
