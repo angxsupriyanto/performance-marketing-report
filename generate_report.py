@@ -423,7 +423,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         "bu": PROFILE["name"],
         "period": {"kind": period.kind, "label": period.label, "start": period.start.isoformat(), "end": period.end.isoformat(),
                    "comparison_label": period.prev_label, "comparison_start": period.prev_start.isoformat(), "comparison_end": period.prev_end.isoformat()},
-        "definitions": {"sql_date_column": STAGES["SQL"], "sql_value": PROFILE["sql_value_label"], "deal_won_status": "provisional"},
+        "definitions": {"sql_date_column": STAGES["SQL"], "sql_value": PROFILE["sql_value_label"], "deal_won_source": "Campaign Tracker: Deal Won Date dan Total Contract Deal Won"},
         "funnel": metrics,
     }
     stage_names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")

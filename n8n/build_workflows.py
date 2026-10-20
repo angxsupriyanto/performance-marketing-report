@@ -106,6 +106,12 @@ def telegram_node(flow, name, text_expression, position):
     flow.add(name, "n8n-nodes-base.telegram", 1.2, {"resource": "message", "operation": "sendMessage", "chatId": "<TELEGRAM_CHAT_ID>", "text": text_expression, "additionalFields": {"appendAttribution": False}}, position)
 
 
+def manual_parameters(flow, position, fields):
+    """Editable values for a manual run. The placeholders make the node fail loudly until they are filled in."""
+    assignments = [{"id": node_id(flow.name, f"Manual Parameters/{name}"), "name": name, "value": value, "type": "string"} for name, value in fields]
+    flow.add("Manual Parameters", "n8n-nodes-base.set", 3.4, {"assignments": {"assignments": assignments}, "options": {}}, position)
+
+
 def header_auth_webhook(flow, name, path, method, position, response_mode="lastNode", authentication="headerAuth"):
     flow.add(name, "n8n-nodes-base.webhook", 2, {"httpMethod": method, "path": path, "authentication": authentication, "responseMode": response_mode, "options": {}}, position, webhookId=node_id(flow.name, name + "/webhook"))
 
@@ -113,10 +119,9 @@ def header_auth_webhook(flow, name, path, method, position, response_mode="lastN
 def generate_flow() -> Flow:
     columns, dates, money = tracker_columns()
     flow = Flow("Report Generate v1")
-    flow.add("Schedule Weekly", "n8n-nodes-base.scheduleTrigger", 1.2, {"rule": {"interval": [{"field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 14, "triggerAtMinute": 0}]}}, (0, 0))
-    flow.add("Schedule Monthly", "n8n-nodes-base.scheduleTrigger", 1.2, {"rule": {"interval": [{"field": "months", "monthsInterval": 1, "triggerAtDayOfMonth": 1, "triggerAtHour": 14, "triggerAtMinute": 0}]}}, (0, 160))
-    header_auth_webhook(flow, "Webhook Generate", "report-generate", "POST", (0, 320))
-    flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 480))
+    header_auth_webhook(flow, "Webhook Generate", "report-generate", "POST", (0, 160))
+    flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 0))
+    manual_parameters(flow, (240, 0), [("bu", "all"), ("period", "<PERIOD>")])
     code_node(flow, "Normalize Plan", "normalize_plan.js", (260, 240))
     flow.add("Read Tracker", "n8n-nodes-base.googleSheets", 4.7, {
         "resource": "sheet", "operation": "read",
@@ -142,8 +147,9 @@ def generate_flow() -> Flow:
     code_node(flow, "Result", "result_generate.js", (2180, 160))
     code_node(flow, "Format Generate Error", "format_generate_error.js", (1220, 400), mode="runOnceForEachItem")
     telegram_node(flow, "Notify Error", "={{ $json.text }}", (1460, 400))
-    for trigger in ("Schedule Weekly", "Schedule Monthly", "Webhook Generate", "Manual Trigger"):
+    for trigger in ("Manual Parameters", "Webhook Generate"):
         flow.connect(trigger, "Normalize Plan")
+    flow.connect("Manual Trigger", "Manual Parameters")
     for a, b in (("Normalize Plan", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Generate Report"), ("Prepare Insert", "Save Run"), ("Save Run", "Compose Message"), ("Compose Message", "Notify"), ("Notify", "Result"), ("Format Generate Error", "Notify Error")):
         flow.connect(a, b)
     flow.connect("Generate Report", "Prepare Insert", 0)
@@ -154,8 +160,10 @@ def generate_flow() -> Flow:
 def analysis_flow() -> Flow:
     prompt = (HERE / "prompts" / PROMPT_FILE).read_text(encoding="utf-8").strip()
     flow = Flow("Report Analysis Button v1")
-    header_auth_webhook(flow, "Webhook Analysis", "report-analysis", "POST", (0, 0))
-    code_node(flow, "Validate Request", "validate_request.js", (240, 0))
+    header_auth_webhook(flow, "Webhook Analysis", "report-analysis", "POST", (0, 160))
+    flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 0))
+    manual_parameters(flow, (240, 0), [("bu", "<BU>"), ("period", "<PERIOD>"), ("requested_by", "manual")])
+    code_node(flow, "Validate Request", "validate_request.js", (480, 80))
     flow.add("Load Latest Run", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("select_latest_run.sql"), "options": {"queryReplacement": "={{ [$json.bu, $json.period] }}"}}, (480, 0), alwaysOutputData=True)
     code_node(flow, "Prepare Analysis Request", "prepare_analysis_request.js", (720, 0), SYSTEM_PROMPT=json.dumps(prompt, ensure_ascii=False), PROMPT_VERSION=json.dumps(PROMPT_FILE.removesuffix(".md")))
     flow.add("Ask Claude", "n8n-nodes-base.httpRequest", 4.2, {
@@ -177,6 +185,8 @@ def analysis_flow() -> Flow:
     postgres_node(flow, "Save Analysis", "insert_analysis.sql", (1920, 0))
     flow.add("Notify", "n8n-nodes-base.telegram", 1.2, {"resource": "message", "operation": "sendMessage", "chatId": "<TELEGRAM_CHAT_ID>", "text": "=Analisis {{ $('Validate Request').first().json.bu.toUpperCase() }} {{ $('Validate Request').first().json.period }} tersimpan", "additionalFields": {"appendAttribution": False}}, (2160, 0))
     code_node(flow, "Result", "result_analysis.js", (2400, 0))
+    flow.connect("Manual Trigger", "Manual Parameters")
+    flow.connect("Manual Parameters", "Validate Request")
     for a, b in (("Webhook Analysis", "Validate Request"), ("Validate Request", "Load Latest Run"), ("Load Latest Run", "Prepare Analysis Request"), ("Prepare Analysis Request", "Ask Claude"), ("Ask Claude", "Parse Analysis"), ("Parse Analysis", "Apply Analysis"), ("Apply Analysis", "Prepare Save"), ("Prepare Save", "Save Analysis"), ("Save Analysis", "Notify"), ("Notify", "Result")):
         flow.connect(a, b)
     return flow

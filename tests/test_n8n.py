@@ -19,7 +19,7 @@ from test_table_mode import LEADS  # noqa: E402
 
 WORKFLOWS = ROOT / "n8n" / "workflows"
 HARNESS = ROOT / "tests" / "n8n_harness.js"
-ALLOWED_PLACEHOLDERS = {"<SPREADSHEET_ID>", "<TELEGRAM_CHAT_ID>", "<ANTHROPIC_MODEL>"}
+ALLOWED_PLACEHOLDERS = {"<SPREADSHEET_ID>", "<TELEGRAM_CHAT_ID>", "<ANTHROPIC_MODEL>", "<BU>", "<PERIOD>"}
 
 
 def load(name):
@@ -113,35 +113,52 @@ class WorkflowStructureTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "node is required")
 class CodeNodeTests(unittest.TestCase):
-    def plan(self, trigger_json, executed):
+    def plan(self, trigger_json, webhook=False):
         code = node(load("Report_Generate_v1.json"), "Normalize Plan")["parameters"]["jsCode"]
-        nodes = {name: {"executed": name == executed} for name in ("Schedule Weekly", "Schedule Monthly", "Webhook Generate", "Manual Trigger")}
+        nodes = {"Webhook Generate": {"executed": webhook}}
         return run_code(code, [trigger_json], nodes)
 
-    def test_weekly_schedule_builds_previous_iso_week_in_jakarta(self):
-        out = self.plan({"timestamp": "2026-10-19T14:00:00.000+07:00"}, "Schedule Weekly")
-        self.assertEqual(out["result"][0]["json"], {"trigger": "weekly", "plans": [{"bu": "bu1", "period": "2026-W42"}, {"bu": "bu2", "period": "2026-W42"}]})
+    def test_manual_parameters_name_the_plans_explicitly(self):
+        out = self.plan({"bu": "all", "period": "2026-W39"})
+        self.assertEqual(out["result"][0]["json"], {"trigger": "manual", "plans": [{"bu": "bu1", "period": "2026-W39"}, {"bu": "bu2", "period": "2026-W39"}]})
+        one = self.plan({"bu": "BU2", "period": " 2026-09 "})
+        self.assertEqual(one["result"][0]["json"]["plans"], [{"bu": "bu2", "period": "2026-09"}])
 
-    def test_week_numbering_across_years(self):
-        self.assertEqual(self.plan({"timestamp": "2027-01-04T14:00:00.000+07:00"}, "Schedule Weekly")["result"][0]["json"]["plans"][0]["period"], "2026-W53")
-        self.assertEqual(self.plan({"timestamp": "2026-01-05T14:00:00.000+07:00"}, "Schedule Weekly")["result"][0]["json"]["plans"][0]["period"], "2026-W01")  # 29 Dec 2025 belongs to ISO week 1 of 2026
+    def test_placeholders_and_malformed_periods_fail_loudly_instead_of_guessing(self):
+        for params in ({"bu": "all", "period": "<PERIOD>"}, {"bu": "all"}, {"bu": "all", "period": "minggu ini"},
+                       {"bu": "all", "period": "2026-13"}, {"bu": "all", "period": "2026-00"},
+                       {"bu": "all", "period": "2026-W00"}, {"bu": "all", "period": "2026-W54"}, {"bu": "bu9", "period": "2026-W39"}):
+            out = self.plan(params)
+            self.assertFalse(out["ok"], params)
+            self.assertTrue(out["error"], params)
 
-    def test_jakarta_date_is_used_not_utc(self):
-        # 20:00 UTC on Sunday is already Monday 03:00 in Jakarta.
-        out = self.plan({"timestamp": "2026-10-18T20:00:00.000Z"}, "Schedule Weekly")
-        self.assertEqual(out["result"][0]["json"]["plans"][0]["period"], "2026-W42")
-
-    def test_monthly_schedule_builds_previous_month(self):
-        self.assertEqual(self.plan({"timestamp": "2026-11-01T14:00:00.000+07:00"}, "Schedule Monthly")["result"][0]["json"], {"trigger": "monthly", "plans": [{"bu": "bu1", "period": "2026-10"}, {"bu": "bu2", "period": "2026-10"}]})
-        self.assertEqual(self.plan({"timestamp": "2027-01-01T14:00:00.000+07:00"}, "Schedule Monthly")["result"][0]["json"]["plans"][0]["period"], "2026-12")
-
-    def test_webhook_requires_explicit_valid_input(self):
-        ok = self.plan({"body": {"bu": "BU2", "period": "2026-W39"}, "headers": {}}, "Webhook Generate")
-        self.assertEqual(ok["result"][0]["json"]["plans"], [{"bu": "bu2", "period": "2026-W39"}])
-        both = self.plan({"body": {"period": "2026-09"}}, "Webhook Generate")
+    def test_webhook_reads_the_body(self):
+        ok = self.plan({"body": {"bu": "BU2", "period": "2026-W39"}, "headers": {}}, webhook=True)
+        self.assertEqual(ok["result"][0]["json"], {"trigger": "webhook", "plans": [{"bu": "bu2", "period": "2026-W39"}]})
+        both = self.plan({"body": {"period": "2026-09"}}, webhook=True)
         self.assertEqual(len(both["result"][0]["json"]["plans"]), 2)
-        for body in ({"bu": "bu9", "period": "2026-W39"}, {"bu": "bu1"}, {"bu": "bu1", "period": "minggu ini"}):
-            self.assertFalse(self.plan({"body": body}, "Webhook Generate")["ok"], body)
+        self.assertFalse(self.plan({"body": {"bu": "bu1"}}, webhook=True)["ok"])
+
+    def test_no_workflow_runs_on_a_schedule(self):
+        for path in sorted(WORKFLOWS.glob("*.json")):
+            types = {n["type"] for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]}
+            self.assertFalse({t for t in types if "schedule" in t.lower() or "cron" in t.lower()}, path.name)
+
+    def test_manual_runs_start_from_an_editable_parameters_node(self):
+        for name in ("Report_Generate_v1.json", "Report_Analysis_Button_v1.json"):
+            flow = load(name)
+            self.assertIn({"node": "Manual Parameters", "type": "main", "index": 0}, flow["connections"]["Manual Trigger"]["main"][0])
+            params = {a["name"]: a["value"] for a in node(flow, "Manual Parameters")["parameters"]["assignments"]["assignments"]}
+            self.assertIn("<PERIOD>", params.values())
+
+    def test_validate_request_accepts_manual_fields_and_query_string(self):
+        code = node(load("Report_Analysis_Button_v1.json"), "Validate Request")["parameters"]["jsCode"]
+        manual = run_code(code, [{"bu": "BU2", "period": "2026-W39", "requested_by": "anggit"}])
+        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit"})
+        query = run_code(code, [{"query": {"bu": "bu1", "period": "2026-09"}}])
+        self.assertEqual(query["result"][0]["json"]["requested_by"], "manual")
+        for bad in ({"bu": "<BU>", "period": "2026-W39"}, {"bu": "bu1", "period": "<PERIOD>"}):
+            self.assertFalse(run_code(code, [bad])["ok"], bad)
 
     def build_csv(self, rows, plans=None):
         code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
@@ -225,6 +242,8 @@ class CodeNodeTests(unittest.TestCase):
     def test_prompt_only_references_facts_that_exist(self):
         report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
         prompt = (ROOT / "n8n" / "prompts" / build_workflows.PROMPT_FILE).read_text(encoding="utf-8")
+        self.assertNotIn("provisional", prompt.lower())
+        self.assertNotIn("provisional", json.dumps(report["facts"]).lower())
         for path in set(re.findall(r"`facts\.([a-z_]+)(?:\.([a-z_]+))?", prompt)):
             top, sub = path
             self.assertIn(top, report["facts"], path)

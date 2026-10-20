@@ -1,0 +1,43 @@
+# OPTIONAL. Use this only if the reports must live in their own PostgreSQL instance, completely apart from the
+# server that hosts the existing inbound database. If a separate database on the existing server is enough,
+# skip this file and run database/000_* and database/001_* there instead.
+#
+# Create the secrets out of band, never commit them (the init script requires at least 16 characters):
+#   openssl rand -hex 24 > reports_db_admin_password.txt
+#   openssl rand -hex 24 > reports_db_writer_password.txt
+#   openssl rand -hex 24 > reports_db_reader_password.txt
+#
+# The init script runs only when the data volume is empty. n8n connects to host `reports-db`, port 5432,
+# database `marketing_reports`, as `report_writer` (workflows that write) or `report_reader` (viewing).
+services:
+  reports-db:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: reports_admin
+      POSTGRES_PASSWORD_FILE: /run/secrets/reports_db_admin_password
+    secrets:
+      - reports_db_admin_password
+      - reports_db_writer_password
+      - reports_db_reader_password
+    volumes:
+      - reports_db_data:/var/lib/postgresql/data
+      - ../database:/sql:ro
+      - ./reports-db-init.sh:/docker-entrypoint-initdb.d/10-reports.sh:ro
+    networks:
+      - n8n_internal            # same network as n8n and report-service; publish no port
+
+volumes:
+  reports_db_data:
+
+secrets:
+  reports_db_admin_password:
+    file: ./reports_db_admin_password.txt
+  reports_db_writer_password:
+    file: ./reports_db_writer_password.txt
+  reports_db_reader_password:
+    file: ./reports_db_reader_password.txt
+
+networks:
+  n8n_internal:
+    external: true

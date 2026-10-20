@@ -3,54 +3,6 @@
   "nodes": [
     {
       "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "weeks",
-              "weeksInterval": 1,
-              "triggerAtDay": [
-                1
-              ],
-              "triggerAtHour": 14,
-              "triggerAtMinute": 0
-            }
-          ]
-        }
-      },
-      "id": "68974b87-bded-5901-9b41-349526defc1f",
-      "name": "Schedule Weekly",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        0,
-        0
-      ]
-    },
-    {
-      "parameters": {
-        "rule": {
-          "interval": [
-            {
-              "field": "months",
-              "monthsInterval": 1,
-              "triggerAtDayOfMonth": 1,
-              "triggerAtHour": 14,
-              "triggerAtMinute": 0
-            }
-          ]
-        }
-      },
-      "id": "658170bb-c2c3-580f-b92a-cdb859f50fb3",
-      "name": "Schedule Monthly",
-      "type": "n8n-nodes-base.scheduleTrigger",
-      "typeVersion": 1.2,
-      "position": [
-        0,
-        160
-      ]
-    },
-    {
-      "parameters": {
         "httpMethod": "POST",
         "path": "report-generate",
         "authentication": "headerAuth",
@@ -63,7 +15,7 @@
       "typeVersion": 2,
       "position": [
         0,
-        320
+        160
       ],
       "webhookId": "f7554950-8ba8-5e50-80de-865a1bac9031"
     },
@@ -75,14 +27,43 @@
       "typeVersion": 1,
       "position": [
         0,
-        480
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "5f4b6344-5a38-57bc-9afc-57f0cf0019fb",
+              "name": "bu",
+              "value": "all",
+              "type": "string"
+            },
+            {
+              "id": "ae5e5f67-9f51-515c-a848-166e6c1616c2",
+              "name": "period",
+              "value": "<PERIOD>",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "37f95a37-8d8d-5984-a4d2-564051ae571c",
+      "name": "Manual Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
       ]
     },
     {
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Decides which BU/period pairs to build. Scheduled runs build the previous completed ISO week or calendar\n// month in Asia/Jakarta. Webhook runs must name the period explicitly; nothing is guessed.\nconst BUS = ['bu1', 'bu2'];\nconst PERIOD = /^\\d{4}-(W\\d{2}|\\d{2})$/;\nconst pad = (n) => String(n).padStart(2, '0');\n\nfunction jakartaToday(value) {\n  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);\n  const get = (type) => Number(parts.find((p) => p.type === type).value);\n  return new Date(Date.UTC(get('year'), get('month') - 1, get('day')));\n}\n\nfunction isoWeekLabel(date) {\n  const thursday = new Date(date);\n  thursday.setUTCDate(date.getUTCDate() + 3 - ((date.getUTCDay() + 6) % 7));\n  const year = thursday.getUTCFullYear();\n  const jan4 = new Date(Date.UTC(year, 0, 4));\n  const week = 1 + Math.round(((thursday - jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);\n  return `${year}-W${pad(week)}`;\n}\n\nfunction previousWeek(today) {\n  const d = new Date(today);\n  d.setUTCDate(d.getUTCDate() - 7);\n  return isoWeekLabel(d);\n}\n\nfunction previousMonth(today) {\n  const y = today.getUTCFullYear();\n  const m = today.getUTCMonth();\n  return m === 0 ? `${y - 1}-12` : `${y}-${pad(m)}`;\n}\n\nconst executed = (name) => {\n  try { return $(name).isExecuted === true; } catch (e) { return false; }\n};\n\nconst input = $input.first().json;\nconst today = jakartaToday(input.timestamp ? new Date(input.timestamp) : new Date());\nlet trigger;\nlet bus = BUS;\nlet period;\n\nif (executed('Webhook Generate')) {\n  trigger = 'webhook';\n  const body = input.body || {};\n  const requested = String(body.bu || 'all').toLowerCase();\n  if (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\n  if (!PERIOD.test(String(body.period || ''))) throw new Error('period wajib diisi dengan format YYYY-Www atau YYYY-MM');\n  bus = requested === 'all' ? BUS : [requested];\n  period = String(body.period);\n} else if (executed('Schedule Monthly')) {\n  trigger = 'monthly';\n  period = previousMonth(today);\n} else {\n  trigger = executed('Schedule Weekly') ? 'weekly' : 'manual';\n  period = previousWeek(today);\n}\n\nreturn [{ json: { trigger, plans: bus.map((bu) => ({ bu, period })) } }];\n"
+        "jsCode": "// Builds the BU/period pairs to generate. The period is always given explicitly, either on the\n// \"Manual Parameters\" node or in the webhook body. Nothing is guessed from the current date.\nconst BUS = ['bu1', 'bu2'];\nconst input = $input.first().json;\nconst source = Object.assign({}, input, input.body || {});\n\nconst requested = String(source.bu || 'all').toLowerCase();\nif (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\n\nconst period = String(source.period || '').trim();\nconst match = /^(\\d{4})-(?:W(\\d{2})|(\\d{2}))$/.exec(period);\nif (!match) throw new Error('period wajib diisi dengan format YYYY-Www (mingguan) atau YYYY-MM (bulanan)');\nif (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 53)) throw new Error('nomor minggu harus 01 sampai 53');\nif (match[3] !== undefined && (Number(match[3]) < 1 || Number(match[3]) > 12)) throw new Error('nomor bulan harus 01 sampai 12');\n\nconst executed = (name) => {\n  try { return $(name).isExecuted === true; } catch (e) { return false; }\n};\nconst trigger = executed('Webhook Generate') ? 'webhook' : 'manual';\nconst bus = requested === 'all' ? BUS : [requested];\nreturn [{ json: { trigger, plans: bus.map((bu) => ({ bu, period })) } }];\n"
       },
       "id": "272da89b-d151-56a6-93d8-558ea81369b2",
       "name": "Normalize Plan",
@@ -219,7 +200,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Aggregate-only summary for Telegram and for the webhook response. No customer data.\nconst prepared = $('Prepare Insert').all();\nconst money = (n) => 'Rp ' + Math.round(n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nreturn $input.all().map((saved, i) => {\n  const p = prepared[i].json;\n  const row = saved.json;\n  const m = p.metrics;\n  const state = row.inserted ? 'tersimpan' : 'sudah ada (input identik, tidak ditulis ulang)';\n  const lines = [\n    `Laporan ${p.bu.toUpperCase()} ${p.period} ${state}`,\n    `Submission ${m['Submission']} · MQL ${m['MQL']} · SQL ${m['SQL']} · SQL Value ${money(m['SQL Value'])} · Deal Won ${m['Deal Won']} (provisional)`,\n    `Baris di BU: ${p.rows_in_bu} · tanpa BU (tidak dihitung): ${p.rows_without_bu}`,\n    `Run: ${String(row.run_id).slice(0, 8)}`,\n  ];\n  return { json: { bu: p.bu, period: p.period, run_id: row.run_id, inserted: row.inserted, text: lines.join('\\n') } };\n});\n"
+        "jsCode": "// Aggregate-only summary for Telegram and for the webhook response. No customer data.\nconst prepared = $('Prepare Insert').all();\nconst money = (n) => 'Rp ' + Math.round(n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nreturn $input.all().map((saved, i) => {\n  const p = prepared[i].json;\n  const row = saved.json;\n  const m = p.metrics;\n  const state = row.inserted ? 'tersimpan' : 'sudah ada (input identik, tidak ditulis ulang)';\n  const lines = [\n    `Laporan ${p.bu.toUpperCase()} ${p.period} ${state}`,\n    `Submission ${m['Submission']} · MQL ${m['MQL']} · SQL ${m['SQL']} · SQL Value ${money(m['SQL Value'])} · Deal Won ${m['Deal Won']}`,\n    `Baris di BU: ${p.rows_in_bu} · tanpa BU (tidak dihitung): ${p.rows_without_bu}`,\n    `Run: ${String(row.run_id).slice(0, 8)}`,\n  ];\n  return { json: { bu: p.bu, period: p.period, run_id: row.run_id, inserted: row.inserted, text: lines.join('\\n') } };\n});\n"
       },
       "id": "780d411f-7aeb-5392-8038-9f384e876be7",
       "name": "Compose Message",
@@ -300,18 +281,7 @@
     }
   ],
   "connections": {
-    "Schedule Weekly": {
-      "main": [
-        [
-          {
-            "node": "Normalize Plan",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Schedule Monthly": {
+    "Manual Parameters": {
       "main": [
         [
           {
@@ -337,7 +307,7 @@
       "main": [
         [
           {
-            "node": "Normalize Plan",
+            "node": "Manual Parameters",
             "type": "main",
             "index": 0
           }

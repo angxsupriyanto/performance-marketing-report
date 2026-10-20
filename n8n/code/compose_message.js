@@ -8,7 +8,7 @@ return $input.all().map((saved, i) => {
   const state = row.inserted ? 'tersimpan' : 'sudah ada (input identik, tidak ditulis ulang)';
   const lines = [
     `Laporan ${p.bu.toUpperCase()} ${p.period} ${state}`,
-    `Submission ${m['Submission']} · MQL ${m['MQL']} · SQL ${m['SQL']} · SQL Value ${money(m['SQL Value'])} · Deal Won ${m['Deal Won']} (provisional)`,
+    `Submission ${m['Submission']} · MQL ${m['MQL']} · SQL ${m['SQL']} · SQL Value ${money(m['SQL Value'])} · Deal Won ${m['Deal Won']}`,
     `Baris di BU: ${p.rows_in_bu} · tanpa BU (tidak dihitung): ${p.rows_without_bu}`,
     `Run: ${String(row.run_id).slice(0, 8)}`,
   ];

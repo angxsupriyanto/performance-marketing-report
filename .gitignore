@@ -11,3 +11,4 @@ __pycache__/
 *.facts.json
 report_service_token*.txt
 *.token
+reports_db_*_password.txt

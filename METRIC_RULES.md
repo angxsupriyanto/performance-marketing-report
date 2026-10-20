@@ -42,7 +42,7 @@ Pada sumber satu tabel (`--table`), baris difilter menurut kolom `BU`, lalu tiap
 ## Nilai uang dan status metrik
 
 - BU1: nilai harus bilangan bulat Rupiah. BU2 (`money_decimals: true` di profil): desimal sampai 2 digit diterima karena nilai Core V2 BU2 berdesimal (mis. `12033683238.62`). Bentuk yang dikenali: `12033683238.62`, `1.234.567,89`, `1,234,567.89`. Satu pemisah diikuti tepat tiga digit dibaca sebagai pemisah ribuan. Penjumlahan memakai desimal eksak; tampilan dibulatkan ke Rupiah penuh (setengah ke atas).
-- **Deal Won dan Deal Value berstatus provisional**: dihitung dari `Deal Won Date` dan `Total Contract Deal Won` di Tracker, sedangkan dokumen platform inbound menandai definisinya belum disahkan. Analisis otomatis diwajibkan melabelinya "provisional".
+- **Deal Won dan Deal Value** bersumber dari Google Sheet Campaign Tracker (keputusan pemilik laporan): `Deal Won Date` dan `Total Contract Deal Won`. Catatan: dokumen platform inbound (`METRIC_DICTIONARY`) masih menandai definisi Deal Won sebagai belum disahkan, jadi angka ini tidak otomatis sama dengan angka resmi di sana.
 - Baris Tracker dengan BU kosong atau tidak dikenal tidak masuk laporan BU mana pun; jumlahnya tercatat di audit (`rows_without_bu`) dan di ringkasan Telegram.
 
 ## Header wajib (BU1, empat CSV stage)

@@ -4,15 +4,31 @@ Tiga workflow siap impor (n8n 2.x). Semuanya **dihasilkan** oleh `n8n/build_work
 
 | Workflow | Fungsi |
 |---|---|
-| `Report_Generate_v1` | Senin 14:00 WIB laporan minggu lalu, tanggal 1 pukul 14:00 WIB laporan bulan lalu, atau POST `/webhook/report-generate` dengan periode eksplisit. Membaca tab *NEW Customers List*, mengirim hanya kolom yang dibutuhkan ke layanan laporan, menyimpan hasil ke PostgreSQL, lalu mengirim ringkasan agregat ke Telegram. |
-| `Report_Analysis_Button_v1` | POST `/webhook/report-analysis` dengan `{"bu":"bu2","period":"2026-W39"}`. Membaca run terbaru, mengirim **hanya `facts` agregat** ke Claude, memvalidasi JSON balasan, menyisipkannya ke laporan, dan menyimpan hasilnya. |
+| `Report_Generate_v1` | Membaca tab *NEW Customers List*, mengirim hanya kolom yang dibutuhkan ke layanan laporan, menyimpan hasilnya ke PostgreSQL, lalu mengirim ringkasan agregat ke Telegram. |
+| `Report_Analysis_Button_v1` | Membaca run terbaru untuk BU dan periode yang dipilih, mengirim **hanya `facts` agregat** ke Claude, memvalidasi JSON balasan, menyisipkannya ke laporan, dan menyimpan hasilnya. |
 | `Report_View_v1` | GET `/webhook/report?bu=bu2&period=2026-W39` menampilkan laporan terbaru (dengan analisis bila ada). Dilindungi Basic Auth karena HTML memuat nama perusahaan. |
 
-Jadwal 14:00 WIB dipilih agar jatuh setelah rangkaian H-17 → H-18 → H-26 (konfigurasi terbaru di `CURRENT_STATE.md` platform: Senin 12:00 WIB) dan H-20 (13:00 WIB) pada hari yang sama, sehingga snapshot dan Tracker sudah memuat pembaruan terbaru. Dokumen platform masih memuat dua versi jadwal H-17 (Senin saja, dan Senin–Jumat 4×/hari); sesuaikan node *Schedule* dengan jadwal produksi yang berlaku.
+**Tidak ada penjadwalan.** Semua dijalankan manual, dan periode selalu disebut eksplisit (tidak ada tebakan "minggu lalu"). Dua cara memicu `Generate` dan `Analysis`:
+
+- **Dari editor n8n:** buka workflow, ubah nilai di node **Manual Parameters** (`bu` = `all`, `bu1`, atau `bu2`; `period` = `2026-W39` untuk mingguan atau `2026-09` untuk bulanan; khusus Analysis `bu` wajib `bu1` atau `bu2`), lalu klik *Execute workflow*. Nilai bawaan `<PERIOD>` dan `<BU>` sengaja membuat eksekusi gagal dengan pesan jelas sampai Anda mengisinya.
+- **Dari luar (tombol):** `POST /webhook/report-generate` atau `/webhook/report-analysis` dengan header token dan body `{"bu":"bu2","period":"2026-W39"}`.
+
+Urutan pemakaian: jalankan Generate dulu untuk periode itu, lalu Analysis. Analysis menolak bila belum ada laporan numerik untuk BU dan periode tersebut.
+
+## Seberapa terpisah databasenya
+
+`marketing_reports` adalah database **sendiri**. Skripnya tidak menyentuh `inbound_marketing`, `core`, `core_v2`, atau `staging`, dan role-nya (`report_owner`, `report_writer`, `report_reader`) tidak punya akses ke sana. Ada dua cara menempatkannya:
+
+| Opsi | Terpisah | Masih dibagi dengan server yang ada |
+|---|---|---|
+| **A. Database baru di server PostgreSQL yang sudah ada** (`database/000_*` dan `001_*`) | database, tabel, role, password, hak akses | proses server, penyimpanan dan backup, serta daftar role (role bersifat tingkat server), dan Anda butuh akun superuser untuk membuatnya |
+| **B. Instance PostgreSQL tersendiri** (`deploy/docker-compose.reports-db.example.yml`) | semuanya: proses, volume, backup, password admin | hanya jaringan Docker yang sama dengan n8n |
+
+Opsi B memang lebih terisolasi, tetapi menambah satu container yang harus Anda backup dan perbarui. Pilih salah satu; isi skripnya sama.
 
 ## Memasang
 
-1. **Database.** Jalankan `database/000_create_database_and_roles.sql` lalu `database/001_reports_schema.sql` (perintahnya ada di komentar tiap berkas; kata sandi diberikan lewat `-v`, bukan disimpan di Git). Ini membuat database `marketing_reports` dengan role `report_writer` (SELECT dan INSERT saja) dan `report_reader` (SELECT).
+1. **Database.** Opsi A: jalankan `database/000_create_database_and_roles.sql` lalu `database/001_reports_schema.sql` (perintahnya ada di komentar tiap berkas; kata sandi diberikan lewat `-v`, bukan disimpan di Git). Opsi B: `docker compose -f deploy/docker-compose.reports-db.example.yml up -d` setelah membuat tiga berkas secret; skrip inisialisasi menjalankan kedua SQL itu sekali pada volume kosong. Hasilnya sama: database `marketing_reports` dengan role `report_writer` (SELECT dan INSERT saja) dan `report_reader` (SELECT).
 2. **Layanan laporan.** Gabungkan `deploy/docker-compose.report-service.example.yml` ke proyek Compose yang menjalankan n8n, buat token dengan `openssl rand -hex 32 > report_service_token.txt`, lalu `docker compose up -d --build report-service`. Jangan publikasikan portnya; n8n memanggilnya sebagai `http://report-service:8080`. Bila nama layanan atau portnya berbeda, ubah `SERVICE_URL` di `build_workflows.py` dan jalankan ulang.
 3. **Impor** ketiga JSON, lalu buat dan pilih credential (nama bebas):
 
@@ -27,7 +43,7 @@ Jadwal 14:00 WIB dipilih agar jatuh setelah rangkaian H-17 → H-18 → H-26 (ko
    | Webhook View | Basic Auth |
    | Notify, Notify Error | Telegram |
 
-4. **Isi placeholder** (ada di JSON sebagai teks `<...>`): `<SPREADSHEET_ID>` dan `<TELEGRAM_CHAT_ID>` pada node terkait, dan `<ANTHROPIC_MODEL>` di dalam kode node *Prepare Analysis Request* (isi dengan ID model dari dokumentasi Anthropic; node sengaja error sampai diisi).
+4. **Isi placeholder** (ada di JSON sebagai teks `<...>`): `<SPREADSHEET_ID>` dan `<TELEGRAM_CHAT_ID>` pada node terkait, `<BU>` dan `<PERIOD>` pada node *Manual Parameters* setiap kali menjalankan manual, serta `<ANTHROPIC_MODEL>` di dalam kode node *Prepare Analysis Request* (isi dengan ID model dari dokumentasi Anthropic; node sengaja error sampai diisi).
 5. Pasang *Error Workflow* yang sudah ada (H-17/H-18 Production Error Notification) di Settings tiap workflow.
 6. Eksekusi sukses tidak disimpan (`saveDataSuccessExecution: none`) karena data mengalir sebagai baris customer. Nyalakan sementara hanya saat debugging.
 
@@ -43,7 +59,7 @@ Semua Code node, SQL, layanan, dan alurnya diuji di luar n8n (harness Node, Post
 
 ## Urutan uji yang disarankan
 
-1. Jalankan `Report_Generate_v1` secara manual (Manual Trigger). Cek `reports.run_index` dan pesan Telegram.
+1. Jalankan `Report_Generate_v1` secara manual untuk satu periode yang angkanya sudah Anda kenal (isi *Manual Parameters*). Cek `reports.run_index` dan pesan Telegram.
 2. Bandingkan angka run dengan Metabase atau dashboard BU1 lama untuk periode yang sama. Untuk BU1 mingguan harus identik dengan generator CLI.
 3. Jalankan ulang tanpa mengubah Tracker: pesan harus berbunyi "sudah ada (input identik)" dan tidak menambah baris.
 4. Panggil webhook analisis, lalu buka `Report_View_v1` dan periksa teksnya terhadap angka.
