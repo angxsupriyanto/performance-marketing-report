@@ -14,9 +14,9 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          (SELECT bool_and(CASE WHEN rolname = 'report_owner' THEN NOT rolcanlogin ELSE rolcanlogin END) FROM pg_roles WHERE rolname IN ('report_owner', 'report_writer', 'report_reader'))
   UNION ALL SELECT 4, 'PUBLIC cannot connect to marketing_reports',
          (SELECT d.datacl IS NOT NULL AND NOT EXISTS (SELECT 1 FROM aclexplode(d.datacl) a WHERE a.grantee = 0) FROM pg_database d WHERE d.datname = 'marketing_reports')
-  UNION ALL SELECT 5, 'only report_writer and report_reader (and the owner) can connect',
+  UNION ALL SELECT 5, 'only report_writer, report_reader and report_viewer (and the owner) can connect',
          (SELECT NOT EXISTS (SELECT 1 FROM aclexplode(d.datacl) a JOIN pg_roles r ON r.oid = a.grantee
-                              WHERE a.privilege_type = 'CONNECT' AND r.rolname NOT IN ('report_writer', 'report_reader', 'report_owner'))
+                              WHERE a.privilege_type = 'CONNECT' AND r.rolname NOT IN ('report_writer', 'report_reader', 'report_viewer', 'report_owner'))
            FROM pg_database d WHERE d.datname = 'marketing_reports')
   UNION ALL SELECT 6, 'tables report_runs and report_analyses exist',
          (SELECT count(*) = 2 FROM information_schema.tables WHERE table_schema = 'reports' AND table_name IN ('report_runs', 'report_analyses') AND table_type = 'BASE TABLE')
@@ -33,9 +33,22 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          has_table_privilege('report_reader', 'reports.report_runs', 'SELECT') AND has_table_privilege('report_reader', 'reports.latest_reports', 'SELECT')
          AND NOT (has_table_privilege('report_reader', 'reports.report_runs', 'INSERT') OR has_table_privilege('report_reader', 'reports.report_runs', 'UPDATE') OR has_table_privilege('report_reader', 'reports.report_runs', 'DELETE'))
   UNION ALL SELECT 11, 'neither role can create objects in schemas reports or public',
-         NOT (has_schema_privilege('report_writer', 'reports', 'CREATE') OR has_schema_privilege('report_reader', 'reports', 'CREATE')
-              OR has_schema_privilege('report_writer', 'public', 'CREATE') OR has_schema_privilege('report_reader', 'public', 'CREATE'))
+         NOT (has_schema_privilege('report_writer', 'reports', 'CREATE') OR has_schema_privilege('report_reader', 'reports', 'CREATE') OR has_schema_privilege(to_regrole('report_viewer'), 'reports', 'CREATE')
+              OR has_schema_privilege('report_writer', 'public', 'CREATE') OR has_schema_privilege('report_reader', 'public', 'CREATE') OR has_schema_privilege(to_regrole('report_viewer'), 'public', 'CREATE'))
   UNION ALL SELECT 12, 'connection limits are 10 for report_writer and 5 for report_reader',
          (SELECT bool_and(rolconnlimit = CASE rolname WHEN 'report_writer' THEN 10 ELSE 5 END) FROM pg_roles WHERE rolname IN ('report_writer', 'report_reader'))
+  UNION ALL SELECT 13, 'report_viewer exists without elevated attributes, can log in, and is limited to 10 connections',
+         (SELECT count(*) = 1 FROM pg_roles WHERE rolname = 'report_viewer' AND rolcanlogin AND rolconnlimit = 10
+            AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls)
+  UNION ALL SELECT 14, 'table target_entries and view targets_latest exist',
+         (SELECT count(*) = 2 FROM information_schema.tables WHERE table_schema = 'reports' AND table_name IN ('target_entries', 'targets_latest'))
+  UNION ALL SELECT 15, 'report_viewer can SELECT reports and INSERT targets, and nothing else',
+         has_table_privilege(to_regrole('report_viewer'), 'reports.latest_reports', 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'INSERT')
+         AND NOT (has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'INSERT') OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_analyses', 'INSERT')
+                  OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'DELETE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.target_entries', 'TRUNCATE')
+                  OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), 'reports.report_runs', 'DELETE'))
+  UNION ALL SELECT 16, 'report_writer and report_reader cannot change targets',
+         NOT (has_table_privilege('report_writer', 'reports.target_entries', 'INSERT') OR has_table_privilege('report_writer', 'reports.target_entries', 'UPDATE')
+              OR has_table_privilege('report_reader', 'reports.target_entries', 'INSERT') OR has_table_privilege('report_reader', 'reports.target_entries', 'UPDATE'))
 ) checks
 ORDER BY n;

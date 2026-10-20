@@ -55,15 +55,17 @@ class DatabaseTests(unittest.TestCase):
             raise unittest.SkipTest("marketing_reports or report_* roles already exist; refusing to touch them")
         cls.psql("postgres", "-v", "writer_password=writer-pw", "-v", "reader_password=reader-pw", "-f", str(ROOT / "database/000_create_database_and_roles.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/001_reports_schema.sql"))
+        cls.psql("marketing_reports", "-v", "viewer_password=viewer-pw", "-f", str(ROOT / "database/002_targets_and_viewer.sql"))
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
+        cls.viewer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_viewer password=viewer-pw", autocommit=True)
 
     @classmethod
     def tearDownClass(cls):
         with cls.admin() as conn:
             conn.execute("DROP DATABASE IF EXISTS marketing_reports")
-            for role in ("report_writer", "report_reader", "report_owner"):
+            for role in ("report_writer", "report_reader", "report_viewer", "report_owner"):
                 conn.execute(f"DROP ROLE IF EXISTS {role}")
 
     def run_params(self, period="2026-W39", sha=SHA_A, html="<html>numeric</html>", kind="week", bu="bu2"):
@@ -123,6 +125,50 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(psycopg.errors.ForeignKeyViolation):
             with self.writer() as conn:
                 conn.execute(sql("insert_analysis.sql"), {"p1": "00000000-0000-0000-0000-000000000000", "p2": "t", "p3": "m", "p4": "v", "p5": "{}", "p6": "x"})
+
+    def test_viewer_can_add_targets_but_never_change_or_remove_them(self):
+        insert = "INSERT INTO reports.target_entries (bu, scope, product, period_key, unit, amount) VALUES (%s, %s, %s, %s, %s, %s)"
+        with self.viewer() as conn:
+            conn.execute(insert, ("bu1", "hardware_month", "Dashcam", "2026-10", "idr", 150000000))
+            conn.execute(insert, ("bu1", "hardware_month", "Dashcam", "2026-10", "idr", 175000000.5))
+            conn.execute(insert, ("bu1", "hardware_month", "Dashcam", "2026-12", "idr", 200000000))
+            conn.execute(insert, ("bu2", "semester", None, "2026-S2", "count", 24))
+            latest = dict(((row[0], row[1], row[2]), row[3]) for row in conn.execute("SELECT bu, product, period_key, amount FROM reports.targets_latest").fetchall())
+            history = conn.execute("SELECT count(*) FROM reports.target_entries WHERE bu = 'bu1' AND product = 'Dashcam' AND period_key = '2026-10'").fetchone()[0]
+            for statement in ("UPDATE reports.target_entries SET amount = 1", "DELETE FROM reports.target_entries", "TRUNCATE reports.target_entries", "CREATE TABLE reports.y (a int)", "INSERT INTO reports.report_analyses (run_id, model, prompt_version, analysis, final_html) VALUES (gen_random_uuid(), 'm', 'v', '{}', 'x')"):
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege, msg=statement):
+                    conn.execute(statement)
+            with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                conn.execute(sql("insert_run.sql"), self.run_params(period="2026-W41", sha=SHA_B))
+            self.assertGreaterEqual(conn.execute("SELECT count(*) FROM reports.latest_reports").fetchone()[0], 0)
+        self.assertEqual(float(latest[("bu1", "Dashcam", "2026-10")]), 175000000.5)
+        self.assertEqual(float(latest[("bu1", "Dashcam", "2026-12")]), 200000000)
+        self.assertEqual(float(latest[("bu2", None, "2026-S2")]), 24)
+        self.assertEqual(history, 2)
+        with self.writer() as conn, self.reader() as other:
+            for connection in (conn, other):
+                self.assertGreaterEqual(connection.execute("SELECT count(*) FROM reports.targets_latest").fetchone()[0], 3)
+                with self.assertRaises(psycopg.errors.InsufficientPrivilege):
+                    connection.execute(insert, ("bu1", "hardware_month", "Fuel", "2026-10", "idr", 1))
+
+    def test_target_rows_must_have_a_consistent_shape(self):
+        insert = "INSERT INTO reports.target_entries (bu, scope, product, period_key, unit, amount) VALUES (%s, %s, %s, %s, %s, %s)"
+        bad = [
+            ("BU1", "hardware_month", "Dashcam", "2026-10", "idr", 1),       # bu must be lowercase
+            ("bu1", "hardware_month", None, "2026-10", "idr", 1),            # hardware needs a product
+            ("bu1", "hardware_month", "Dashcam", "2026-13", "idr", 1),       # no month 13
+            ("bu1", "hardware_month", "Dashcam", "2026-S1", "idr", 1),
+            ("bu1", "hardware_month", "Dashcam", "2026-10", "count", 1),     # hardware targets are rupiah
+            ("bu1", "semester", "Dashcam", "2026-S1", "idr", 1),             # semester has no product
+            ("bu1", "semester", None, "2026-S3", "idr", 1),
+            ("bu1", "semester", None, "2026-10", "idr", 1),
+            ("bu1", "semester", None, "2026-S1", "idr", -5),                 # no negative targets
+            ("bu1", "year", None, "2026", "idr", 1),                         # year is the sum of semesters
+        ]
+        with self.viewer() as conn:
+            for row in bad:
+                with self.assertRaises(psycopg.errors.CheckViolation, msg=row):
+                    conn.execute(insert, row)
 
     def test_end_to_end_from_sheet_rows_to_stored_report(self):
         sys.path.insert(0, str(ROOT / "tests"))
