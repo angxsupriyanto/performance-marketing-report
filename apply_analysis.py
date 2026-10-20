@@ -31,6 +31,35 @@ def selectors_for(soup):
     return selectors
 
 
+MAX_TEXT_CHARS = 4000
+
+
+def analysis_keys(report_html: str) -> list[str]:
+    return list(selectors_for(BeautifulSoup(report_html, "html.parser")))
+
+
+def apply_analysis(report_html: str, data: dict) -> str:
+    """Insert reviewed prose into a numeric report. Raises ValueError on any mismatch; numbers are never touched."""
+    if not isinstance(data, dict):
+        raise ValueError("analisis harus berupa objek JSON")
+    soup = BeautifulSoup(report_html, "html.parser")
+    selectors = selectors_for(soup)
+    unknown = set(data) - set(selectors)
+    if unknown:
+        raise ValueError("Kunci JSON tidak dikenal untuk laporan ini: " + ", ".join(sorted(unknown)))
+    for key, selector in selectors.items():
+        target = soup.select_one(selector)
+        if target is None:
+            raise ValueError("Template tidak cocok: " + selector)
+        value = data.get(key, "")
+        if not isinstance(value, str):
+            raise ValueError(key + " harus berupa teks")
+        if len(value) > MAX_TEXT_CHARS:
+            raise ValueError(f"{key} melebihi {MAX_TEXT_CHARS} karakter")
+        target.string = value.strip()  # escaped by BeautifulSoup; no HTML is executed
+    return str(soup)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report",type=Path,required=True,help="HTML numerik yang sudah diverifikasi")
@@ -39,19 +68,12 @@ def main():
     args = parser.parse_args()
     if args.report.resolve()==args.output.resolve():
         parser.error("--output harus berbeda dari --report agar laporan numerik tetap utuh")
-    data=json.loads(args.analysis.read_text(encoding="utf-8"))
-    soup=BeautifulSoup(args.report.read_text(encoding="utf-8"),"html.parser")
-    selectors=selectors_for(soup)
-    unknown=set(data)-set(selectors)
-    if unknown:parser.error("Kunci JSON tidak dikenal untuk laporan ini: "+", ".join(sorted(unknown)))
-    for key,selector in selectors.items():
-        target=soup.select_one(selector)
-        if target is None:parser.error("Template tidak cocok: "+selector)
-        value=data.get(key,"")
-        if not isinstance(value,str):parser.error(key+" harus berupa teks")
-        target.string=value.strip()  # escaped by BeautifulSoup; no HTML is executed
+    try:
+        html = apply_analysis(args.report.read_text(encoding="utf-8"), json.loads(args.analysis.read_text(encoding="utf-8")))
+    except ValueError as exc:
+        parser.error(str(exc))
     args.output.parent.mkdir(parents=True,exist_ok=True)
-    args.output.write_text(str(soup),encoding="utf-8")
+    args.output.write_text(html,encoding="utf-8")
     print("OK: "+str(args.output))
 
 

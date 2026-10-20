@@ -9,6 +9,7 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
+from decimal import ROUND_HALF_UP, Decimal
 import calendar
 import copy
 from dataclasses import dataclass
@@ -104,11 +105,29 @@ def parse_date(value: str, context: str) -> date | None:
     raise ValueError(f"{context}: tanggal tidak valid {value!r}; gunakan M/D/YYYY atau YYYY-MM-DD")
 
 
-def parse_money(value: str, context: str) -> int:
+def decimal_amount(compact: str) -> Decimal | None:
+    """Accept plain, Indonesian (1.234.567,89) and US (1,234,567.89) amounts; one separator followed by exactly three digits is a thousands separator."""
+    if re.fullmatch(r"[0-9]+", compact) or re.fullmatch(r"[0-9]+\.[0-9]{1,2}", compact):
+        return Decimal(compact)
+    if re.fullmatch(r"[0-9]{1,3}(?:\.[0-9]{3})+(?:,[0-9]{1,2})?", compact):
+        return Decimal(compact.replace(".", "").replace(",", "."))
+    if re.fullmatch(r"[0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?", compact):
+        return Decimal(compact.replace(",", ""))
+    if re.fullmatch(r"[0-9]+,[0-9]{1,2}", compact):
+        return Decimal(compact.replace(",", "."))
+    return None
+
+
+def parse_money(value: str, context: str) -> int | Decimal:
     value = (value or "").strip().replace("Rp", "").replace("rp", "").strip()
     if value in ("", "-"):
         return 0
     compact = value.replace(" ", "")
+    if PROFILE.get("money_decimals"):
+        amount = decimal_amount(compact)
+        if amount is None:
+            raise ValueError(f"{context}: nilai uang tidak valid {value!r}; gunakan angka Rupiah dengan desimal maksimal 2 digit")
+        return int(amount) if amount == amount.to_integral_value() else amount
     if not re.fullmatch(r"(?:[0-9]+|[0-9]{1,3}(?:[.,][0-9]{3})+)", compact):
         raise ValueError(f"{context}: nilai uang tidak valid {value!r}; gunakan bilangan bulat Rupiah")
     return int(re.sub(r"[.,]", "", compact))
@@ -225,7 +244,7 @@ def campaign(row: dict[str, str]) -> str:
     return row.get("Campaign", "").strip() or "Unknown"
 
 
-def stage_value(row: dict[str, str], stage: str) -> int:
+def stage_value(row: dict[str, str], stage: str) -> int | Decimal:
     key = SQL_VALUE if stage == "SQL" else WON_VALUE
     return parse_money(row.get(key, ""), key)
 
@@ -245,8 +264,18 @@ def fmt(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
 
-def money(n: int) -> str:
-    return "Rp " + fmt(n)
+def whole(n: int | Decimal) -> int:
+    return int(Decimal(n).quantize(Decimal(1), rounding=ROUND_HALF_UP))
+
+
+def money(n: int | Decimal) -> str:
+    return "Rp " + fmt(whole(n))
+
+
+def json_default(value):
+    if isinstance(value, Decimal):
+        return int(value) if value == value.to_integral_value() else float(value)
+    raise TypeError(f"tidak dapat men-serialize {type(value).__name__}")
 
 
 def pct(n: float) -> str:
@@ -390,6 +419,13 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
             "SQL Value": sum(stage_value(x, "SQL") for x in r["SQL"]),
             "Deal Won": len(r["Deal Won"]), "Deal Won Value": sum(stage_value(x, "Deal Won") for x in r["Deal Won"]),
         }
+    facts = {
+        "bu": PROFILE["name"],
+        "period": {"kind": period.kind, "label": period.label, "start": period.start.isoformat(), "end": period.end.isoformat(),
+                   "comparison_label": period.prev_label, "comparison_start": period.prev_start.isoformat(), "comparison_end": period.prev_end.isoformat()},
+        "definitions": {"sql_date_column": STAGES["SQL"], "sql_value": PROFILE["sql_value_label"], "deal_won_status": "provisional"},
+        "funnel": metrics,
+    }
     stage_names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
     for card, name in zip(soup.select(".summary > .card"), stage_names):
         a, b = metrics["now"][name], metrics["prev"][name]
@@ -412,6 +448,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         mql = [r for r in weeks[w]["MQL"] if inbound_in_period(r,period,w=="prev")]
         sql = [r for r in weeks[w]["SQL"] if inbound_in_period(r,period,w=="prev")]
         same[w] = (len(mql),len(sql),sum(stage_value(r,"SQL") for r in sql))
+    facts["same_period"] = {w: {"MQL": same[w][0], "SQL": same[w][1], "SQL Value": same[w][2]} for w in same}
     for i,card in enumerate(soup.select(".same .card")):
         a,b=same["now"][i],same["prev"][i]
         total=metrics["now"]["MQL" if i==0 else "SQL" if i==1 else "SQL Value"]
@@ -437,6 +474,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         (weak,f"{sub_by_campaign[weak]} submission" if weak else "—",f"0 SQL" if weak else ""),
         (junk,f"{junk_by_campaign[junk]} junk / {sub_by_campaign[junk]} submission" if junk else "—",f"{sql_by_campaign[junk][0]} SQL" if junk else ""),
     ]
+    facts["highlights"] = {key: {"campaign": title, "detail": detail} for key, (title, _, detail) in zip(("top_sql_value", "high_volume_no_sql", "most_junk"), highlights) if title}
     for card,(title,value,small) in zip(soup.select(".highlight"),highlights):
         text(card.select_one("h3"),title or "—");text(card.select_one("strong"),value);text(card.select_one("small"),small)
     for card,stage in zip(soup.select(".contributors .card"),("SQL","Deal Won")):
@@ -444,6 +482,8 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         top=max(weeks["now"][stage],key=lambda r:(value(r),r.get("Company","")),default=None)
         fields=card.select(".details b")
         if top:
+            _inbound=parse_date(top.get("Inbound Date",""),"Inbound Date");_event=parse_date(top[STAGES[stage]],STAGES[stage])
+            facts.setdefault("top_contributors", {})[stage] = {"value": value(top), "industry": top.get("Industry") or None, "source": source(top), "campaign": campaign(top), "days_from_inbound": (_event-_inbound).days if _inbound else None}
             text(card.select_one("h3"),top.get("Company") or "Unknown")
             text(card.select_one(".amount"),money(value(top)))
             inbound=parse_date(top.get("Inbound Date",""),"Inbound Date")
@@ -481,6 +521,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         row.select_one(".timing-current")["style"]=f"width:{fresh/total*100 if total else 0:.1f}%"
         row.select_one(".timing-prior")["style"]=f"width:{old/total*100 if total else 0:.1f}%"
         text(row.select_one("span"),f"{fresh} same-week · {old} backlog")
+        facts.setdefault("timing", {})[stage] = {"same_period": fresh, "backlog": old}
     # Four event-week source breakdown tables.
     for panel,stage in zip(soup.select(".stage-table"),STAGES):
         body=panel.select_one("tbody");foot=panel.select_one("tfoot");body.clear();foot.clear()
@@ -492,6 +533,10 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
             if stage in ("SQL","Deal Won"):
                 values += [money(sum(stage_value(r,stage) for r in group)) for group in sets]
             add_cells(soup,foot if name=="TOTAL" else body,values)
+            entry={"source":name,"now":a,"prev":b}
+            if stage in ("SQL","Deal Won"):
+                entry.update(now_value=sum(stage_value(r,stage) for r in sets[0]),prev_value=sum(stage_value(r,stage) for r in sets[1]))
+            facts.setdefault("by_source", {}).setdefault(stage, []).append(entry)
     # Cross-stage table: MQL cohort uses Submission rows; later stages use event dates.
     cross=soup.select_one(".cross-stage");body=cross.select_one("tbody");foot=cross.select_one("tfoot");body.clear();foot.clear()
     sources=sorted(set(source(r) for stage in STAGES for r in weeks["now"][stage]))
@@ -500,6 +545,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         sub=selection("Submission");sql=selection("SQL");won=selection("Deal Won")
         mql=sum(bool(parse_date(r.get("MQL Date",""),"MQL Date") and period.contains(parse_date(r.get("MQL Date",""),"MQL Date"))) for r in sub)
         add_cells(soup,foot if name=="TOTAL" else body,[name,len(sub),mql,rate_text(mql,len(sub)),len(sql),money(sum(stage_value(r,"SQL") for r in sql)),len(won),money(sum(stage_value(r,"Deal Won") for r in won))])
+        facts.setdefault("cross_stage", []).append({"source":name,"submission":len(sub),"mql_same_period":mql,"sql":len(sql),"sql_value":sum(stage_value(r,"SQL") for r in sql),"deal_won":len(won),"deal_value":sum(stage_value(r,"Deal Won") for r in won)})
     text(cross.select_one(".table-note"),f"MQL dan MQL Rate memakai submission {period.label} yang mencapai MQL dalam minggu yang sama. SQL dan Deal Won memakai tanggal event {period.label}, termasuk backlog; kolom-kolom bukan satu cohort.")
     # Product aggregate, restricted to five tagged hardware categories.
     hardware=soup.select_one(".hardware-section");table=hardware.select_one(":scope > .table-wrap table")
@@ -520,6 +566,8 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         aggregate["now"]=[x+y for x,y in zip(aggregate["now"],a)]
         aggregate["prev"]=[x+y for x,y in zip(aggregate["prev"],b)]
         product_row(name,a,b,body)
+        keys=("submission","mql","sql","sql_value","deal_won","deal_value","junk")
+        facts.setdefault("hardware", []).append({"product":name,"now":dict(zip(keys,a)),"prev":dict(zip(keys,b))})
     product_row(f"TOTAL {len(PRODUCTS)} PRODUK",aggregate["now"],aggregate["prev"],foot)
     # Active current-week campaigns in the selected hardware categories.
     detail=hardware.select_one(".campaign-detail");body=detail.select_one("tbody");foot=detail.select_one("tfoot");body.clear();foot.clear()
@@ -534,6 +582,8 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         values={w:campaign_metrics(h,c,w) for w in ("now","prev")}
         for w in values:
             for key in totals[w]:totals[w][key]+=values[w][key]
+        if len(facts.setdefault("campaigns", [])) < 20:
+            facts["campaigns"].append({"hardware":h,"campaign":c,"now":values["now"],"prev":values["prev"]})
         tr=soup.new_tag("tr",attrs={"data-hardware":h});tr.append(node(soup,"td",h));tr.append(node(soup,"td",c))
         tr.append(pair(soup,values["now"]["sub"],values["prev"]["sub"]))
         tr.append(pair(soup,rate_text(values["now"]["mql"],values["now"]["sub"]),rate_text(values["prev"]["mql"],values["prev"]["sub"])))
@@ -549,7 +599,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         replace_wording(soup, (("Proposal Price Quote Date", STAGES["SQL"]), ("tanggal proposal", f"tanggal {STAGES['SQL']}")))
     if period.kind == "month":
         replace_wording(soup, MONTHLY_WORDING)
-    return metrics, same
+    return metrics, same, facts
 
 
 def find_inputs(directory: Path) -> dict[str, Path]:
@@ -599,7 +649,7 @@ def main():
         soup=BeautifulSoup(template.read_text(encoding="utf-8"),"html.parser")
         if not period_rows(data["Submission"], "Submission", period):
             raise ValueError(f"tidak ada Submission pada {args.period}; periksa periode dan file input")
-        metrics,same=populate(soup,data,period,f"tabel {args.table.name} (BU {profile['name'][2:] if profile['name'].startswith('BU') else profile['name']})" if args.table else None)
+        metrics,same,facts=populate(soup,data,period,f"tabel {args.table.name} (BU {profile['name'][2:] if profile['name'].startswith('BU') else profile['name']})" if args.table else None)
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(str(soup),encoding="utf-8")
         audit = {
@@ -618,7 +668,9 @@ def main():
             "descriptive_analysis": "blank",
         }
         if period.kind=="week":audit["week"]=args.period
-        output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        if table_info:facts["data_quality"]=table_info
+        output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
+        output.with_suffix(".facts.json").write_text(json.dumps(facts,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
     except (ValueError,OSError) as exc:
         parser.exit(2,f"Gagal: {exc}\n")
     print(f"OK: {output} (audit: {output.with_suffix('.audit.json')})")

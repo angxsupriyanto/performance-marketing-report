@@ -8,3 +8,6 @@ analysis.json
 .venv/
 __pycache__/
 *.pyc
+*.facts.json
+report_service_token*.txt
+*.token

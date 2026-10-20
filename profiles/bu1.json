@@ -38,6 +38,7 @@
       "Total Contract Deal Won"
     ]
   },
+  "money_decimals": false,
   "common_columns": [
     "Company",
     "Channel",

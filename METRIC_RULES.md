@@ -39,6 +39,12 @@ Ecosystem adalah campaign BU2 yang menargetkan existing user BU1. Ia hanya diken
 
 Pada sumber satu tabel (`--table`), baris difilter menurut kolom `BU`, lalu tiap stage = baris dengan tanggal stage tersebut terisi. `Record Key` ganda dalam satu BU ditolak.
 
+## Nilai uang dan status metrik
+
+- BU1: nilai harus bilangan bulat Rupiah. BU2 (`money_decimals: true` di profil): desimal sampai 2 digit diterima karena nilai Core V2 BU2 berdesimal (mis. `12033683238.62`). Bentuk yang dikenali: `12033683238.62`, `1.234.567,89`, `1,234,567.89`. Satu pemisah diikuti tepat tiga digit dibaca sebagai pemisah ribuan. Penjumlahan memakai desimal eksak; tampilan dibulatkan ke Rupiah penuh (setengah ke atas).
+- **Deal Won dan Deal Value berstatus provisional**: dihitung dari `Deal Won Date` dan `Total Contract Deal Won` di Tracker, sedangkan dokumen platform inbound menandai definisinya belum disahkan. Analisis otomatis diwajibkan melabelinya "provisional".
+- Baris Tracker dengan BU kosong atau tidak dikenal tidak masuk laporan BU mana pun; jumlahnya tercatat di audit (`rows_without_bu`) dan di ringkasan Telegram.
+
 ## Header wajib (BU1, empat CSV stage)
 
 Untuk BU2 ganti `Proposal Price Quote Date` dan `SUM of ARR + OTF (Tanpa PPN)` dengan `SQL Date` dan `Total Contract SQL`. Awalan `SUM of` pada kolom nilai bersifat opsional.

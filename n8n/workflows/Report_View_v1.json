@@ -1,0 +1,166 @@
+{
+  "name": "Report View v1",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "report",
+        "authentication": "basicAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "64347dc8-5c8c-573f-a1df-8d160d9433eb",
+      "name": "Webhook View",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "8ba455e7-8d31-5665-86ea-a0388f90b361"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Webhook input check for the analysis and view workflows. Period is always explicit.\nconst BUS = ['bu1', 'bu2'];\nconst PERIOD = /^\\d{4}-(W\\d{2}|\\d{2})$/;\nconst input = $input.first().json;\nconst source = Object.assign({}, input.query || {}, input.body || {});\nconst bu = String(source.bu || '').toLowerCase();\nconst period = String(source.period || '');\nif (!BUS.includes(bu)) throw new Error(`bu harus salah satu dari: ${BUS.join(', ')}`);\nif (!PERIOD.test(period)) throw new Error('period wajib diisi dengan format YYYY-Www atau YYYY-MM');\nconst requestedBy = String(source.requested_by || 'webhook').replace(/[^\\w .@-]/g, '').slice(0, 64) || 'webhook';\nreturn [{ json: { bu, period, requested_by: requestedBy } }];\n"
+      },
+      "id": "9703b003-a539-5964-bf72-4b8465cc8ed5",
+      "name": "Validate Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT html, has_analysis\nFROM reports.latest_reports\nWHERE bu = $1 AND period = $2\n",
+        "options": {
+          "queryReplacement": "={{ [$json.bu, $json.period] }}"
+        }
+      },
+      "id": "6a8e5127-1142-53e7-bbd8-df182df5c719",
+      "name": "Load Report",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        480,
+        0
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "const row = $input.first().json;\nconst request = $('Validate Request').first().json;\nif (!row.html) {\n  return [{ json: { status: 404, html: `<!doctype html><meta charset=\"utf-8\"><title>Tidak ada laporan</title><p>Belum ada laporan untuk ${request.bu.toUpperCase()} ${request.period}.</p>` } }];\n}\nreturn [{ json: { status: 200, html: row.html } }];\n"
+      },
+      "id": "267b0751-8f20-5d2d-a5b9-d63e548658a8",
+      "name": "Render",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.html }}",
+        "options": {
+          "responseCode": "={{ $json.status }}",
+          "responseHeaders": {
+            "entries": [
+              {
+                "name": "Content-Type",
+                "value": "text/html; charset=utf-8"
+              },
+              {
+                "name": "Cache-Control",
+                "value": "no-store"
+              },
+              {
+                "name": "X-Content-Type-Options",
+                "value": "nosniff"
+              },
+              {
+                "name": "Content-Security-Policy",
+                "value": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+              }
+            ]
+          }
+        }
+      },
+      "id": "eb9412cf-676e-5035-99ab-e9183322d7d0",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        960,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook View": {
+      "main": [
+        [
+          {
+            "node": "Validate Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Request": {
+      "main": [
+        [
+          {
+            "node": "Load Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load Report": {
+      "main": [
+        [
+          {
+            "node": "Render",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Render": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

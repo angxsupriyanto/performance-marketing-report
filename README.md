@@ -131,6 +131,18 @@ Ecosystem diambil dari nilai `Ecosystem` pada kolom `Campaign Hardware` (diisi m
 3. Jika definisi stage atau rumus berbeda lebih dari kolom dan label, ubah `METRIC_RULES.md` **dulu**, baru kode. Profil mengatur nama kolom dan label, bukan rumus.
 4. Tambahkan uji untuk profil tersebut di `tests/test_table_mode.py` dan jalankan dengan `--bu <bu>`.
 
+## Penerapan otomatis: Docker, n8n, dan PostgreSQL
+
+Jalur tanpa perintah manual: n8n membaca tab *NEW Customers List*, mengirim **hanya kolom yang dibutuhkan** ke `service/` (layanan HTTP kecil di Docker yang membungkus generator ini), lalu menyimpan HTML, audit, dan `facts` ke database `marketing_reports`. Tombol analisis mengirim `facts` agregat (tanpa nama customer) ke Claude dan menyimpan hasilnya sebagai baris baru. Angka tetap hanya dihitung oleh generator Python; Claude tidak pernah menghitung angka.
+
+- `service/server.py`: `POST /v1/reports?bu=&period=` (isi: CSV), `POST /v1/analysis/apply`, `GET /healthz`. Wajib token Bearer; tidak mau start tanpa token; isi request tidak pernah masuk log.
+- `Dockerfile`, `deploy/docker-compose.report-service.example.yml`: pengemasan, tanpa port publik, filesystem read-only, tanpa root.
+- `database/`: skrip pembuatan database, role (writer hanya INSERT, reader hanya SELECT), dan tabel append-only. Input identik tidak menambah baris.
+- `n8n/`: tiga workflow siap impor dan panduan pemasangannya, termasuk daftar hal yang belum terverifikasi terhadap n8n sungguhan.
+- Keluaran generator kini juga `<output>.facts.json` (agregat per stage, source, produk, campaign; tanpa nama perusahaan).
+
+Pengujian: `python -m unittest discover -s tests`. Test database membutuhkan server PostgreSQL sekali pakai: `REPORTS_TEST_ADMIN="host=127.0.0.1 port=5432 user=postgres" python -m unittest tests.test_database` (dengan `pip install -r requirements-dev.txt`). Test itu menolak berjalan bila database `marketing_reports` atau role `report_*` sudah ada.
+
 ## Analisis deskriptif: langkah kedua setelah angka benar
 
 Salin `analysis.example.json` (BU2: `analysis.bu2.example.json`) menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.

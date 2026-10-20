@@ -1,0 +1,466 @@
+{
+  "name": "Report Generate v1",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "weeks",
+              "weeksInterval": 1,
+              "triggerAtDay": [
+                1
+              ],
+              "triggerAtHour": 14,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "68974b87-bded-5901-9b41-349526defc1f",
+      "name": "Schedule Weekly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "months",
+              "monthsInterval": 1,
+              "triggerAtDayOfMonth": 1,
+              "triggerAtHour": 14,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "658170bb-c2c3-580f-b92a-cdb859f50fb3",
+      "name": "Schedule Monthly",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "report-generate",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "112a824a-d240-5cbf-b66c-a7f46abfe7cb",
+      "name": "Webhook Generate",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        320
+      ],
+      "webhookId": "f7554950-8ba8-5e50-80de-865a1bac9031"
+    },
+    {
+      "parameters": {},
+      "id": "945b03a8-4a57-5225-8cb7-6abf45d49011",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Decides which BU/period pairs to build. Scheduled runs build the previous completed ISO week or calendar\n// month in Asia/Jakarta. Webhook runs must name the period explicitly; nothing is guessed.\nconst BUS = ['bu1', 'bu2'];\nconst PERIOD = /^\\d{4}-(W\\d{2}|\\d{2})$/;\nconst pad = (n) => String(n).padStart(2, '0');\n\nfunction jakartaToday(value) {\n  const parts = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Jakarta', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(value);\n  const get = (type) => Number(parts.find((p) => p.type === type).value);\n  return new Date(Date.UTC(get('year'), get('month') - 1, get('day')));\n}\n\nfunction isoWeekLabel(date) {\n  const thursday = new Date(date);\n  thursday.setUTCDate(date.getUTCDate() + 3 - ((date.getUTCDay() + 6) % 7));\n  const year = thursday.getUTCFullYear();\n  const jan4 = new Date(Date.UTC(year, 0, 4));\n  const week = 1 + Math.round(((thursday - jan4) / 86400000 - 3 + ((jan4.getUTCDay() + 6) % 7)) / 7);\n  return `${year}-W${pad(week)}`;\n}\n\nfunction previousWeek(today) {\n  const d = new Date(today);\n  d.setUTCDate(d.getUTCDate() - 7);\n  return isoWeekLabel(d);\n}\n\nfunction previousMonth(today) {\n  const y = today.getUTCFullYear();\n  const m = today.getUTCMonth();\n  return m === 0 ? `${y - 1}-12` : `${y}-${pad(m)}`;\n}\n\nconst executed = (name) => {\n  try { return $(name).isExecuted === true; } catch (e) { return false; }\n};\n\nconst input = $input.first().json;\nconst today = jakartaToday(input.timestamp ? new Date(input.timestamp) : new Date());\nlet trigger;\nlet bus = BUS;\nlet period;\n\nif (executed('Webhook Generate')) {\n  trigger = 'webhook';\n  const body = input.body || {};\n  const requested = String(body.bu || 'all').toLowerCase();\n  if (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\n  if (!PERIOD.test(String(body.period || ''))) throw new Error('period wajib diisi dengan format YYYY-Www atau YYYY-MM');\n  bus = requested === 'all' ? BUS : [requested];\n  period = String(body.period);\n} else if (executed('Schedule Monthly')) {\n  trigger = 'monthly';\n  period = previousMonth(today);\n} else {\n  trigger = executed('Schedule Weekly') ? 'weekly' : 'manual';\n  period = previousWeek(today);\n}\n\nreturn [{ json: { trigger, plans: bus.map((bu) => ({ bu, period })) } }];\n"
+      },
+      "id": "272da89b-d151-56a6-93d8-558ea81369b2",
+      "name": "Normalize Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        260,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<SPREADSHEET_ID>"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEW Customers List"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "specifyRangeA1",
+              "range": "A:DR"
+            }
+          },
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "SERIAL_NUMBER"
+            }
+          }
+        }
+      },
+      "id": "72e962a0-a35e-5a0a-b8c1-597be5785408",
+      "name": "Read Tracker",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        500,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Turns the Tracker rows into one CSV per planned report. Only the columns the generator needs are kept, so PIC\n// names, phone numbers, emails and CRM links never leave n8n. Dates arrive as Google Sheets serial numbers and are\n// written as ISO dates, which removes any M/D versus D/M ambiguity.\nconst COLUMNS = [\"Company\", \"Channel\", \"Source\", \"Campaign\", \"Campaign Hardware\", \"Industry\", \"Remark\", \"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"ARR + OTF (Tanpa PPN)\", \"Deal Won Date\", \"Total Contract Deal Won\", \"BU\", \"Record Key\", \"SQL Date\", \"Total Contract SQL\"];\nconst DATE_COLUMNS = new Set([\"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"Deal Won Date\", \"SQL Date\"]);\nconst MONEY_COLUMNS = new Set([\"ARR + OTF (Tanpa PPN)\", \"Total Contract Deal Won\", \"Total Contract SQL\"]);\nconst SERIAL_EPOCH = Date.UTC(1899, 11, 30);\nconst normalize = (name) => String(name).replace(/\\s+/g, ' ').trim();\n\nfunction cell(column, value) {\n  if (value === null || value === undefined) return '';\n  if (typeof value === 'number') {\n    if (DATE_COLUMNS.has(column)) return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);\n    if (MONEY_COLUMNS.has(column)) return String(Math.round(value * 100) / 100);\n    return String(value);\n  }\n  return String(value).trim();\n}\n\nconst quote = (text) => (/[\",\\r\\n]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text);\n\nconst rows = [];\nlet missing = null;\nfor (const item of $input.all()) {\n  const byName = {};\n  for (const [key, value] of Object.entries(item.json)) byName[normalize(key)] = value;\n  if (missing === null) {\n    missing = COLUMNS.filter((column) => !(column in byName));\n    if (missing.length) throw new Error(`Kolom tidak ada di sheet: ${missing.join(', ')}`);\n  }\n  const values = COLUMNS.map((column) => cell(column, byName[column]));\n  if (values.some((v) => v !== '')) rows.push(values.map(quote).join(','));\n}\nif (!rows.length) throw new Error('Sheet tidak mengembalikan baris data');\n\nconst csv = [COLUMNS.map(quote).join(','), ...rows].join('\\n') + '\\n';\nconst plans = $('Normalize Plan').first().json.plans;\nreturn plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));\n"
+      },
+      "id": "9b8b19fe-3a45-5d11-86ed-1e792918f7f1",
+      "name": "Build CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        740,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://report-service:8080/v1/reports",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "bu",
+              "value": "={{ $json.bu }}"
+            },
+            {
+              "name": "period",
+              "value": "={{ $json.period }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csv }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "aab9183c-01b6-5b9a-8a72-11e12ed7bf81",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        980,
+        240
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Maps each generator response onto the parameters of sql/insert_run.sql.\nreturn $input.all().map((item) => {\n  const r = item.json;\n  const table = r.audit.inputs.table;\n  const params = [\n    r.bu, r.period, r.period_kind, r.period_start, r.period_end, r.source_sha256, r.generator_version,\n    table.rows_total, table.rows_in_bu, table.rows_without_bu,\n    JSON.stringify(r.audit.metrics), JSON.stringify(r.audit), JSON.stringify(r.facts), JSON.stringify(r.analysis_keys),\n    r.html,\n  ];\n  return { json: { params, bu: r.bu, period: r.period, metrics: r.audit.metrics.now, rows_without_bu: table.rows_without_bu, rows_in_bu: table.rows_in_bu } };\n});\n"
+      },
+      "id": "02cf73ea-a7bd-596e-b1ea-79a82aabda5d",
+      "name": "Prepare Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO reports.report_runs\n    (bu, period, period_kind, period_start, period_end, source_sha256, generator_version,\n     rows_total, rows_in_bu, rows_without_bu, metrics, audit, facts, analysis_keys, numeric_html)\n  VALUES\n    ($1, $2, $3, $4::date, $5::date, $6, $7,\n     $8::int, $9::int, $10::int, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)\n  ON CONFLICT (bu, period, source_sha256) DO NOTHING\n  RETURNING run_id\n)\nSELECT run_id, true AS inserted FROM ins\nUNION ALL\nSELECT run_id, false AS inserted\nFROM reports.report_runs\nWHERE bu = $1 AND period = $2 AND source_sha256 = $6 AND NOT EXISTS (SELECT 1 FROM ins)\n",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "id": "2bd5a65f-92ef-5b78-b404-54754bd4b793",
+      "name": "Save Run",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1460,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Aggregate-only summary for Telegram and for the webhook response. No customer data.\nconst prepared = $('Prepare Insert').all();\nconst money = (n) => 'Rp ' + Math.round(n).toString().replace(/\\B(?=(\\d{3})+(?!\\d))/g, '.');\nreturn $input.all().map((saved, i) => {\n  const p = prepared[i].json;\n  const row = saved.json;\n  const m = p.metrics;\n  const state = row.inserted ? 'tersimpan' : 'sudah ada (input identik, tidak ditulis ulang)';\n  const lines = [\n    `Laporan ${p.bu.toUpperCase()} ${p.period} ${state}`,\n    `Submission ${m['Submission']} · MQL ${m['MQL']} · SQL ${m['SQL']} · SQL Value ${money(m['SQL Value'])} · Deal Won ${m['Deal Won']} (provisional)`,\n    `Baris di BU: ${p.rows_in_bu} · tanpa BU (tidak dihitung): ${p.rows_without_bu}`,\n    `Run: ${String(row.run_id).slice(0, 8)}`,\n  ];\n  return { json: { bu: p.bu, period: p.period, run_id: row.run_id, inserted: row.inserted, text: lines.join('\\n') } };\n});\n"
+      },
+      "id": "780d411f-7aeb-5392-8038-9f384e876be7",
+      "name": "Compose Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "8bc20b85-12be-592e-b6a9-b3e0dbf5dc49",
+      "name": "Notify",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1940,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "return [{ json: { runs: $input.all().map((i) => ({ bu: i.json.bu, period: i.json.period, run_id: i.json.run_id, inserted: i.json.inserted })) } }];\n"
+      },
+      "id": "8bd1ab3c-c6ce-5829-b84b-b7463736d6df",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2180,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// The generator error is a short validation message (missing column, bad date, duplicate key). It never echoes a row.\nconst plan = $('Build CSV').item.json;\nconst raw = $json.error ? JSON.stringify($json.error) : JSON.stringify($json);\nlet message = raw;\ntry {\n  const parsed = JSON.parse(raw);\n  message = (parsed.error && (parsed.error.message || parsed.error)) || parsed.message || raw;\n} catch (e) { /* keep raw */ }\nreturn [{ json: { text: `Laporan ${plan.bu.toUpperCase()} ${plan.period} GAGAL dibuat: ${String(message).slice(0, 300)}` } }];\n"
+      },
+      "id": "90a9ae88-d225-548a-864a-6504355f3a8e",
+      "name": "Format Generate Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1220,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "message",
+        "operation": "sendMessage",
+        "chatId": "<TELEGRAM_CHAT_ID>",
+        "text": "={{ $json.text }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "id": "62d816cd-4bd0-5a9e-a8d2-a27786032ba4",
+      "name": "Notify Error",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1460,
+        400
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Weekly": {
+      "main": [
+        [
+          {
+            "node": "Normalize Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Monthly": {
+      "main": [
+        [
+          {
+            "node": "Normalize Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook Generate": {
+      "main": [
+        [
+          {
+            "node": "Normalize Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Normalize Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Plan": {
+      "main": [
+        [
+          {
+            "node": "Read Tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Tracker": {
+      "main": [
+        [
+          {
+            "node": "Build CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CSV": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Insert": {
+      "main": [
+        [
+          {
+            "node": "Save Run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Run": {
+      "main": [
+        [
+          {
+            "node": "Compose Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compose Message": {
+      "main": [
+        [
+          {
+            "node": "Notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notify": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Generate Error": {
+      "main": [
+        [
+          {
+            "node": "Notify Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Prepare Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Generate Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

@@ -5,6 +5,8 @@ description: Buat laporan performa marketing mingguan atau bulanan (BU1, BU2 bil
 
 # Performance Marketing Report
 
+> Jalur utama sekarang otomatis lewat n8n dan layanan Docker (lihat README, bagian *Penerapan otomatis*). Skill ini hanya untuk pemakaian ad hoc lewat chat.
+
 Angka dihitung oleh `generate_report.py` di repo `angxsupriyanto/performance-marketing-report`. **Jangan menghitung angka sendiri** (tanpa pandas, tanpa rumus ad hoc di chat). Tugas Anda: menjalankan generator, memverifikasi, lalu menulis analisis.
 
 ## Sebelum mulai, tanyakan bila belum jelas

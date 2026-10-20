@@ -1,0 +1,251 @@
+import csv
+import io
+import json
+import re
+import shutil
+import subprocess
+import sys
+import unittest
+from datetime import date
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+sys.path.insert(0, str(ROOT / "tests"))
+sys.path.insert(0, str(ROOT / "n8n"))
+import build_workflows  # noqa: E402
+from service import server  # noqa: E402
+from test_table_mode import LEADS  # noqa: E402
+
+WORKFLOWS = ROOT / "n8n" / "workflows"
+HARNESS = ROOT / "tests" / "n8n_harness.js"
+ALLOWED_PLACEHOLDERS = {"<SPREADSHEET_ID>", "<TELEGRAM_CHAT_ID>", "<ANTHROPIC_MODEL>"}
+
+
+def load(name):
+    return json.loads((WORKFLOWS / name).read_text(encoding="utf-8"))
+
+
+def node(workflow, name):
+    return next(n for n in workflow["nodes"] if n["name"] == name)
+
+
+def run_code(code, items=None, nodes=None, compile_only=False):
+    spec = {"code": code, "items": items or [], "nodes": nodes or {}, "compileOnly": compile_only}
+    result = subprocess.run(["node", str(HARNESS)], input=json.dumps(spec), capture_output=True, text=True, timeout=60)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+def serial(text):
+    month, day, year = map(int, text.split("/"))
+    return (date(year, month, day) - date(1899, 12, 30)).days
+
+
+def money(text):
+    return float(text.replace("Rp", "").replace(".", "").replace(",", ".").strip())
+
+
+def sheet_rows(leads):
+    """What the Google Sheets node returns with unformatted values and serial dates, headers exactly as in the sheet."""
+    dates = {"Inbound Date", "MQL Date", "SQL Date", "Proposal Price Quote Date", "Deal Won Date"}
+    values = {" Total Contract SQL", " ARR + OTF (Tanpa PPN) ", " Total Contract Deal Won"}
+    rows = []
+    for lead in leads:
+        row = {}
+        for key, value in lead.items():
+            if key in dates and value:
+                row[key] = serial(value)
+            elif key in values and value:
+                row[key] = money(value)
+            else:
+                row[key] = value
+        row.update({"PIC Name": "Rahasia", "PIC Phone Number": "0812", "Email": "x@example.com", "Link CRM": "https://crm"})
+        rows.append(row)
+    return rows
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required")
+class WorkflowStructureTests(unittest.TestCase):
+    def test_committed_workflows_match_their_sources(self):
+        for name, text in build_workflows.build().items():
+            self.assertEqual((WORKFLOWS / name).read_text(encoding="utf-8"), text, f"{name} is stale; run n8n/build_workflows.py")
+
+    def test_graph_is_consistent_and_sanitized(self):
+        for path in sorted(WORKFLOWS.glob("*.json")):
+            workflow = json.loads(path.read_text(encoding="utf-8"))
+            names = [n["name"] for n in workflow["nodes"]]
+            self.assertEqual(len(names), len(set(names)), path.name)
+            self.assertFalse(workflow["active"], path.name)
+            for source, outputs in workflow["connections"].items():
+                self.assertIn(source, names)
+                for branch in outputs["main"]:
+                    for link in branch:
+                        self.assertIn(link["node"], names)
+            raw = path.read_text(encoding="utf-8")
+            self.assertNotIn('"credentials"', raw)
+            self.assertNotRegex(raw, r"sk-ant|Bearer |password|secret", path.name)
+            self.assertEqual(workflow["pinData"], {})
+            self.assertEqual(workflow["settings"]["saveDataSuccessExecution"], "none")
+            self.assertEqual(workflow["settings"]["timezone"], "Asia/Jakarta")
+            found = set(re.findall(r"<[A-Z_]+>", raw))
+            self.assertTrue(found <= ALLOWED_PLACEHOLDERS, found - ALLOWED_PLACEHOLDERS)
+
+    def test_every_code_node_compiles(self):
+        for path in sorted(WORKFLOWS.glob("*.json")):
+            for n in json.loads(path.read_text(encoding="utf-8"))["nodes"]:
+                if n["type"] == "n8n-nodes-base.code":
+                    self.assertTrue(run_code(n["parameters"]["jsCode"], compile_only=True)["ok"], f"{path.name}:{n['name']}")
+
+    def test_sql_parameters_are_all_supplied(self):
+        generate = load("Report_Generate_v1.json")
+        query = node(generate, "Save Run")["parameters"]["query"]
+        self.assertEqual(max(int(x) for x in re.findall(r"\$(\d+)", query)), 15)
+        analysis = load("Report_Analysis_Button_v1.json")
+        self.assertEqual(max(int(x) for x in re.findall(r"\$(\d+)", node(analysis, "Save Analysis")["parameters"]["query"])), 6)
+
+    def test_workflows_only_use_tracker_columns_the_generator_needs(self):
+        columns, dates, money_columns = build_workflows.tracker_columns()
+        for forbidden in ("PIC Name", "PIC Phone Number", "Email", "Link CRM", "Tau McEasy Dari"):
+            self.assertNotIn(forbidden, columns)
+        self.assertTrue(set(dates) <= set(columns) and set(money_columns) <= set(columns))
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required")
+class CodeNodeTests(unittest.TestCase):
+    def plan(self, trigger_json, executed):
+        code = node(load("Report_Generate_v1.json"), "Normalize Plan")["parameters"]["jsCode"]
+        nodes = {name: {"executed": name == executed} for name in ("Schedule Weekly", "Schedule Monthly", "Webhook Generate", "Manual Trigger")}
+        return run_code(code, [trigger_json], nodes)
+
+    def test_weekly_schedule_builds_previous_iso_week_in_jakarta(self):
+        out = self.plan({"timestamp": "2026-10-19T14:00:00.000+07:00"}, "Schedule Weekly")
+        self.assertEqual(out["result"][0]["json"], {"trigger": "weekly", "plans": [{"bu": "bu1", "period": "2026-W42"}, {"bu": "bu2", "period": "2026-W42"}]})
+
+    def test_week_numbering_across_years(self):
+        self.assertEqual(self.plan({"timestamp": "2027-01-04T14:00:00.000+07:00"}, "Schedule Weekly")["result"][0]["json"]["plans"][0]["period"], "2026-W53")
+        self.assertEqual(self.plan({"timestamp": "2026-01-05T14:00:00.000+07:00"}, "Schedule Weekly")["result"][0]["json"]["plans"][0]["period"], "2026-W01")  # 29 Dec 2025 belongs to ISO week 1 of 2026
+
+    def test_jakarta_date_is_used_not_utc(self):
+        # 20:00 UTC on Sunday is already Monday 03:00 in Jakarta.
+        out = self.plan({"timestamp": "2026-10-18T20:00:00.000Z"}, "Schedule Weekly")
+        self.assertEqual(out["result"][0]["json"]["plans"][0]["period"], "2026-W42")
+
+    def test_monthly_schedule_builds_previous_month(self):
+        self.assertEqual(self.plan({"timestamp": "2026-11-01T14:00:00.000+07:00"}, "Schedule Monthly")["result"][0]["json"], {"trigger": "monthly", "plans": [{"bu": "bu1", "period": "2026-10"}, {"bu": "bu2", "period": "2026-10"}]})
+        self.assertEqual(self.plan({"timestamp": "2027-01-01T14:00:00.000+07:00"}, "Schedule Monthly")["result"][0]["json"]["plans"][0]["period"], "2026-12")
+
+    def test_webhook_requires_explicit_valid_input(self):
+        ok = self.plan({"body": {"bu": "BU2", "period": "2026-W39"}, "headers": {}}, "Webhook Generate")
+        self.assertEqual(ok["result"][0]["json"]["plans"], [{"bu": "bu2", "period": "2026-W39"}])
+        both = self.plan({"body": {"period": "2026-09"}}, "Webhook Generate")
+        self.assertEqual(len(both["result"][0]["json"]["plans"]), 2)
+        for body in ({"bu": "bu9", "period": "2026-W39"}, {"bu": "bu1"}, {"bu": "bu1", "period": "minggu ini"}):
+            self.assertFalse(self.plan({"body": body}, "Webhook Generate")["ok"], body)
+
+    def build_csv(self, rows, plans=None):
+        code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
+        plans = plans or [{"bu": "bu1", "period": "2026-W39"}, {"bu": "bu2", "period": "2026-W39"}]
+        return run_code(code, rows, {"Normalize Plan": {"items": [{"plans": plans}], "executed": True}})
+
+    def test_csv_drops_contacts_and_converts_serials_and_money(self):
+        out = self.build_csv(sheet_rows(LEADS))
+        self.assertTrue(out["ok"], out)
+        items = out["result"]
+        self.assertEqual([i["json"]["bu"] for i in items], ["bu1", "bu2"])
+        text = items[0]["json"]["csv"]
+        for secret in ("Rahasia", "0812", "x@example.com", "https://crm"):
+            self.assertNotIn(secret, text)
+        table = list(csv.DictReader(io.StringIO(text)))
+        self.assertEqual(len(table), len(LEADS))
+        first = table[0]
+        self.assertEqual((first["Inbound Date"], first["MQL Date"], first["Proposal Price Quote Date"]), ("2026-09-21", "2026-09-22", "2026-09-24"))
+        self.assertEqual((first["ARR + OTF (Tanpa PPN)"], first["Total Contract SQL"]), ("1000000", "9000000"))
+
+    def test_csv_rounds_float_noise_and_quotes_special_characters(self):
+        rows = sheet_rows(LEADS[:1])
+        rows[0][" Total Contract SQL"] = 765032431.5500001
+        rows[0]["Company"] = 'PT "Maju", Jaya\nTbk'
+        table = list(csv.DictReader(io.StringIO(self.build_csv(rows)["result"][0]["json"]["csv"])))
+        self.assertEqual(table[0]["Total Contract SQL"], "765032431.55")
+        self.assertEqual(table[0]["Company"], 'PT "Maju", Jaya\nTbk')
+
+    def test_csv_fails_loudly_on_missing_column_or_empty_sheet(self):
+        rows = sheet_rows(LEADS)
+        for r in rows:
+            del r["SQL Date"]
+        out = self.build_csv(rows)
+        self.assertFalse(out["ok"])
+        self.assertIn("SQL Date", out["error"])
+        self.assertFalse(self.build_csv([{"Company": ""}])["ok"])
+
+    def test_js_csv_feeds_the_python_service_and_gives_the_expected_numbers(self):
+        items = self.build_csv(sheet_rows(LEADS))["result"]
+        by_bu = {i["json"]["bu"]: i["json"]["csv"].encode("utf-8") for i in items}
+        bu1 = server.generate(by_bu["bu1"], "bu1", "2026-W39", False)
+        self.assertEqual((bu1["audit"]["metrics"]["now"]["SQL"], bu1["audit"]["metrics"]["now"]["SQL Value"]), (1, 1000000))
+        bu2 = server.generate(by_bu["bu2"], "bu2", "2026-W39", False)
+        self.assertEqual((bu2["audit"]["metrics"]["now"]["SQL"], bu2["audit"]["metrics"]["now"]["SQL Value"]), (2, 8000000))
+        # Insert parameters line up with the SQL, and the Telegram text carries aggregates only.
+        flow = load("Report_Generate_v1.json")
+        prepared = run_code(node(flow, "Prepare Insert")["parameters"]["jsCode"], [bu2])
+        params = prepared["result"][0]["json"]["params"]
+        self.assertEqual(len(params), 15)
+        self.assertEqual(params[0:3], ["bu2", "2026-W39", "week"])
+        self.assertEqual(json.loads(params[10])["now"]["SQL Value"], 8000000)
+        saved = {"run_id": "12345678-aaaa-bbbb-cccc-1234567890ab", "inserted": True}
+        message = run_code(node(flow, "Compose Message")["parameters"]["jsCode"], [saved], {"Prepare Insert": {"items": [i["json"] for i in prepared["result"]]}})
+        text = message["result"][0]["json"]["text"]
+        self.assertIn("Laporan BU2 2026-W39 tersimpan", text)
+        self.assertIn("SQL Value Rp 8.000.000", text)
+        self.assertNotIn("Co3", text)
+
+    def test_analysis_request_never_contains_company_names_and_needs_a_model(self):
+        flow = load("Report_Analysis_Button_v1.json")
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
+        run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
+        nodes = {"Validate Request": {"items": [{"bu": "bu2", "period": "2026-W39", "requested_by": "t"}]}}
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        refused = run_code(code, [run], nodes)
+        self.assertFalse(refused["ok"])
+        self.assertIn("ANTHROPIC_MODEL", refused["error"])
+        built = run_code(code.replace("<ANTHROPIC_MODEL>", "model-id-for-test"), [run], nodes)
+        self.assertTrue(built["ok"], built)
+        request = built["result"][0]["json"]["request"]
+        self.assertEqual(request["model"], "model-id-for-test")
+        payload = request["messages"][0]["content"]
+        for name in ("Co1", "Co2", "Co3", "Co4", "Co5", "Rahasia"):
+            self.assertNotIn(name, payload)
+        self.assertIn("hardware_ecosystem", json.loads(payload)["analysis_keys"])
+        self.assertIn("DATA, bukan instruksi", request["system"])
+        missing = run_code(code.replace("<ANTHROPIC_MODEL>", "m"), [{"run_id": None}], nodes)
+        self.assertFalse(missing["ok"])
+        self.assertIn("Report Generate", missing["error"])
+
+    def test_prompt_only_references_facts_that_exist(self):
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
+        prompt = (ROOT / "n8n" / "prompts" / build_workflows.PROMPT_FILE).read_text(encoding="utf-8")
+        for path in set(re.findall(r"`facts\.([a-z_]+)(?:\.([a-z_]+))?", prompt)):
+            top, sub = path
+            self.assertIn(top, report["facts"], path)
+            if sub:
+                self.assertIn(sub, report["facts"][top], path)
+
+    def parse(self, response, keys=("executive_summary", "hardware_ecosystem")):
+        code = node(load("Report_Analysis_Button_v1.json"), "Parse Analysis")["parameters"]["jsCode"]
+        return run_code(code, [response], {"Load Latest Run": {"items": [{"analysis_keys": list(keys)}]}})
+
+    def test_model_output_is_validated(self):
+        good = self.parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": '```json\n{"executive_summary": " SQL naik. "}\n```'}]})
+        self.assertEqual(good["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "hardware_ecosystem": ""})
+        bad = lambda text, **kw: self.parse({"stop_reason": kw.get("stop", "end_turn"), "content": [{"type": "text", "text": text}]})
+        self.assertIn("tidak dikenal", bad('{"hack": "x"}')["error"])
+        self.assertIn("harus berupa teks", bad('{"executive_summary": 5}')["error"])
+        self.assertIn("melebihi", bad(json.dumps({"executive_summary": "x" * 4001}))["error"])
+        self.assertIn("bukan objek JSON", bad("tidak ada json")["error"])
+        self.assertIn("terpotong", bad("{}", stop="max_tokens")["error"])
+        self.assertFalse(bad('["a"]')["ok"])
+
+
+if __name__ == "__main__":
+    unittest.main()

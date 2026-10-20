@@ -44,6 +44,37 @@ def run(*args):
     return subprocess.run([sys.executable, str(ROOT / "generate_report.py"), *map(str, args)], capture_output=True, text=True)
 
 
+class MoneyTests(unittest.TestCase):
+    def tearDown(self):
+        report.use_profile(report.load_profile("bu1"))
+
+    def test_bu2_accepts_decimals_in_unambiguous_formats(self):
+        report.use_profile(report.load_profile("bu2"))
+        parse = lambda v: report.parse_money(v, "x")
+        self.assertEqual(parse("12033683238.62"), report.Decimal("12033683238.62"))
+        self.assertEqual(parse("Rp 1.234.567,89"), report.Decimal("1234567.89"))
+        self.assertEqual(parse("1,234,567.50"), report.Decimal("1234567.50"))
+        self.assertEqual(parse("1.350.000"), 1350000)
+        self.assertEqual(parse("1.350"), 1350)
+        self.assertEqual(parse("2500000.00"), 2500000)
+        self.assertEqual(parse(" Rp - "), 0)
+        for bad in ("1.234.567,891", "12,5,6", "abc", "1e9"):
+            with self.assertRaises(ValueError):
+                parse(bad)
+
+    def test_bu1_still_rejects_decimals(self):
+        report.use_profile(report.load_profile("bu1"))
+        with self.assertRaises(ValueError):
+            report.parse_money("1234567.89", "x")
+
+    def test_display_rounds_half_up_but_sums_stay_exact(self):
+        report.use_profile(report.load_profile("bu2"))
+        total = report.parse_money("100.50", "x") + report.parse_money("200.50", "x")
+        self.assertEqual(total, report.Decimal("301.00"))
+        self.assertEqual(report.money(report.Decimal("12033683238.62")), "Rp 12.033.683.239")
+        self.assertEqual(report.money(report.Decimal("0.5")), "Rp 1")
+
+
 class TableModeTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -86,6 +117,17 @@ class TableModeTests(unittest.TestCase):
         self.assertIn("TOTAL 6 PRODUK", html)
         self.assertNotIn("Proposal Price Quote Date", html)
         self.assertIn("Total Contract SQL", soup.select_one(".footer").get_text())
+
+    def test_bu2_decimal_values_are_summed_exactly(self):
+        leads = [dict(r) for r in LEADS]
+        leads[2][" Total Contract SQL"] = "5000000.40"
+        leads[4][" Total Contract SQL"] = "Rp 3.000.000,35"
+        write_table(self.table, leads)
+        out = self.root / "dec.html"
+        result = run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(self.audit(out)["metrics"]["now"]["SQL Value"], 8000000.75)
+        self.assertIn("Rp 8.000.001", out.read_text())
 
     def test_table_mode_matches_four_stage_csvs(self):
         stage_rows = {
