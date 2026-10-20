@@ -30,8 +30,14 @@ Yang **tidak** dicakup: password bersama bisa bocor dari orang ke orang. Bila it
    `deploy/install-viewer-db.sh --container <postgres> --admin-user <superuser>`
    Membuat tabel target dan role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 16 baris harus PASS.
 2. **Rahasia lain** (di folder tempat compose dijalankan, jangan di-commit):
-   - `viewer_session_secret`: `openssl rand -hex 32 > viewer_session_secret`
-   - `viewer_password_hash`: jalankan `python -m viewer.hash_password > viewer_password_hash` di komputer yang punya repo ini (menanyakan password dua kali di terminal, tidak lewat argumen). Tanpa Python lokal: `docker run --rm -it --entrypoint python <image-report-service> -m viewer.hash_password > viewer_password_hash`.
+   - `viewer_session_secret` dan `n8n_webhook_token` (acak, 64 karakter heks). Linux, macOS, WSL: `openssl rand -hex 32 > viewer_session_secret`. **PowerShell (Windows):**
+     ```powershell
+     function New-Secret($path) { $b = New-Object byte[] 32; [Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($b); [IO.File]::WriteAllText("$PWD\$path", (($b | ForEach-Object { $_.ToString('x2') }) -join ''), (New-Object Text.UTF8Encoding $false)) }
+     New-Secret viewer_session_secret
+     New-Secret n8n_webhook_token
+     ```
+     Jangan memakai `>` di PowerShell untuk rahasia: ia menulis UTF-16. Layanan tetap membacanya, tetapi cara di atas bersih.
+   - `viewer_password_hash`: `python -m viewer.hash_password --output viewer_password_hash` di komputer yang punya Python dan repo ini. Tanpa Python lokal (PowerShell, dari folder tempat berkas akan dibuat): `docker run --rm -it -v "${PWD}:/out" --entrypoint python $(docker inspect -f "{{.Config.Image}}" report-service) -m viewer.hash_password --output /out/viewer_password_hash`. Password diketik dua kali di terminal, tidak lewat argumen.
    - `n8n_webhook_token`: token yang sama dengan nilai credential Header Auth pada node *Webhook Analysis* di n8n. Nilai `Authorization` di n8n boleh `Bearer <token>`; sesuaikan `N8N_WEBHOOK_HEADER_PREFIX` bila credential Anda memakai token polos.
 3. **Container.** Salin `deploy/docker-compose.report-viewer.example.yml` menjadi `docker-compose.report-viewer.local.yml` (diabaikan Git), ubah nama network, `VIEWER_DB_HOST`, dan `N8N_ANALYSIS_URL` sesuai stack Anda, lalu:
    `docker compose -p report-viewer -f deploy/docker-compose.report-viewer.local.yml up -d --build`

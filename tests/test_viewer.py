@@ -455,6 +455,24 @@ class AuthUnitTests(unittest.TestCase):
         self.assertEqual(limiter.retry_after("b"), 0)
 
 
+class HashCliTests(unittest.TestCase):
+    def test_output_file_is_plain_ascii_and_verifies(self):
+        from unittest import mock
+        from viewer import hash_password
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "viewer_password_hash"
+            with mock.patch("getpass.getpass", return_value=PASSWORD):
+                self.assertEqual(hash_password.main(["--output", str(target)]), 0)
+            raw = target.read_bytes()
+            self.assertFalse(raw.startswith((b"\xef\xbb\xbf", b"\xff\xfe")))
+            self.assertTrue(auth.verify_password(PASSWORD, raw.decode("ascii")))
+            with mock.patch("getpass.getpass", side_effect=[PASSWORD, "different password!"]):
+                self.assertEqual(hash_password.main(["--output", str(Path(tmp) / "x")]), 1)
+            with mock.patch("getpass.getpass", return_value="short"):
+                self.assertEqual(hash_password.main(["--output", str(Path(tmp) / "y")]), 1)
+            self.assertFalse((Path(tmp) / "x").exists() or (Path(tmp) / "y").exists())
+
+
 class TargetRuleTests(unittest.TestCase):
     def rows(self, *entries):
         return [{"scope": s, "product": p, "period_key": k, "unit": "idr", "amount": Decimal(a)} for s, p, k, a in entries]
