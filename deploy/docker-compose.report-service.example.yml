@@ -1,8 +1,12 @@
-# Example only. Merge into the Docker Compose project that already runs n8n.
+# Example. Run it as its own Compose project next to n8n so the existing stack is never recreated:
+#   cp docker-compose.report-service.example.yml docker-compose.report-service.local.yml
+#   (change only the network name below to the one n8n already uses)
+#   docker compose -p report-service -f docker-compose.report-service.local.yml up -d --build
 # Do not publish a port: n8n reaches the service by name over the shared network.
 # Create the secret out of band (never commit it):  openssl rand -hex 32 > report_service_token.txt
 services:
   report-service:
+    container_name: report-service   # fixed name so deploy/verify-report-service.sh can find it
     build:
       context: ..
       args:

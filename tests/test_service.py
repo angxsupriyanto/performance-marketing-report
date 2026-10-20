@@ -82,6 +82,25 @@ class ServiceTests(unittest.TestCase):
         finally:
             server.MAX_BODY_BYTES = original
 
+    def test_verify_script_passes_with_the_right_token_and_fails_with_a_wrong_one(self):
+        import shutil
+        import subprocess
+        import tempfile
+        if not shutil.which("sh"):
+            self.skipTest("sh not available")
+        script = str(ROOT / "deploy" / "verify-report-service.sh")
+        with tempfile.TemporaryDirectory() as tmp:
+            good, bad = Path(tmp) / "good", Path(tmp) / "bad"
+            good.write_text(TOKEN)
+            bad.write_text("x" * 40)
+            run = lambda token_file: subprocess.run(["sh", script, "--url", self.base, "--token-file", str(token_file)], capture_output=True, text=True, timeout=60)
+            ok, nope = run(good), run(bad)
+        self.assertEqual(ok.returncode, 0, ok.stdout)
+        self.assertIn("ALL CHECKS PASSED", ok.stdout)
+        self.assertEqual(nope.returncode, 1)
+        self.assertIn("FAIL: the real token was not accepted", nope.stdout)
+        self.assertNotIn(TOKEN, ok.stdout + ok.stderr + nope.stdout)
+
     def test_token_is_required_to_start(self):
         import os
         for key in ("REPORT_SERVICE_TOKEN", "REPORT_SERVICE_TOKEN_FILE"):

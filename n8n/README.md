@@ -23,8 +23,10 @@ Setelah dipasang, tambahkan `marketing_reports` ke rutinitas backup yang sudah a
 
 ## Memasang
 
+Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `deploy/GORDON_TASK.md`: berisi instruksi siap tempel, aturan pengaman, dan titik persetujuan. Langkah manualnya di bawah ini.
+
 1. **Database.** Jalankan `psql -d postgres -f database/preflight.sql` (read-only; semua baris harus `OK`), lalu `database/000_create_database_and_roles.sql` dan `database/001_reports_schema.sql` (perintah lengkap ada di komentar tiap berkas; kata sandi diberikan lewat `-v`, bukan disimpan di Git). Hasilnya database `marketing_reports` dengan role `report_writer` (SELECT dan INSERT saja) dan `report_reader` (SELECT). Buat dua credential Postgres di n8n yang menunjuk ke database ini.
-2. **Layanan laporan.** Gabungkan `deploy/docker-compose.report-service.example.yml` ke proyek Compose yang menjalankan n8n, buat token dengan `openssl rand -hex 32 > report_service_token.txt`, lalu `docker compose up -d --build report-service`. Jangan publikasikan portnya; n8n memanggilnya sebagai `http://report-service:8080`. Bila nama layanan atau portnya berbeda, ubah `SERVICE_URL` di `build_workflows.py` dan jalankan ulang.
+2. **Layanan laporan.** Salin `deploy/docker-compose.report-service.example.yml` menjadi `docker-compose.report-service.local.yml` (diabaikan Git), ubah hanya nama network menjadi network yang sudah dipakai n8n, buat token dengan `openssl rand -hex 32 > deploy/report_service_token.txt`, lalu `docker compose -p report-service -f deploy/docker-compose.report-service.local.yml up -d --build`. Dijalankan sebagai proyek terpisah, jadi stack n8n tidak dibuat ulang. Jangan publikasikan portnya; n8n memanggilnya sebagai `http://report-service:8080`. Periksa hasilnya dengan `deploy/verify-report-service.sh --container report-service --n8n-container <nama container n8n>`. Bila nama layanan atau portnya berbeda, ubah `SERVICE_URL` di `build_workflows.py` dan jalankan ulang.
 3. **Impor** ketiga JSON, lalu buat dan pilih credential (nama bebas):
 
    | Node | Tipe credential |
