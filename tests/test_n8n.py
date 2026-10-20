@@ -270,12 +270,70 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual(len(params), 15)
         self.assertEqual(params[0:3], ["bu2", "2026-W39", "week"])
         self.assertEqual(json.loads(params[10])["now"]["SQL Value"], 8000000)
+        self.assertEqual(prepared["result"][0]["json"]["lists"]["SQL"][0], {"company": "Co3", "value": 5000000})
+        self.assertEqual([e["company"] for e in prepared["result"][0]["json"]["lists"]["SQL"]], ["Co3", "Co5"])
+
+    def compose(self, report_bu="bu2", name_flag=True, lists=None, metrics=None):
+        flow = load("Report_Generate_v1.json")
+        code = node(flow, "Compose Message")["parameters"]["jsCode"]
+        if not name_flag:
+            code = code.replace("const INCLUDE_COMPANY_NAMES = true;", "const INCLUDE_COMPANY_NAMES = false;")
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
+        prepared = run_code(node(flow, "Prepare Insert")["parameters"]["jsCode"], [report])["result"][0]["json"]
+        if lists is not None:
+            prepared["lists"] = lists
         saved = {"run_id": "12345678-aaaa-bbbb-cccc-1234567890ab", "inserted": True}
-        message = run_code(node(flow, "Compose Message")["parameters"]["jsCode"], [saved], {"Prepare Insert": {"items": [i["json"] for i in prepared["result"]]}})
-        text = message["result"][0]["json"]["text"]
-        self.assertIn("Laporan BU2 2026-W39 tersimpan", text)
-        self.assertIn("SQL Value Rp 8.000.000", text)
-        self.assertNotIn("Co3", text)
+        out = run_code(code, [saved], {"Prepare Insert": {"items": [prepared]}})
+        self.assertTrue(out["ok"], out)
+        return [i["json"] for i in out["result"]]
+
+    def test_chat_summary_has_the_requested_layout(self):
+        (message,) = self.compose()
+        lines = message["text"].split("\n")
+        self.assertEqual(lines[0], "Laporan BU2 2026-W39 tersimpan")
+        self.assertEqual(lines[2:8], ["Submission 2", "MQL 1", "SQL 2", "SQL Value Rp 8.000.000", "Deal Won 1", "Deal Won Value Rp 2.500.000"])
+        text = message["text"]
+        self.assertIn("List SQL + Value (2)\n1. Co3 - Rp 5.000.000\n2. Co5 - Rp 3.000.000", text)
+        self.assertIn("List Deal Won + Value (1)\n1. Co5 - Rp 2.500.000", text)
+        self.assertIn("Baris di BU: 3 · tanpa BU (tidak dihitung): 0 · Run: 12345678", text)
+        self.assertEqual((message["part"], message["parts"]), (1, 1))
+
+    def test_company_names_can_be_switched_off_leaving_only_totals(self):
+        (message,) = self.compose(name_flag=False)
+        self.assertIn("SQL Value Rp 8.000.000", message["text"])
+        self.assertIn("Deal Won Value Rp 2.500.000", message["text"])
+        self.assertNotIn("List SQL", message["text"])
+        for name in ("Co3", "Co5"):
+            self.assertNotIn(name, message["text"])
+
+    def test_empty_lists_and_unusual_names_are_handled(self):
+        (message,) = self.compose(lists={"SQL": [], "Deal Won": [{"company": "  PT   Maju\nJaya  " + "x" * 100, "value": 1234.5}]})
+        self.assertIn("List SQL + Value (0)\n-", message["text"])
+        entry = [l for l in message["text"].split("\n") if l.startswith("1. PT Maju Jaya")][0]
+        self.assertLessEqual(len(entry), 80)
+        self.assertTrue(entry.endswith("- Rp 1.235"))
+
+    def test_long_lists_are_split_without_losing_or_cutting_lines(self):
+        entries = [{"company": f"PT Perusahaan Nomor {i:04d}", "value": 1000000 + i} for i in range(300)]
+        messages = self.compose(lists={"SQL": entries, "Deal Won": entries[:3]})
+        self.assertGreater(len(messages), 1)
+        for m in messages:
+            self.assertLessEqual(len(m["text"]), 4000)
+            self.assertEqual(m["parts"], len(messages))
+        joined = "\n".join(m["text"] for m in messages)
+        for i in range(300):
+            self.assertEqual(joined.count(f"PT Perusahaan Nomor {i:04d} - "), 1 if i >= 3 else 2, i)
+        self.assertIn("List SQL + Value (lanjutan, total 300)", messages[1]["text"])
+        self.assertTrue(messages[1]["text"].startswith("List SQL + Value (lanjutan, total 300)\n"))
+        self.assertEqual([m["part"] for m in messages], list(range(1, len(messages) + 1)))
+
+    def test_result_has_one_entry_per_report_even_when_the_summary_was_split(self):
+        entries = [{"company": f"PT Perusahaan Nomor {i:04d}", "value": 1000000 + i} for i in range(300)]
+        composed = self.compose(lists={"SQL": entries, "Deal Won": []})
+        self.assertGreater(len(composed), 1)
+        code = node(load("Report_Generate_v1.json"), "Result")["parameters"]["jsCode"]
+        out = run_code(code, [{"ok": True}] * len(composed), {"Compose Message": {"items": composed}})
+        self.assertEqual(out["result"][0]["json"]["runs"], [{"bu": "bu2", "period": "2026-W39", "run_id": "12345678-aaaa-bbbb-cccc-1234567890ab", "inserted": True}])
 
     def test_analysis_request_never_contains_company_names_and_needs_a_model(self):
         flow = load("Report_Analysis_Button_v1.json")

@@ -44,6 +44,31 @@ Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `
 5. Pasang *Error Workflow* yang sudah ada (H-17/H-18 Production Error Notification) di Settings tiap workflow.
 6. Eksekusi sukses tidak disimpan (`saveDataSuccessExecution: none`) karena data mengalir sebagai baris customer. Nyalakan sementara hanya saat debugging.
 
+## Ringkasan di Telegram
+
+Setiap laporan yang tersimpan mengirim satu pesan (atau lebih bila daftarnya panjang; batas Telegram 4096 karakter, jadi dipecah per baris, tidak pernah terpotong):
+
+```text
+Laporan BU1 2026-W42 tersimpan
+
+Submission 58
+MQL 37
+SQL 15
+SQL Value Rp 256.295.000
+Deal Won 5
+Deal Won Value Rp ...
+
+List SQL + Value (15)
+1. <perusahaan> - Rp ...
+
+List Deal Won + Value (5)
+1. <perusahaan> - Rp ...
+
+Baris di BU: 5974 · tanpa BU (tidak dihitung): 29 · Run: 6106c0e3
+```
+
+Daftar SQL dan Deal Won memuat **nama perusahaan** dan nilainya. Dokumen platform inbound mencatat aturan menjaga data customer di luar pesan Telegram, jadi pastikan chat tujuan hanya berisi orang yang memang boleh melihatnya. Untuk mengirim total saja, ubah `const INCLUDE_COMPANY_NAMES = true;` menjadi `false` di node **Compose Message**. Nama perusahaan hanya dikirim ke Telegram; tidak masuk ke database selain di HTML laporan, dan tidak pernah masuk ke `facts` yang dikirim ke Claude.
+
 ## Memperbaiki satu node tanpa impor ulang
 
 Impor ulang membuat workflow baru dan membuat Anda memilih ulang credential dan mengisi placeholder lagi. Untuk perbaikan kode, cukup ganti isi satu Code node: buka node, hapus isinya, lalu tempel isi berkas yang sesuai di `n8n/workflows/code/` (mis. `Report_Generate_v1__Build_CSV.js`). Berkas itu sudah terender (daftar kolom dan prompt sudah terisi), dibuat oleh `build_workflows.py`, dan diuji agar selalu sama dengan isi JSON. Node `Prepare Analysis Request` perlu `<ANTHROPIC_MODEL>` diisi lagi setelah menempel.

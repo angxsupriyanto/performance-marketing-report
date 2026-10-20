@@ -489,6 +489,10 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
             delta_rate = change(ra,rb,True)[0] if ra is not None and rb is not None else "N/A"
             text(rate_el, f"{name} Rate {pct(ra) if ra is not None else 'N/A'} vs {pct(rb) if rb is not None else 'N/A'} · {delta_rate}")
             rate_el["class"] = ["rate", "uptext" if ra is not None and rb is not None and ra>rb else "downtext" if ra is not None and rb is not None and ra<rb else ""]
+    # Company + amount per SQL and Deal Won row, for the chat summary only. Never part of facts, which go to the model.
+    lists = {stage: [{"company": " ".join((r.get("Company") or "Unknown").split()), "value": stage_value(r, stage)}
+                     for r in sorted(weeks["now"][stage], key=lambda r: (-stage_value(r, stage), r.get("Company", "")))]
+             for stage in ("SQL", "Deal Won")}
     # Cohort events from stage-specific exports: inbound and stage event occur in the same week.
     same = {}
     for w in ("now","prev"):
@@ -646,7 +650,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         replace_wording(soup, (("Proposal Price Quote Date", STAGES["SQL"]), ("tanggal proposal", f"tanggal {STAGES['SQL']}")))
     if period.kind == "month":
         replace_wording(soup, MONTHLY_WORDING)
-    return metrics, same, facts
+    return metrics, same, facts, lists
 
 
 def find_inputs(directory: Path) -> dict[str, Path]:
@@ -696,7 +700,7 @@ def main():
         soup=BeautifulSoup(template.read_text(encoding="utf-8"),"html.parser")
         if not period_rows(data["Submission"], "Submission", period):
             raise ValueError(f"tidak ada Submission pada {args.period}; periksa periode dan file input")
-        metrics,same,facts=populate(soup,data,period,f"tabel {args.table.name} (BU {profile['name'][2:] if profile['name'].startswith('BU') else profile['name']})" if args.table else None)
+        metrics,same,facts,lists=populate(soup,data,period,f"tabel {args.table.name} (BU {profile['name'][2:] if profile['name'].startswith('BU') else profile['name']})" if args.table else None)
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(str(soup),encoding="utf-8")
         audit = {
@@ -718,6 +722,7 @@ def main():
         if table_info:facts["data_quality"]=table_info
         output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
         output.with_suffix(".facts.json").write_text(json.dumps(facts,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
+        output.with_suffix(".lists.json").write_text(json.dumps(lists,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
     except (ValueError,OSError) as exc:
         parser.exit(2,f"Gagal: {exc}\n")
     print(f"OK: {output} (audit: {output.with_suffix('.audit.json')})")

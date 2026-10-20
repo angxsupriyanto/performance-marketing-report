@@ -60,6 +60,8 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("hardware_ecosystem", body["analysis_keys"])
         self.assertEqual(len(body["source_sha256"]), 64)
         self.assertNotIn("Co3", json.dumps(body["facts"]))
+        self.assertEqual(body["lists"]["SQL"], [{"company": "Co3", "value": 5000000}, {"company": "Co5", "value": 3000000}])
+        self.assertEqual(body["lists"]["Deal Won"], [{"company": "Co5", "value": 2500000}])
         status, applied = self.call("/v1/analysis/apply", json.dumps({"report_html": body["html"], "analysis": {"executive_summary": "SQL naik."}}).encode())
         self.assertEqual(status, 200, applied)
         self.assertIn("SQL naik.", applied["html"])

@@ -80,6 +80,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
         html = output.read_text(encoding="utf-8")
         audit = json.loads(output.with_suffix(".audit.json").read_text(encoding="utf-8"))
         facts = json.loads(output.with_suffix(".facts.json").read_text(encoding="utf-8"))
+        lists = json.loads(output.with_suffix(".lists.json").read_text(encoding="utf-8"))
     return {
         "bu": bu,
         "period": audit["period"],
@@ -91,6 +92,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
         "html": html,
         "audit": audit,
         "facts": facts,
+        "lists": lists,
         "analysis_keys": apply_analysis.analysis_keys(html),
     }
 

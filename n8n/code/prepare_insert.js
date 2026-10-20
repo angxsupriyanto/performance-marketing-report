@@ -8,5 +8,5 @@ return $input.all().map((item) => {
     JSON.stringify(r.audit.metrics), JSON.stringify(r.audit), JSON.stringify(r.facts), JSON.stringify(r.analysis_keys),
     r.html,
   ];
-  return { json: { params, bu: r.bu, period: r.period, metrics: r.audit.metrics.now, rows_without_bu: table.rows_without_bu, rows_in_bu: table.rows_in_bu } };
+  return { json: { params, lists: r.lists || { SQL: [], 'Deal Won': [] }, bu: r.bu, period: r.period, metrics: r.audit.metrics.now, rows_without_bu: table.rows_without_bu, rows_in_bu: table.rows_in_bu } };
 });
