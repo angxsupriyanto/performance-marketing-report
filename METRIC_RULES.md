@@ -1,6 +1,6 @@
 # Aturan metrik BU1 weekly dashboard
 
-Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan data. Satu baris pada ekspor stage dihitung sebagai satu event stage. Empat file harus berasal dari snapshot tracker yang sama. Semua periode memakai ISO week Senin–Minggu berdasarkan **tanggal event**, meskipun kolom `... Week` dalam CSV berbeda.
+Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan data. Satu baris pada ekspor stage dihitung sebagai satu event stage. Empat file harus berasal dari snapshot tracker yang sama. Periode mingguan memakai ISO week Senin–Minggu; periode bulanan memakai bulan kalender penuh dibanding bulan kalender sebelumnya. Keduanya berdasarkan **tanggal event**, meskipun kolom `... Week` dalam CSV berbeda. Semua rumus di bawah berlaku sama untuk kedua jenis periode; "minggu" dibaca "periode".
 
 | Output | Sumber dan rumus |
 |---|---|

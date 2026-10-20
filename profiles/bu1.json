@@ -1,0 +1,11 @@
+{
+  "name": "BU1",
+  "tag": "BU1 · DATA AKTUAL",
+  "source_label": "BU1 Campaign Tracker",
+  "products": ["Dashcam", "GPS Tracker", "Fuel", "MDVR", "OBD"],
+  "product_aliases": {"GPS": "GPS Tracker"},
+  "product_typo_fixes": [{"raw": "OND", "campaign_contains": "OBD", "to": "OBD"}],
+  "sql_value_column": "SUM of ARR + OTF (Tanpa PPN)",
+  "won_value_column": "SUM of Total Contract Deal Won",
+  "common_columns": ["Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry"]
+}

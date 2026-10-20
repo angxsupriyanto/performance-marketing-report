@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Deterministic BU1 weekly dashboard generator. No AI, no network calls."""
+"""Deterministic weekly/monthly dashboard generator per BU. No AI, no network calls."""
 from __future__ import annotations
 
 import argparse
@@ -9,6 +9,8 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
+import calendar
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from bs4 import BeautifulSoup
@@ -19,15 +21,77 @@ STAGES = {
     "SQL": "Proposal Price Quote Date",
     "Deal Won": "Deal Won Date",
 }
-SQL_VALUE = "SUM of ARR + OTF (Tanpa PPN)"
-WON_VALUE = "SUM of Total Contract Deal Won"
-PRODUCTS = ("Dashcam", "GPS Tracker", "Fuel", "MDVR", "OBD")
-REQUIRED = {
-    "Submission": ("Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Remark", "Inbound Date", "MQL Date"),
-    "MQL": ("Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Inbound Date", "MQL Date"),
-    "SQL": ("Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Inbound Date", "Proposal Price Quote Date", SQL_VALUE),
-    "Deal Won": ("Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Inbound Date", "Deal Won Date", WON_VALUE),
-}
+PROFILE_DIR = Path(__file__).with_name("profiles")
+
+
+def load_profile(name: str) -> dict:
+    path = PROFILE_DIR / f"{name.lower()}.json"
+    if not path.is_file():
+        available = ", ".join(sorted(p.stem for p in PROFILE_DIR.glob("*.json"))) or "tidak ada"
+        raise ValueError(f"profil BU {name!r} tidak ditemukan; tersedia: {available}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def required_columns(profile: dict) -> dict[str, tuple[str, ...]]:
+    common = tuple(profile["common_columns"])
+    return {
+        "Submission": common + ("Remark", "Inbound Date", "MQL Date"),
+        "MQL": common + ("Inbound Date", "MQL Date"),
+        "SQL": common + ("Inbound Date", "Proposal Price Quote Date", profile["sql_value_column"]),
+        "Deal Won": common + ("Inbound Date", "Deal Won Date", profile["won_value_column"]),
+    }
+
+
+PROFILE = load_profile("bu1")
+SQL_VALUE = PROFILE["sql_value_column"]
+WON_VALUE = PROFILE["won_value_column"]
+PRODUCTS = tuple(PROFILE["products"])
+REQUIRED = required_columns(PROFILE)
+
+
+def use_profile(profile: dict) -> None:
+    global PROFILE, SQL_VALUE, WON_VALUE, PRODUCTS, REQUIRED
+    PROFILE = profile
+    SQL_VALUE = profile["sql_value_column"]
+    WON_VALUE = profile["won_value_column"]
+    PRODUCTS = tuple(profile["products"])
+    REQUIRED = required_columns(profile)
+
+
+@dataclass(frozen=True)
+class Period:
+    kind: str
+    start: date
+    end: date
+    prev_start: date
+    prev_end: date
+    label: str
+    short: str
+    prev_label: str
+    prev_short: str
+
+    def contains(self, value: date) -> bool:
+        return self.start <= value <= self.end
+
+
+def parse_period(value: str) -> Period:
+    week = re.fullmatch(r"(\d{4})-W(\d{2})", value)
+    if week:
+        start = date.fromisocalendar(int(week.group(1)), int(week.group(2)), 1)
+        prev = start - timedelta(days=7)
+        n, pn = start.isocalendar().week, prev.isocalendar().week
+        return Period("week", start, start + timedelta(days=6), prev, start - timedelta(days=1), f"Week {n}", f"W{n}", f"Week {pn}", f"W{pn}")
+    month = re.fullmatch(r"(\d{4})-(\d{2})", value)
+    if month:
+        year, mon = int(month.group(1)), int(month.group(2))
+        if not 1 <= mon <= 12:
+            raise ValueError(f"bulan tidak valid: {value!r}")
+        start = date(year, mon, 1)
+        end = date(year, mon, calendar.monthrange(year, mon)[1])
+        prev_end = start - timedelta(days=1)
+        prev = prev_end.replace(day=1)
+        return Period("month", start, end, prev, prev_end, start.strftime("%b %Y"), start.strftime("%b"), prev.strftime("%b %Y"), prev.strftime("%b"))
+    raise ValueError(f"periode {value!r} tidak valid; gunakan YYYY-Www (mingguan) atau YYYY-MM (bulanan)")
 
 
 def parse_date(value: str, context: str) -> date | None:
@@ -85,10 +149,10 @@ def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
 
 def product(row: dict[str, str]) -> str:
     raw = row.get("Campaign Hardware", "").strip()
-    if raw == "GPS":
-        return "GPS Tracker"
-    if raw == "OND" and "OBD" in row.get("Campaign", "").upper():
-        return "OBD"
+    raw = PROFILE.get("product_aliases", {}).get(raw, raw)
+    for fix in PROFILE.get("product_typo_fixes", []):
+        if raw == fix["raw"] and fix["campaign_contains"] in row.get("Campaign", "").upper():
+            return fix["to"]
     return raw if raw in PRODUCTS else ""
 
 
@@ -105,13 +169,15 @@ def stage_value(row: dict[str, str], stage: str) -> int:
     return parse_money(row.get(key, ""), key)
 
 
-def period_rows(rows: list[dict[str, str]], stage: str, monday: date) -> list[dict[str, str]]:
-    return [r for r in rows if monday <= parse_date(r[STAGES[stage]], STAGES[stage]) <= monday + timedelta(days=6)]
+def period_rows(rows: list[dict[str, str]], stage: str, period: Period, previous: bool = False) -> list[dict[str, str]]:
+    start, end = (period.prev_start, period.prev_end) if previous else (period.start, period.end)
+    return [r for r in rows if start <= parse_date(r[STAGES[stage]], STAGES[stage]) <= end]
 
 
-def inbound_in_week(row: dict[str, str], monday: date) -> bool:
+def inbound_in_period(row: dict[str, str], period: Period, previous: bool = False) -> bool:
     inbound = parse_date(row.get("Inbound Date", ""), "Inbound Date")
-    return bool(inbound and monday <= inbound <= monday + timedelta(days=6))
+    start, end = (period.prev_start, period.prev_end) if previous else (period.start, period.end)
+    return bool(inbound and start <= inbound <= end)
 
 
 def fmt(n: int) -> str:
@@ -165,50 +231,67 @@ def add_cells(soup, parent, values, numeric_from=1):
     return row
 
 
-def pair(soup, current, previous, currency=False):
+def pair_cell(soup, current, previous, prev_short, currency=False):
     td = soup.new_tag("td", attrs={"class": "num detail-pair"})
     td.append(node(soup, "strong", money(current) if currency else current))
-    td.append(node(soup, "small", "W" + str(PREV_WEEK_NUMBER) + " " + str(money(previous) if currency else previous)))
+    td.append(node(soup, "small", prev_short + " " + str(money(previous) if currency else previous)))
     return td
 
 
-def set_period_copy(soup, current: date, previous: date):
-    global PREV_WEEK_NUMBER
-    PREV_WEEK_NUMBER = previous.isocalendar().week
-    week = current.isocalendar().week
-    year = current.isocalendar().year
-    def date_label(monday):
-        end = monday + timedelta(days=6)
-        return f"{monday.day}–{end.day} {monday.strftime('%b')} {monday.year}"
-    soup.title.string = f"BU1 Performance Marketing Report — Week {week} vs Week {PREV_WEEK_NUMBER}"
-    text(soup.select_one(".header .sub"), f"Week {week} ({date_label(current)}) vs Week {PREV_WEEK_NUMBER} ({date_label(previous)})")
-    text(soup.select_one(".header .tag"), "BU1 · DATA AKTUAL")
-    text(soup.select_one(".sql-list h2"), f"Daftar SQL · Week {week}")
-    text(soup.select_one(".hardware-section > .section-head .note"), f"Angka utama W{week} · pembanding W{PREV_WEEK_NUMBER}")
-    text(soup.select_one(".campaign-detail .detail-head .note"), f"Angka utama Week {week} · pembanding kecil Week {PREV_WEEK_NUMBER}")
-    for span, monday in zip(soup.select(".funnel .legend span")[:2], (current, previous)):
+def date_label(start: date, end: date) -> str:
+    return f"{start.day}–{end.day} {start.strftime('%b')} {start.year}"
+
+
+def set_period_copy(soup, period: Period):
+    label, short, prev_label, prev_short = period.label, period.short, period.prev_label, period.prev_short
+    current_range = date_label(period.start, period.end)
+    previous_range = date_label(period.prev_start, period.prev_end)
+    soup.title.string = f"{PROFILE['name']} Performance Marketing Report — {label} vs {prev_label}"
+    text(soup.select_one(".header .sub"), f"{label} ({current_range}) vs {prev_label} ({previous_range})")
+    text(soup.select_one(".header .tag"), PROFILE["tag"])
+    text(soup.select_one(".header .eyebrow"), f"{PROFILE['name']} · {'Weekly' if period.kind == 'week' else 'Monthly'} dashboard")
+    text(soup.select_one(".sql-list h2"), f"Daftar SQL · {label}")
+    text(soup.select_one(".hardware-section > .section-head .note"), f"Angka utama {short} · pembanding {prev_short}")
+    text(soup.select_one(".campaign-detail .detail-head .note"), f"Angka utama {label} · pembanding kecil {prev_label}")
+    legend = ((label, period.start, period.end), (prev_label, period.prev_start, period.prev_end))
+    for span, (name, start, end) in zip(soup.select(".funnel .legend span")[:2], legend):
         dot = span.select_one(".dot")
         span.clear()
         if dot:span.append(dot)
-        span.append(f"Week {monday.isocalendar().week} ({monday.day}–{(monday+timedelta(days=6)).day} {monday.strftime('%b')})")
-    for label in soup.select(".funnel .week-label"):
-        text(label, "W" + str(week if "current" in label.parent.select_one(".fill").get("class", []) else PREV_WEEK_NUMBER))
+        span.append(f"{name} ({start.day}–{end.day} {start.strftime('%b')})")
+    for lab in soup.select(".funnel .week-label"):
+        text(lab, short if "current" in lab.parent.select_one(".fill").get("class", []) else prev_short)
     for panel in soup.select(".stage-table"):
         headers = panel.select("thead th")
         for index in (1,4):
-            if index < len(headers):text(headers[index],headers[index].get_text().replace("W—",f"W{week}"))
+            if index < len(headers):text(headers[index],headers[index].get_text().replace("W—",short))
         for index in (2,5):
-            if index < len(headers):text(headers[index],headers[index].get_text().replace("W—",f"W{PREV_WEEK_NUMBER}"))
+            if index < len(headers):text(headers[index],headers[index].get_text().replace("W—",prev_short))
     for note in soup.select(".table-note,.formula,.footer"):
         for child in list(note.find_all(string=True)):
-            value = str(child).replace("Week —", f"Week {week}").replace("W—", f"W{week}")
+            value = str(child).replace("Week —", label).replace("W—", short)
             if value != str(child):child.replace_with(value)
-    text(soup.select_one(".footer"), f"Sumber: empat CSV BU1 Campaign Tracker. Week {week}: {date_label(current)}; Week {PREV_WEEK_NUMBER}: {date_label(previous)}. Stage memakai tanggal event. SQL Value = ARR + OTF tanpa PPN; Deal Value = Total Contract Deal Won.")
+    text(soup.select_one(".footer"), f"Sumber: empat CSV {PROFILE['source_label']}. {label}: {current_range}; {prev_label}: {previous_range}. Stage memakai tanggal event. SQL Value = ARR + OTF tanpa PPN; Deal Value = Total Contract Deal Won.")
 
 
-def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previous: date):
-    set_period_copy(soup, current, previous)
-    weeks = {w: {stage: period_rows(rows, stage, monday) for stage, rows in data.items()} for w, monday in (("now", current), ("prev", previous))}
+MONTHLY_WORDING = (("Same-week", "Same-month"), ("same-week", "same-month"), ("mingguan", "bulanan"), ("minggu", "bulan"), ("Weekly", "Monthly"))
+
+
+def localize_monthly(soup) -> None:
+    for child in list(soup.find_all(string=True)):
+        if child.parent.name in ("script", "style"):
+            continue
+        value = str(child)
+        for old, new in MONTHLY_WORDING:
+            value = value.replace(old, new)
+        if value != str(child):
+            child.replace_with(value)
+
+
+def populate(soup, data: dict[str, list[dict[str, str]]], period: Period):
+    set_period_copy(soup, period)
+    pair = lambda soup, a, b, currency=False: pair_cell(soup, a, b, period.prev_short, currency)
+    weeks = {w: {stage: period_rows(rows, stage, period, previous=(w == "prev")) for stage, rows in data.items()} for w in ("now", "prev")}
     metrics = {}
     for w in ("now", "prev"):
         r = weeks[w]
@@ -222,7 +305,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
         a, b = metrics["now"][name], metrics["prev"][name]
         currency = "Value" in name
         text(card.select_one(".value"), money(a) if currency else fmt(a))
-        text(card.select_one(".compare"), f"Week {PREV_WEEK_NUMBER}  {money(b) if currency else fmt(b)}")
+        text(card.select_one(".compare"), f"{period.prev_label}  {money(b) if currency else fmt(b)}")
         delta, kind = change(a,b)
         badge = card.select_one(".delta");text(badge, delta);badge["class"] = ["delta",kind]
         rate_el = card.select_one(".rate")
@@ -235,18 +318,18 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
             rate_el["class"] = ["rate", "uptext" if ra is not None and rb is not None and ra>rb else "downtext" if ra is not None and rb is not None and ra<rb else ""]
     # Cohort events from stage-specific exports: inbound and stage event occur in the same week.
     same = {}
-    for w,monday in (("now",current),("prev",previous)):
-        mql = [r for r in weeks[w]["MQL"] if inbound_in_week(r,monday)]
-        sql = [r for r in weeks[w]["SQL"] if inbound_in_week(r,monday)]
+    for w in ("now","prev"):
+        mql = [r for r in weeks[w]["MQL"] if inbound_in_period(r,period,w=="prev")]
+        sql = [r for r in weeks[w]["SQL"] if inbound_in_period(r,period,w=="prev")]
         same[w] = (len(mql),len(sql),sum(stage_value(r,"SQL") for r in sql))
     for i,card in enumerate(soup.select(".same .card")):
         a,b=same["now"][i],same["prev"][i]
         total=metrics["now"]["MQL" if i==0 else "SQL" if i==1 else "SQL Value"]
         currency=i==2
         text(card.select_one(".value"),money(a) if currency else fmt(a))
-        text(card.select_one(".compare"),f"Week {PREV_WEEK_NUMBER}  {money(b) if currency else fmt(b)} · {change(a,b)[0]}")
+        text(card.select_one(".compare"),f"{period.prev_label}  {money(b) if currency else fmt(b)} · {change(a,b)[0]}")
         card.select_one(".compare")["class"] = ["compare", "uptext" if a>b else "downtext" if a<b else ""]
-        text(card.select_one(".share"),f"{rate_text(a,total)} dari total {money(total) if currency else fmt(total)} {'SQL Value' if currency else 'MQL' if i==0 else 'SQL'} Week {current.isocalendar().week}")
+        text(card.select_one(".share"),f"{rate_text(a,total)} dari total {money(total) if currency else fmt(total)} {'SQL Value' if currency else 'MQL' if i==0 else 'SQL'} {period.label}")
     # All prose panels remain deliberately blank.
     for el in soup.select(".executive-prose,.analysis-body,.hardware-analysis-summary p,.product-analysis p"):
         el.clear()
@@ -283,13 +366,13 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
     for r in sorted(weeks["now"]["SQL"],key=lambda r:(-stage_value(r,"SQL"),r.get("Company",""))):
         inbound=parse_date(r.get("Inbound Date",""),"Inbound Date")
         event=parse_date(r[STAGES["SQL"]],"SQL date")
-        timing=f"{(event-inbound).days} hari · {'Same-week' if inbound_in_week(r,current) else 'Backlog'}" if inbound else "—"
+        timing=f"{(event-inbound).days} hari · {'Same-week' if inbound_in_period(r,period) else 'Backlog'}" if inbound else "—"
         add_cells(soup,tbody,[r.get("Company") or "Unknown",r.get("Industry") or "—",campaign(r),money(stage_value(r,"SQL")),timing],numeric_from=3)
     footer=soup.select_one(".sql-list tfoot tr");footer.clear()
     td=node(soup,"td",f"TOTAL · {len(weeks['now']['SQL'])} SQL",colspan="3");footer.append(td)
     footer.append(node(soup,"td",money(metrics["now"]["SQL Value"]),**{"class":"num"}))
     footer.append(node(soup,"td",""))
-    text(soup.select_one(".sql-list .table-note"),f"Diurutkan menurut SQL Value. SQL dihitung dari Proposal Price Quote Date pada Week {current.isocalendar().week}; Same-week berarti Inbound Date juga pada minggu tersebut.")
+    text(soup.select_one(".sql-list .table-note"),f"Diurutkan menurut SQL Value. SQL dihitung dari Proposal Price Quote Date pada {period.label}; Same-week berarti Inbound Date juga pada minggu tersebut.")
     # Funnel: each pair of bars is normalized within its own metric.
     funnel_labels=[("Submission",""),("MQL","Submission → MQL"),("SQL","MQL → SQL"),("Deal Won","SQL → Deal Won"),("SQL Value",""),("Deal Won Value","")]
     for row,(name,conversion) in zip(soup.select(".funnel .metric-row"),funnel_labels):
@@ -304,7 +387,7 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
             denom={"MQL":"Submission","SQL":"MQL","Deal Won":"SQL"}[name]
             text(conv,f"{conversion}: {rate_text(a,metrics['now'][denom])} vs {rate_text(b,metrics['prev'][denom])}")
     for row,stage in zip(soup.select(".timing-row"),("MQL","SQL","Deal Won")):
-        fresh=sum(inbound_in_week(r,current) for r in weeks["now"][stage]);total=len(weeks["now"][stage]);old=total-fresh
+        fresh=sum(inbound_in_period(r,period) for r in weeks["now"][stage]);total=len(weeks["now"][stage]);old=total-fresh
         row.select_one(".timing-current")["style"]=f"width:{fresh/total*100 if total else 0:.1f}%"
         row.select_one(".timing-prior")["style"]=f"width:{old/total*100 if total else 0:.1f}%"
         text(row.select_one("span"),f"{fresh} same-week · {old} backlog")
@@ -325,29 +408,29 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
     for name in sources+["TOTAL"]:
         selection=lambda stage:weeks["now"][stage] if name=="TOTAL" else [r for r in weeks["now"][stage] if source(r)==name]
         sub=selection("Submission");sql=selection("SQL");won=selection("Deal Won")
-        mql=sum(bool(parse_date(r.get("MQL Date",""),"MQL Date") and current<=parse_date(r.get("MQL Date",""),"MQL Date")<=current+timedelta(days=6)) for r in sub)
+        mql=sum(bool(parse_date(r.get("MQL Date",""),"MQL Date") and period.contains(parse_date(r.get("MQL Date",""),"MQL Date"))) for r in sub)
         add_cells(soup,foot if name=="TOTAL" else body,[name,len(sub),mql,rate_text(mql,len(sub)),len(sql),money(sum(stage_value(r,"SQL") for r in sql)),len(won),money(sum(stage_value(r,"Deal Won") for r in won))])
-    text(cross.select_one(".table-note"),f"MQL dan MQL Rate memakai submission Week {current.isocalendar().week} yang mencapai MQL dalam minggu yang sama. SQL dan Deal Won memakai tanggal event Week {current.isocalendar().week}, termasuk backlog; kolom-kolom bukan satu cohort.")
+    text(cross.select_one(".table-note"),f"MQL dan MQL Rate memakai submission {period.label} yang mencapai MQL dalam minggu yang sama. SQL dan Deal Won memakai tanggal event {period.label}, termasuk backlog; kolom-kolom bukan satu cohort.")
     # Product aggregate, restricted to five tagged hardware categories.
     hardware=soup.select_one(".hardware-section");table=hardware.select_one(":scope > .table-wrap table")
     body=table.select_one("tbody");foot=table.select_one("tfoot");body.clear();foot.clear()
     aggregate={w:[0]*7 for w in ("now","prev")}
-    def product_metrics(name,w,monday):
+    def product_metrics(name,w):
         sets={stage:[r for r in weeks[w][stage] if product(r)==name] for stage in STAGES}
         return [len(sets["Submission"]),len(sets["MQL"]),len(sets["SQL"]),sum(stage_value(r,"SQL") for r in sets["SQL"]),len(sets["Deal Won"]),sum(stage_value(r,"Deal Won") for r in sets["Deal Won"]),sum(r.get("Remark","").casefold()=="junk leads" for r in sets["Submission"])]
     def product_row(label, now, prev, target):
         tr=soup.new_tag("tr");tr.append(node(soup,"td",label))
         for i,(a,b) in enumerate(zip(now,prev)):
             td=soup.new_tag("td",attrs={"class":"num"});td.append(node(soup,"strong",money(a) if i in (3,5) else fmt(a)))
-            td.append(node(soup,"small",f"W{PREV_WEEK_NUMBER} "+(money(b) if i in (3,5) else fmt(b))))
+            td.append(node(soup,"small",f"{period.prev_short} "+(money(b) if i in (3,5) else fmt(b))))
             tr.append(td)
         target.append(tr)
     for name in PRODUCTS:
-        a=product_metrics(name,"now",current);b=product_metrics(name,"prev",previous)
+        a=product_metrics(name,"now");b=product_metrics(name,"prev")
         aggregate["now"]=[x+y for x,y in zip(aggregate["now"],a)]
         aggregate["prev"]=[x+y for x,y in zip(aggregate["prev"],b)]
         product_row(name,a,b,body)
-    product_row("TOTAL 5 PRODUK",aggregate["now"],aggregate["prev"],foot)
+    product_row(f"TOTAL {len(PRODUCTS)} PRODUK",aggregate["now"],aggregate["prev"],foot)
     # Active current-week campaigns in the selected hardware categories.
     detail=hardware.select_one(".campaign-detail");body=detail.select_one("tbody");foot=detail.select_one("tfoot");body.clear();foot.clear()
     active=Counter((product(r),campaign(r)) for r in weeks["now"]["Submission"] if product(r) in PRODUCTS)
@@ -372,47 +455,71 @@ def populate(soup, data: dict[str, list[dict[str, str]]], current: date, previou
     for key in ("junk","sql"):tr.append(pair(soup,totals["now"][key],totals["prev"][key]))
     tr.append(pair(soup,totals["now"]["value"],totals["prev"]["value"],True));foot.append(tr)
     text(detail.select_one(".table-note"),"MQL Rate campaign = submission pada minggu tersebut yang sudah memiliki MQL Date pada snapshot CSV ÷ submission campaign. SQL Value mengikuti Proposal Price Quote Date masing-masing minggu; cohort dan SQL event dapat berbeda.")
+    if period.kind == "month":
+        localize_monthly(soup)
     return metrics, same
+
+
+def find_inputs(directory: Path) -> dict[str, Path]:
+    keys = {"Submission": "submission", "MQL": "mql", "SQL": "sql", "Deal Won": "deal won"}
+    files = [p for p in sorted(directory.iterdir()) if p.suffix.lower() == ".csv"]
+    found = {}
+    for stage, key in keys.items():
+        hits = [p for p in files if key in p.name.lower().replace("_", " ")]
+        if len(hits) != 1:
+            raise ValueError(f"{directory}: harus ada tepat satu CSV untuk {stage} (nama memuat {key!r}), ditemukan {len(hits)}")
+        found[stage] = hits[0]
+    return found
 
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--submission",type=Path,required=True)
-    parser.add_argument("--mql",type=Path,required=True)
-    parser.add_argument("--sql",type=Path,required=True)
-    parser.add_argument("--won",type=Path,required=True)
-    parser.add_argument("--week",required=True,help="ISO week eksplisit, contoh 2026-W39")
-    parser.add_argument("--output",type=Path,required=True)
+    parser.add_argument("--bu",default="bu1",help="profil BU di folder profiles/, default bu1")
+    parser.add_argument("--input-dir",type=Path,help="folder berisi empat CSV; alternatif dari --submission/--mql/--sql/--won")
+    parser.add_argument("--submission",type=Path)
+    parser.add_argument("--mql",type=Path)
+    parser.add_argument("--sql",type=Path)
+    parser.add_argument("--won",type=Path)
+    parser.add_argument("--period","--week",dest="period",required=True,help="YYYY-Www untuk mingguan (contoh 2026-W39) atau YYYY-MM untuk bulanan (contoh 2026-09)")
+    parser.add_argument("--output",type=Path,help="default: output/<BU>_<periode>.html")
     args=parser.parse_args()
-    match=re.fullmatch(r"(\d{4})-W(\d{2})",args.week)
-    if not match:parser.error("--week harus YYYY-Www, contoh 2026-W39")
     try:
-        current=date.fromisocalendar(int(match.group(1)),int(match.group(2)),1)
-        previous=current-timedelta(days=7)
-        paths={"Submission":args.submission,"MQL":args.mql,"SQL":args.sql,"Deal Won":args.won}
+        profile=load_profile(args.bu)
+        use_profile(profile)
+        period=parse_period(args.period)
+        if args.input_dir:
+            paths=find_inputs(args.input_dir)
+        else:
+            paths={"Submission":args.submission,"MQL":args.mql,"SQL":args.sql,"Deal Won":args.won}
+            if not all(paths.values()):parser.error("berikan --input-dir, atau keempat --submission --mql --sql --won")
+        output=args.output or Path("output")/f"{profile['name']}_{args.period.replace('-W','_W') if period.kind=='week' else args.period}.html"
         data={stage:read_stage(path,stage) for stage,path in paths.items()}
         template=Path(__file__).with_name("dashboard_template.html")
         soup=BeautifulSoup(template.read_text(encoding="utf-8"),"html.parser")
-        if not period_rows(data["Submission"], "Submission", current):
-            raise ValueError(f"tidak ada Submission pada {args.week}; periksa minggu dan file input")
-        metrics,same=populate(soup,data,current,previous)
-        args.output.parent.mkdir(parents=True,exist_ok=True)
-        args.output.write_text(str(soup),encoding="utf-8")
+        if not period_rows(data["Submission"], "Submission", period):
+            raise ValueError(f"tidak ada Submission pada {args.period}; periksa periode dan file input")
+        metrics,same=populate(soup,data,period)
+        output.parent.mkdir(parents=True,exist_ok=True)
+        output.write_text(str(soup),encoding="utf-8")
         audit = {
-            "week": args.week,
-            "period_start": current.isoformat(),
-            "period_end": (current + timedelta(days=6)).isoformat(),
-            "comparison_start": previous.isoformat(),
+            "bu": profile["name"],
+            "period": args.period,
+            "period_kind": period.kind,
+            "period_start": period.start.isoformat(),
+            "period_end": period.end.isoformat(),
+            "comparison_start": period.prev_start.isoformat(),
+            "comparison_end": period.prev_end.isoformat(),
             "inputs": {stage: {"file": path.name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "rows_excluding_totals": len(data[stage])} for stage,path in paths.items()},
             "metrics": metrics,
             "same_week": {"MQL": same["now"][0], "SQL": same["now"][1], "SQL Value": same["now"][2]},
             "descriptive_analysis": "blank",
         }
-        args.output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
+        if period.kind=="week":audit["week"]=args.period
+        output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2)+"\n",encoding="utf-8")
     except (ValueError,OSError) as exc:
         parser.exit(2,f"Gagal: {exc}\n")
-    print(f"OK: {args.output} (audit: {args.output.with_suffix('.audit.json')})")
-    print(f"Week {current.isocalendar().week}: Submission {metrics['now']['Submission']}, MQL {metrics['now']['MQL']}, SQL {metrics['now']['SQL']}, SQL Value {money(metrics['now']['SQL Value'])}, Deal Won {metrics['now']['Deal Won']}")
+    print(f"OK: {output} (audit: {output.with_suffix('.audit.json')})")
+    print(f"{period.label}: Submission {metrics['now']['Submission']}, MQL {metrics['now']['MQL']}, SQL {metrics['now']['SQL']}, SQL Value {money(metrics['now']['SQL Value'])}, Deal Won {metrics['now']['Deal Won']}")
     print("Bagian analisis deskriptif tetap kosong.")
 
 
