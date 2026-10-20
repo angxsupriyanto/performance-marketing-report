@@ -46,5 +46,7 @@
     "Campaign",
     "Campaign Hardware",
     "Industry"
-  ]
+  ],
+  "hardware_report": true,
+  "target_unit": "idr"
 }

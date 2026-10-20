@@ -24,10 +24,11 @@ def slug(name):
 
 
 def selectors_for(soup):
-    """Product slots come from the report itself, so each BU keeps its own product list."""
-    selectors = dict(STATIC_SELECTORS)
-    for position, block in enumerate(soup.select(".hardware-product-analysis .product-analysis"), 2):
-        selectors["hardware_" + slug(block.select_one("strong").get_text())] = f".hardware-product-analysis .product-analysis:nth-of-type({position}) p"
+    """Slots come from the report itself, so each BU keeps its own product list and hardware sections."""
+    selectors = {key: sel for key, sel in STATIC_SELECTORS.items() if soup.select_one(sel) is not None}
+    for block in soup.select(".hw-funnel-block"):
+        name = block["data-hardware"]
+        selectors["hardware_" + slug(name)] = f'.hw-funnel-block[data-hardware="{name}"] .analysis-body'
     return selectors
 
 

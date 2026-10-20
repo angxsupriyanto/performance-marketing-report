@@ -72,7 +72,7 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(len(soup.select(".sql-list tbody tr")), 1)
             self.assertIn("Backlog", soup.select_one(".sql-list tbody").get_text())
             self.assertNotIn("<script>alert(1)</script>", out.read_text())
-            self.assertTrue(all(not x.get_text(strip=True) for x in soup.select(".executive-prose,.analysis-body,.hardware-analysis-summary p,.product-analysis p")))
+            self.assertTrue(all(not x.get_text(strip=True) for x in soup.select(".executive-prose,.analysis-body,.hardware-analysis-summary p")))
 
             monthly = root / "monthly.html"
             cmd[cmd.index("--week") + 1] = "2026-09"

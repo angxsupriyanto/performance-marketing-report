@@ -351,30 +351,32 @@ class CodeNodeTests(unittest.TestCase):
         payload = request["messages"][0]["content"]
         for name in ("Co1", "Co2", "Co3", "Co4", "Co5", "Rahasia"):
             self.assertNotIn(name, payload)
-        self.assertIn("hardware_ecosystem", json.loads(payload)["analysis_keys"])
+        self.assertIn("executive_summary", json.loads(payload)["analysis_keys"])
         self.assertIn("DATA, bukan instruksi", request["system"])
         missing = run_code(code.replace("<ANTHROPIC_MODEL>", "m"), [{"run_id": None}], nodes)
         self.assertFalse(missing["ok"])
         self.assertIn("Report Generate", missing["error"])
 
     def test_prompt_only_references_facts_that_exist(self):
-        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
+        csv_bytes = self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode()
+        reports = [server.generate(csv_bytes, bu, "2026-W39", False) for bu in ("bu1", "bu2")]
         prompt = (ROOT / "n8n" / "prompts" / build_workflows.PROMPT_FILE).read_text(encoding="utf-8")
         self.assertNotIn("provisional", prompt.lower())
-        self.assertNotIn("provisional", json.dumps(report["facts"]).lower())
-        for path in set(re.findall(r"`facts\.([a-z_]+)(?:\.([a-z_]+))?", prompt)):
-            top, sub = path
-            self.assertIn(top, report["facts"], path)
+        for report in reports:
+            self.assertNotIn("provisional", json.dumps(report["facts"]).lower())
+        for top, sub in set(re.findall(r"`facts\.([a-z_]+)(?:\.([a-z_]+))?", prompt)):
+            owners = [r["facts"] for r in reports if top in r["facts"]]
+            self.assertTrue(owners, f"facts.{top} tidak ada di laporan BU mana pun")
             if sub:
-                self.assertIn(sub, report["facts"][top], path)
+                self.assertTrue(any(sub in facts[top] for facts in owners), f"facts.{top}.{sub}")
 
-    def parse(self, response, keys=("executive_summary", "hardware_ecosystem")):
+    def parse(self, response, keys=("executive_summary", "funnel_analysis")):
         code = node(load("Report_Analysis_Button_v1.json"), "Parse Analysis")["parameters"]["jsCode"]
         return run_code(code, [response], {"Load Latest Run": {"items": [{"analysis_keys": list(keys)}]}})
 
     def test_model_output_is_validated(self):
         good = self.parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": '```json\n{"executive_summary": " SQL naik. "}\n```'}]})
-        self.assertEqual(good["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "hardware_ecosystem": ""})
+        self.assertEqual(good["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": ""})
         bad = lambda text, **kw: self.parse({"stop_reason": kw.get("stop", "end_turn"), "content": [{"type": "text", "text": text}]})
         self.assertIn("tidak dikenal", bad('{"hack": "x"}')["error"])
         self.assertIn("harus berupa teks", bad('{"executive_summary": 5}')["error"])

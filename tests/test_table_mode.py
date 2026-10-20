@@ -124,9 +124,14 @@ class TableModeTests(unittest.TestCase):
         self.assertEqual(audit["metrics"]["prev"]["SQL Value"], 700000)
         html = out.read_text()
         soup = BeautifulSoup(html, "html.parser")
-        self.assertIn("Ecosystem", [b.get("data-hardware") for b in soup.select(".detail-filters button")])
-        self.assertEqual(soup.select(".hardware-product-analysis .product-analysis strong")[-1].get_text(), "Ecosystem")
-        self.assertIn("TOTAL 6 PRODUK", html)
+        self.assertIsNone(soup.select_one(".hardware-section"))
+        self.assertEqual(soup.select_one(".focus-list h2").get_text(), "Daftar SQL Ecosystem · Week 39")
+        self.assertEqual([td.get_text() for td in soup.select(".focus-list tbody td")], ["Co3", "Mfg", "2026-09-25", "Rp 5.000.000"])
+        self.assertEqual(soup.select_one(".won-list h2").get_text(), "Daftar Deal Won · Week 39")
+        self.assertEqual(soup.select(".won-list tbody td")[3].get_text(), "Rp 2.500.000")
+        cards = soup.select(".target-progress .tgt")
+        self.assertEqual([c["data-unit"] for c in cards], ["count", "count"])
+        self.assertEqual(cards[0]["data-actual"], "1")
         self.assertNotIn("Proposal Price Quote Date", html)
         self.assertIn("Total Contract SQL", soup.select_one(".footer").get_text())
 
@@ -213,17 +218,25 @@ class TableModeTests(unittest.TestCase):
         out = self.root / "bu2.html"
         self.assertEqual(run("--table", self.table, "--bu", "bu2", "--period", "2026-W39", "--output", out).returncode, 0)
         analysis = self.root / "a.json"
-        analysis.write_text(json.dumps({"hardware_ecosystem": "Ekosistem <b>naik</b>"}))
+        analysis.write_text(json.dumps({"executive_summary": "Ekosistem <b>naik</b>"}))
         final = self.root / "final.html"
         apply = [sys.executable, str(ROOT / "apply_analysis.py"), "--report", str(out), "--analysis", str(analysis), "--output", str(final)]
         self.assertEqual(subprocess.run(apply, capture_output=True, text=True).returncode, 0)
+        analysis.write_text(json.dumps({"hardware_dashcam": "x"}))
+        self.assertNotEqual(subprocess.run(apply, capture_output=True, text=True).returncode, 0)
+        analysis.write_text(json.dumps({"executive_summary": "Ekosistem <b>naik</b>"}))
         self.assertIn("Ekosistem &lt;b&gt;naik&lt;/b&gt;", final.read_text())
         bu1 = self.root / "bu1.html"
         self.assertEqual(run("--table", self.table, "--bu", "bu1", "--period", "2026-W39", "--output", bu1).returncode, 0)
         apply[apply.index("--report") + 1] = str(bu1)
+        analysis.write_text(json.dumps({"hardware_ecosystem": "x"}))
         rejected = subprocess.run(apply, capture_output=True, text=True)
         self.assertNotEqual(rejected.returncode, 0)
         self.assertIn("hardware_ecosystem", rejected.stderr)
+        analysis.write_text(json.dumps({"hardware_dashcam": "Dashcam <b>naik</b>"}))
+        accepted = subprocess.run(apply, capture_output=True, text=True)
+        self.assertEqual(accepted.returncode, 0, accepted.stderr)
+        self.assertIn("Dashcam &lt;b&gt;naik&lt;/b&gt;", final.read_text())
 
 
 if __name__ == "__main__":

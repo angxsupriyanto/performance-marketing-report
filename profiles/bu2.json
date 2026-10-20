@@ -47,5 +47,9 @@
     "Campaign",
     "Campaign Hardware",
     "Industry"
-  ]
+  ],
+  "hardware_report": false,
+  "target_unit": "count",
+  "focus_product": "Ecosystem",
+  "deal_won_list": true
 }

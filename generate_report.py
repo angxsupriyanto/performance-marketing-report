@@ -307,6 +307,50 @@ def inbound_in_period(row: dict[str, str], period: Period, previous: bool = Fals
     return bool(inbound and start <= inbound <= end)
 
 
+MONTH_NAMES = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember")
+
+
+def thursday_of(day: date) -> date:
+    return day - timedelta(days=day.weekday()) + timedelta(days=3)
+
+
+def bucket_of(day: date, scope: str) -> tuple:
+    if scope == "month":
+        return (day.year, day.month)
+    if scope == "semester":
+        return (day.year, 1 if day.month <= 6 else 2)
+    return (day.year,)
+
+
+def window(period: Period, scope: str) -> dict:
+    """Month, semester or year that a period belongs to, accumulated up to the period end.
+
+    A week belongs to the month/semester/year that holds its Thursday, the same rule as ISO week numbering.
+    Weekly windows therefore start on the Monday of the first week that belongs to the bucket.
+    """
+    if period.kind == "week":
+        ref = thursday_of(period.start)
+        start = period.start
+        while bucket_of(thursday_of(start - timedelta(days=7)), scope) == bucket_of(ref, scope):
+            start -= timedelta(days=7)
+    else:
+        ref = period.start
+        first_month = {"month": ref.month, "semester": 1 if ref.month <= 6 else 7, "year": 1}[scope]
+        start = date(ref.year, first_month, 1)
+    if scope == "month":
+        key, label = f"{ref.year}-{ref.month:02d}", f"{MONTH_NAMES[ref.month - 1]} {ref.year}"
+    elif scope == "semester":
+        n = 1 if ref.month <= 6 else 2
+        key, label = f"{ref.year}-S{n}", f"Semester {n} {ref.year}"
+    else:
+        key, label = str(ref.year), str(ref.year)
+    return {"key": key, "label": label, "start": start, "end": period.end}
+
+
+def rows_between(rows: list[dict[str, str]], stage: str, start: date, end: date) -> list[dict[str, str]]:
+    return [r for r in rows if start <= parse_date(r[STAGES[stage]], STAGES[stage]) <= end]
+
+
 def fmt(n: int) -> str:
     return f"{n:,}".replace(",", ".")
 
@@ -388,8 +432,9 @@ def set_period_copy(soup, period: Period, source_text: str | None = None):
     text(soup.select_one(".header .tag"), PROFILE["tag"])
     text(soup.select_one(".header .eyebrow"), f"{PROFILE['name']} · {'Weekly' if period.kind == 'week' else 'Monthly'} dashboard")
     text(soup.select_one(".sql-list h2"), f"Daftar SQL · {label}")
-    text(soup.select_one(".hardware-section > .section-head .note"), f"Angka utama {short} · pembanding {prev_short}")
-    text(soup.select_one(".campaign-detail .detail-head .note"), f"Angka utama {label} · pembanding kecil {prev_label}")
+    if PROFILE.get("hardware_report", True):
+        text(soup.select_one(".hardware-section > .section-head .note"), f"Angka utama {short} · pembanding {prev_short}")
+        text(soup.select_one(".campaign-detail .detail-head .note"), f"Angka utama {label} · pembanding kecil {prev_label}")
     legend = ((label, period.start, period.end), (prev_label, period.prev_start, period.prev_end))
     for span, (name, start, end) in zip(soup.select(".funnel .legend span")[:2], legend):
         dot = span.select_one(".dot")
@@ -427,15 +472,6 @@ def replace_wording(soup, pairs) -> None:
 
 def rebuild_product_slots(soup) -> None:
     """Make the analysis slots, filter buttons and scope note follow the profile's product list."""
-    aside = soup.select_one(".hardware-product-analysis")
-    blocks = aside.select(".product-analysis")
-    prototype = copy.copy(blocks[0])
-    for block in blocks:
-        block.extract()
-    for name in PRODUCTS:
-        block = copy.copy(prototype)
-        text(block.select_one("strong"), name)
-        aside.append(block)
     filters = soup.select_one(".detail-filters")
     buttons = filters.select("button")
     prototype = copy.copy(buttons[1])
@@ -453,9 +489,265 @@ def rebuild_product_slots(soup) -> None:
     text(note, f"Hanya Campaign Hardware {names}. Tag kosong, Unknown, dan Others dikecualikan.")
 
 
+def sql_total(rows: list[dict[str, str]], start: date, end: date, only=None) -> tuple[int, int | Decimal]:
+    chosen = [r for r in rows_between(rows, "SQL", start, end) if only is None or only(r)]
+    return len(chosen), sum((stage_value(r, "SQL") for r in chosen), 0)
+
+
+def progress_facts(data, period: Period, weeks) -> dict:
+    """Actuals that targets are compared with. Targets live in the database, so they are never part of the report."""
+    windows = {scope: window(period, scope) for scope in ("month", "semester", "year")}
+    focus = PROFILE.get("focus_product")
+    sql_rows = data["SQL"]
+    result = {
+        "week_rule": "bulan, semester, dan tahun sebuah minggu ditentukan oleh hari Kamis di minggu itu",
+        "unit": PROFILE.get("target_unit", "idr"),
+        "windows": {k: {"key": v["key"], "label": v["label"], "start": v["start"].isoformat(), "end": v["end"].isoformat()} for k, v in windows.items()},
+    }
+    if PROFILE.get("hardware_report", True):
+        hardware = {}
+        month = windows["month"]
+        for name in PRODUCTS:
+            mine = lambda r, name=name: product(r) == name
+            _, week_value = sql_total(sql_rows, period.start, period.end, mine)
+            _, month_value = sql_total(sql_rows, month["start"], month["end"], mine)
+            hardware[name] = {"week_sql_value": week_value, "month_before_period": month_value - week_value, "month_to_date": month_value}
+        result["hardware"] = hardware
+    total = {}
+    for scope, win in windows.items():
+        count, value = sql_total(sql_rows, win["start"], win["end"])
+        total[scope] = {"sql": count, "sql_value": value}
+        if focus:
+            fcount, fvalue = sql_total(sql_rows, win["start"], win["end"], lambda r: product(r) == focus)
+            total[scope].update(focus_sql=fcount, focus_sql_value=fvalue)
+    result["total"] = total
+    if focus:
+        result["focus_product"] = focus
+    return result
+
+
+def number_text(value, unit: str) -> str:
+    return money(value) if unit == "idr" else f"{fmt(whole(value))} SQL"
+
+
+def build_target_progress(soup, period: Period, progress: dict) -> None:
+    unit = progress["unit"]
+    focus = progress.get("focus_product")
+    title = f"Progress target SQL {focus} {progress['windows']['year']['label']}" if focus else f"Progress target SQL Value {progress['windows']['year']['label']}"
+    section = soup.new_tag("section", attrs={"class": "section target-progress", "data-unit": unit})
+    head = soup.new_tag("div", attrs={"class": "section-head"})
+    head.append(node(soup, "h2", title))
+    head.append(node(soup, "span", f"sampai {period.label}", **{"class": "note"}))
+    section.append(head)
+    grid = soup.new_tag("div", attrs={"class": "tgt-grid"})
+    for scope, heading in (("semester", None), ("year", "Akumulasi 1 tahun")):
+        win = progress["windows"][scope]
+        actual = progress["total"][scope]["focus_sql" if focus else "sql_value"]
+        card = soup.new_tag("article", attrs={"class": "card tgt", "data-scope": scope, "data-key": win["key"], "data-unit": unit, "data-actual": str(whole(actual))})
+        card.append(node(soup, "div", heading or win["label"], **{"class": "metric-label"}))
+        card.append(node(soup, "div", f"Tercapai {number_text(actual, unit)} · target belum diatur", **{"class": "tgt-line"}))
+        track = soup.new_tag("div", attrs={"class": "track"})
+        track.append(soup.new_tag("div", attrs={"class": "fill current", "style": "width:0%"}))
+        card.append(track)
+        card.append(node(soup, "div", "—", **{"class": "tgt-pct"}))
+        grid.append(card)
+    section.append(grid)
+    soup.select_one(".sql-list").insert_before(section)
+
+
+def build_hardware(soup, weeks, period: Period, facts: dict, progress: dict, pair) -> None:
+    hardware = soup.select_one(".hardware-section")
+    month = progress["windows"]["month"]
+    for block in hardware.select(".product-analysis"):
+        block.extract()
+    panel = soup.new_tag("div", attrs={"class": "card tgt-month", "data-month-key": month["key"], "data-unit": "idr"})
+    panel.append(node(soup, "h3", f"Target SQL Value {month['label']}"))
+    panel.append(node(soup, "p", "Target belum diatur. Atur di halaman Pengaturan target untuk melihat progress.", **{"class": "tgt-line"}))
+    totals = progress["total"]["month"]["sql_value"]
+    week_total = sum(v["week_sql_value"] for v in progress["hardware"].values())
+    mtd_total = sum(v["month_to_date"] for v in progress["hardware"].values())
+    dl = soup.new_tag("dl")
+    for key, label, value in (("week", f"SQL Value {period.label}", week_total), ("mtd", f"SQL Value {month['label']} sampai {period.short}", mtd_total), ("target", f"Total target {month['label']}", None), ("remain", "Sisa target", None)):
+        item = soup.new_tag("div", attrs={"data-slot": key})
+        item.append(node(soup, "dt", label))
+        item.append(node(soup, "dd", money(value) if value is not None else "—"))
+        dl.append(item)
+    panel.append(dl)
+    track = soup.new_tag("div", attrs={"class": "track"})
+    track.append(soup.new_tag("div", attrs={"class": "fill current", "style": "width:0%"}))
+    panel["data-week"], panel["data-mtd"] = str(whole(week_total)), str(whole(mtd_total))
+    panel.append(track)
+    panel.append(node(soup, "div", "—", **{"class": "tgt-pct"}))
+    hardware.select_one(":scope > .section-head").insert_after(panel)
+    table = hardware.select_one(":scope > .table-wrap table")
+    body, foot = table.select_one("tbody"), table.select_one("tfoot")
+    body.clear(); foot.clear()
+    aggregate = {w: [0] * 4 for w in ("now", "prev")}
+
+    def product_metrics(name, w):
+        sets = {stage: [r for r in weeks[w][stage] if product(r) == name] for stage in STAGES}
+        return [len(sets["Submission"]), len(sets["MQL"]), len(sets["SQL"]), sum(stage_value(r, "SQL") for r in sets["SQL"])]
+
+    def product_row(label, now, prev, target, name=None, mtd=None):
+        tr = soup.new_tag("tr")
+        tr.append(node(soup, "td", label))
+        for i, (a, b) in enumerate(zip(now, prev)):
+            td = soup.new_tag("td", attrs={"class": "num"})
+            td.append(node(soup, "strong", money(a) if i == 3 else fmt(a)))
+            td.append(node(soup, "small", f"{period.prev_short} " + (money(b) if i == 3 else fmt(b))))
+            tr.append(td)
+        slot = {"data-mtd": str(whole(mtd))}
+        if name:
+            slot["data-product"] = name
+        tr.append(node(soup, "td", "Belum diatur", **{"class": "num tgt-cell", "data-slot": "target", **slot}))
+        tr.append(node(soup, "td", "—", **{"class": "num tgt-cell", "data-slot": "progress", **slot}))
+        target.append(tr)
+
+    funnel = soup.new_tag("section", attrs={"class": "section hw-funnel"})
+    head = soup.new_tag("div", attrs={"class": "section-head"})
+    head.append(node(soup, "h2", "Funnel per hardware"))
+    head.append(node(soup, "span", f"{period.label} · progress {month['label']}", **{"class": "note"}))
+    funnel.append(head)
+    wrap = soup.new_tag("div", attrs={"class": "card", "style": "padding:6px 18px"})
+    funnel.append(wrap)
+    keys = ("submission", "mql", "sql", "sql_value", "deal_won", "deal_value", "junk")
+    for name in PRODUCTS:
+        a, b = product_metrics(name, "now"), product_metrics(name, "prev")
+        aggregate["now"] = [x + y for x, y in zip(aggregate["now"], a)]
+        aggregate["prev"] = [x + y for x, y in zip(aggregate["prev"], b)]
+        hw = progress["hardware"][name]
+        product_row(name, a, b, body, name, hw["month_to_date"])
+        sets = {stage: [r for r in weeks["now"][stage] if product(r) == name] for stage in STAGES}
+        facts.setdefault("hardware", []).append({"product": name, "now": dict(zip(keys, a[:3] + [a[3], len(sets["Deal Won"]), sum(stage_value(r, "Deal Won") for r in sets["Deal Won"]), sum(r.get("Remark", "").casefold() == "junk leads" for r in sets["Submission"])])), "prev": {k: v for k, v in zip(keys[:4], b)}})
+        block = soup.new_tag("div", attrs={"class": "hw-funnel-block", "data-hardware": name})
+        main = soup.new_tag("div")
+        main.append(node(soup, "h4", name))
+        bars = soup.new_tag("div", attrs={"class": "hw-bars"})
+        counts = (("Submission", a[0]), ("MQL", a[1]), ("SQL", a[2]), ("Deal Won", len(sets["Deal Won"])))
+        top = max(a[0], 1)
+        for label, value in counts:
+            bars.append(node(soup, "span", label))
+            track = soup.new_tag("div", attrs={"class": "track"})
+            track.append(soup.new_tag("div", attrs={"class": "fill current", "style": f"width:{value / top * 100:.1f}%"}))
+            bars.append(track)
+            bars.append(node(soup, "b", fmt(value)))
+        main.append(bars)
+        stack = soup.new_tag("div", attrs={"class": "tgt-stack", "data-product": name, "data-before": str(whole(hw["month_before_period"])), "data-week": str(whole(hw["week_sql_value"]))})
+        stack.append(node(soup, "div", f"SQL Value {month['label']} terhadap target", **{"class": "tgt-title"}))
+        stack.append(node(soup, "div", f"Tercapai {money(hw['month_to_date'])} · target belum diatur", **{"class": "tgt-text"}))
+        main.append(stack)
+        side = soup.new_tag("aside", attrs={"class": "analysis-panel", "aria-label": f"Analysis {name}"})
+        side.append(node(soup, "h3", f"Analysis {name}"))
+        side.append(soup.new_tag("div", attrs={"class": "analysis-body", "aria-label": f"Konten Analysis {name}"}))
+        block.append(main)
+        block.append(side)
+        wrap.append(block)
+    product_row(f"TOTAL {len(PRODUCTS)} PRODUK", aggregate["now"], aggregate["prev"], foot, None, mtd_total)
+    hardware.insert_after(funnel)
+    # Active current-week campaigns in the selected hardware categories.
+    detail = hardware.select_one(".campaign-detail")
+    body, foot = detail.select_one("tbody"), detail.select_one("tfoot")
+    body.clear(); foot.clear()
+    active = Counter((product(r), campaign(r)) for r in weeks["now"]["Submission"] if product(r) in PRODUCTS)
+    ordered = sorted(active, key=lambda x: (-active[x], x[0], x[1]))
+    totals = {w: {"sub": 0, "mql": 0, "junk": 0, "sql": 0, "value": 0} for w in ("now", "prev")}
+
+    def campaign_metrics(h, c, w):
+        sub = [r for r in weeks[w]["Submission"] if product(r) == h and campaign(r) == c]
+        sql = [r for r in weeks[w]["SQL"] if product(r) == h and campaign(r) == c]
+        return {"sub": len(sub), "mql": sum(bool(parse_date(r.get("MQL Date", ""), "MQL Date")) for r in sub), "junk": sum(r.get("Remark", "").casefold() == "junk leads" for r in sub), "sql": len(sql), "value": sum(stage_value(r, "SQL") for r in sql)}
+
+    for h, c in ordered:
+        values = {w: campaign_metrics(h, c, w) for w in ("now", "prev")}
+        for w in values:
+            for key in totals[w]:
+                totals[w][key] += values[w][key]
+        if len(facts.setdefault("campaigns", [])) < 20:
+            facts["campaigns"].append({"hardware": h, "campaign": c, "now": values["now"], "prev": values["prev"]})
+        tr = soup.new_tag("tr", attrs={"data-hardware": h})
+        tr.append(node(soup, "td", h)); tr.append(node(soup, "td", c))
+        tr.append(pair(soup, values["now"]["sub"], values["prev"]["sub"]))
+        tr.append(pair(soup, rate_text(values["now"]["mql"], values["now"]["sub"]), rate_text(values["prev"]["mql"], values["prev"]["sub"])))
+        for key in ("junk", "sql"):
+            tr.append(pair(soup, values["now"][key], values["prev"][key]))
+        tr.append(pair(soup, values["now"]["value"], values["prev"]["value"], True))
+        body.append(tr)
+    tr = soup.new_tag("tr")
+    tr.append(node(soup, "td", "TOTAL CAMPAIGN AKTIF", colspan="2"))
+    tr.append(pair(soup, totals["now"]["sub"], totals["prev"]["sub"]))
+    tr.append(pair(soup, rate_text(totals["now"]["mql"], totals["now"]["sub"]), rate_text(totals["prev"]["mql"], totals["prev"]["sub"])))
+    for key in ("junk", "sql"):
+        tr.append(pair(soup, totals["now"][key], totals["prev"][key]))
+    tr.append(pair(soup, totals["now"]["value"], totals["prev"]["value"], True))
+    foot.append(tr)
+    text(detail.select_one(".table-note"), f"MQL Rate campaign = submission pada minggu tersebut yang sudah memiliki MQL Date pada snapshot CSV ÷ submission campaign. SQL Value mengikuti {STAGES['SQL']} masing-masing minggu; cohort dan SQL event dapat berbeda.")
+
+
+def list_section(soup, css: str, title: str, headers: list[str], numeric: set[int], rows: list[list[str]], footer: list, empty: str, note: str | None = None):
+    section = soup.new_tag("section", attrs={"class": f"section {css}"})
+    head = soup.new_tag("div", attrs={"class": "section-head"})
+    head.append(node(soup, "h2", title))
+    section.append(head)
+    if not rows:
+        card = soup.new_tag("div", attrs={"class": "card", "style": "padding:18px 22px;color:var(--muted)"})
+        card.string = empty
+        section.append(card)
+    else:
+        wrap = soup.new_tag("div", attrs={"class": "card table-wrap"})
+        table = soup.new_tag("table")
+        thead = soup.new_tag("thead")
+        tr = soup.new_tag("tr")
+        for i, h in enumerate(headers):
+            tr.append(node(soup, "th", h, **({"class": "num"} if i in numeric else {})))
+        thead.append(tr)
+        table.append(thead)
+        tbody = soup.new_tag("tbody")
+        for values in rows:
+            add_cells(soup, tbody, values, numeric_from=min(numeric) if numeric else 99)
+        table.append(tbody)
+        tfoot = soup.new_tag("tfoot")
+        tr = soup.new_tag("tr")
+        for value, span, is_num in footer:
+            tr.append(node(soup, "td", value, **({"colspan": str(span)} if span > 1 else {}), **({"class": "num"} if is_num else {})))
+        tfoot.append(tr)
+        table.append(tfoot)
+        wrap.append(table)
+        section.append(wrap)
+    if note:
+        section.append(node(soup, "p", note, **{"class": "table-note"}))
+    return section
+
+
+def build_focus_list(soup, weeks, period: Period, facts: dict) -> None:
+    focus = PROFILE["focus_product"]
+    rows = sorted((r for r in weeks["now"]["SQL"] if product(r) == focus), key=lambda r: (-stage_value(r, "SQL"), r.get("Company", "")))
+    total = sum((stage_value(r, "SQL") for r in rows), 0)
+    facts["focus_period"] = {"product": focus, "sql": len(rows), "sql_value": total}
+    table_rows = [[r.get("Company") or "Unknown", r.get("Industry") or "—", parse_date(r[STAGES["SQL"]], STAGES["SQL"]).isoformat(), money(stage_value(r, "SQL"))] for r in rows]
+    section = list_section(soup, "focus-list", f"Daftar SQL {focus} · {period.label}", ["Company", "Industry", "Tanggal SQL", "SQL Value"], {3}, table_rows,
+                           [(f"TOTAL · {len(rows)} SQL", 3, False), (money(total), 1, True)], f"Tidak ada SQL {focus} di {period.label}.",
+                           f"Hanya SQL dengan Campaign Hardware {focus} pada {period.label}, diurutkan dari SQL Value terbesar.")
+    soup.select_one(".sql-list").insert_after(section)
+
+
+def build_won_list(soup, weeks, period: Period) -> None:
+    rows = sorted(weeks["now"]["Deal Won"], key=lambda r: (-stage_value(r, "Deal Won"), r.get("Company", "")))
+    total = sum((stage_value(r, "Deal Won") for r in rows), 0)
+    table_rows = []
+    for r in rows:
+        inbound, event = parse_date(r.get("Inbound Date", ""), "Inbound Date"), parse_date(r[STAGES["Deal Won"]], STAGES["Deal Won"])
+        table_rows.append([r.get("Company") or "Unknown", r.get("Industry") or "—", campaign(r), money(stage_value(r, "Deal Won")), f"{(event - inbound).days} hari" if inbound else "—"])
+    section = list_section(soup, "won-list", f"Daftar Deal Won · {period.label}", ["Company", "Industry", "Campaign", "Deal Value", "Inbound ke Deal Won"], {3}, table_rows,
+                           [(f"TOTAL · {len(rows)} DEAL WON", 3, False), (money(total), 1, True), ("", 1, False)], f"Tidak ada Deal Won di {period.label}.",
+                           f"Diurutkan dari Deal Value terbesar. Nilai mengikuti {WON_VALUE} di Campaign Tracker.")
+    anchor = soup.select_one(".focus-list") or soup.select_one(".sql-list")
+    anchor.insert_after(section)
+
+
 def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source_text: str | None = None):
     set_period_copy(soup, period, source_text)
-    rebuild_product_slots(soup)
+    if PROFILE.get("hardware_report", True):
+        rebuild_product_slots(soup)
     pair = lambda soup, a, b, currency=False: pair_cell(soup, a, b, period.prev_short, currency)
     weeks = {w: {stage: period_rows(rows, stage, period, previous=(w == "prev")) for stage, rows in data.items()} for w in ("now", "prev")}
     metrics = {}
@@ -598,54 +890,18 @@ def populate(soup, data: dict[str, list[dict[str, str]]], period: Period, source
         add_cells(soup,foot if name=="TOTAL" else body,[name,len(sub),mql,rate_text(mql,len(sub)),len(sql),money(sum(stage_value(r,"SQL") for r in sql)),len(won),money(sum(stage_value(r,"Deal Won") for r in won))])
         facts.setdefault("cross_stage", []).append({"source":name,"submission":len(sub),"mql_same_period":mql,"sql":len(sql),"sql_value":sum(stage_value(r,"SQL") for r in sql),"deal_won":len(won),"deal_value":sum(stage_value(r,"Deal Won") for r in won)})
     text(cross.select_one(".table-note"),f"MQL dan MQL Rate memakai submission {period.label} yang mencapai MQL dalam minggu yang sama. SQL dan Deal Won memakai tanggal event {period.label}, termasuk backlog; kolom-kolom bukan satu cohort.")
-    # Product aggregate, restricted to five tagged hardware categories.
-    hardware=soup.select_one(".hardware-section");table=hardware.select_one(":scope > .table-wrap table")
-    body=table.select_one("tbody");foot=table.select_one("tfoot");body.clear();foot.clear()
-    aggregate={w:[0]*7 for w in ("now","prev")}
-    def product_metrics(name,w):
-        sets={stage:[r for r in weeks[w][stage] if product(r)==name] for stage in STAGES}
-        return [len(sets["Submission"]),len(sets["MQL"]),len(sets["SQL"]),sum(stage_value(r,"SQL") for r in sets["SQL"]),len(sets["Deal Won"]),sum(stage_value(r,"Deal Won") for r in sets["Deal Won"]),sum(r.get("Remark","").casefold()=="junk leads" for r in sets["Submission"])]
-    def product_row(label, now, prev, target):
-        tr=soup.new_tag("tr");tr.append(node(soup,"td",label))
-        for i,(a,b) in enumerate(zip(now,prev)):
-            td=soup.new_tag("td",attrs={"class":"num"});td.append(node(soup,"strong",money(a) if i in (3,5) else fmt(a)))
-            td.append(node(soup,"small",f"{period.prev_short} "+(money(b) if i in (3,5) else fmt(b))))
-            tr.append(td)
-        target.append(tr)
-    for name in PRODUCTS:
-        a=product_metrics(name,"now");b=product_metrics(name,"prev")
-        aggregate["now"]=[x+y for x,y in zip(aggregate["now"],a)]
-        aggregate["prev"]=[x+y for x,y in zip(aggregate["prev"],b)]
-        product_row(name,a,b,body)
-        keys=("submission","mql","sql","sql_value","deal_won","deal_value","junk")
-        facts.setdefault("hardware", []).append({"product":name,"now":dict(zip(keys,a)),"prev":dict(zip(keys,b))})
-    product_row(f"TOTAL {len(PRODUCTS)} PRODUK",aggregate["now"],aggregate["prev"],foot)
-    # Active current-week campaigns in the selected hardware categories.
-    detail=hardware.select_one(".campaign-detail");body=detail.select_one("tbody");foot=detail.select_one("tfoot");body.clear();foot.clear()
-    active=Counter((product(r),campaign(r)) for r in weeks["now"]["Submission"] if product(r) in PRODUCTS)
-    ordered=sorted(active,key=lambda x:(-active[x],x[0],x[1]))
-    totals={w:{"sub":0,"mql":0,"junk":0,"sql":0,"value":0} for w in ("now","prev")}
-    def campaign_metrics(h,c,w):
-        sub=[r for r in weeks[w]["Submission"] if product(r)==h and campaign(r)==c]
-        sql=[r for r in weeks[w]["SQL"] if product(r)==h and campaign(r)==c]
-        return {"sub":len(sub),"mql":sum(bool(parse_date(r.get("MQL Date",""),"MQL Date")) for r in sub),"junk":sum(r.get("Remark","").casefold()=="junk leads" for r in sub),"sql":len(sql),"value":sum(stage_value(r,"SQL") for r in sql)}
-    for h,c in ordered:
-        values={w:campaign_metrics(h,c,w) for w in ("now","prev")}
-        for w in values:
-            for key in totals[w]:totals[w][key]+=values[w][key]
-        if len(facts.setdefault("campaigns", [])) < 20:
-            facts["campaigns"].append({"hardware":h,"campaign":c,"now":values["now"],"prev":values["prev"]})
-        tr=soup.new_tag("tr",attrs={"data-hardware":h});tr.append(node(soup,"td",h));tr.append(node(soup,"td",c))
-        tr.append(pair(soup,values["now"]["sub"],values["prev"]["sub"]))
-        tr.append(pair(soup,rate_text(values["now"]["mql"],values["now"]["sub"]),rate_text(values["prev"]["mql"],values["prev"]["sub"])))
-        for key in ("junk","sql"):tr.append(pair(soup,values["now"][key],values["prev"][key]))
-        tr.append(pair(soup,values["now"]["value"],values["prev"]["value"],True));body.append(tr)
-    tr=soup.new_tag("tr");tr.append(node(soup,"td","TOTAL CAMPAIGN AKTIF",colspan="2"))
-    tr.append(pair(soup,totals["now"]["sub"],totals["prev"]["sub"]))
-    tr.append(pair(soup,rate_text(totals["now"]["mql"],totals["now"]["sub"]),rate_text(totals["prev"]["mql"],totals["prev"]["sub"])))
-    for key in ("junk","sql"):tr.append(pair(soup,totals["now"][key],totals["prev"][key]))
-    tr.append(pair(soup,totals["now"]["value"],totals["prev"]["value"],True));foot.append(tr)
-    text(detail.select_one(".table-note"),f"MQL Rate campaign = submission pada minggu tersebut yang sudah memiliki MQL Date pada snapshot CSV ÷ submission campaign. SQL Value mengikuti {STAGES['SQL']} masing-masing minggu; cohort dan SQL event dapat berbeda.")
+    progress = progress_facts(data, period, weeks)
+    facts["progress"] = progress
+    if PROFILE.get("hardware_report", True):
+        build_hardware(soup, weeks, period, facts, progress, pair)
+    else:
+        for section in soup.select(".hardware-section"):
+            section.decompose()
+    build_target_progress(soup, period, progress)
+    if PROFILE.get("focus_product"):
+        build_focus_list(soup, weeks, period, facts)
+    if PROFILE.get("deal_won_list"):
+        build_won_list(soup, weeks, period)
     if STAGES["SQL"] != "Proposal Price Quote Date":
         replace_wording(soup, (("Proposal Price Quote Date", STAGES["SQL"]), ("tanggal proposal", f"tanggal {STAGES['SQL']}")))
     if period.kind == "month":

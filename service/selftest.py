@@ -92,10 +92,10 @@ def main() -> int:
     status, body = call(args.url, "/v1/reports?bu=bu2&period=2026-W39", sample_csv(), token)
     try:
         result = json.loads(body)
-        ok = status == 200 and result["audit"]["metrics"]["now"]["SQL Value"] == 8000000 and "hardware_ecosystem" in result["analysis_keys"] and len(result["html"]) > 1000
+        ok = status == 200 and result["audit"]["metrics"]["now"]["SQL Value"] == 8000000 and "executive_summary" in result["analysis_keys"] and "Daftar SQL Ecosystem" in result["html"] and len(result["html"]) > 1000
     except (ValueError, KeyError, TypeError):
         ok = False
-    report(ok, "a BU2 report is generated from the synthetic sample with the expected numbers (SQL Value 8000000, Ecosystem slot present)")
+    report(ok, "a BU2 report is generated from the synthetic sample with the expected numbers (SQL Value 8000000, Ecosystem list present)")
     print("ALL CHECKS PASSED" if failures == 0 else f"{failures} CHECK(S) FAILED")
     return 0 if failures == 0 else 1
 
