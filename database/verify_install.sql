@@ -33,8 +33,8 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          has_table_privilege('report_reader', 'reports.report_runs', 'SELECT') AND has_table_privilege('report_reader', 'reports.latest_reports', 'SELECT')
          AND NOT (has_table_privilege('report_reader', 'reports.report_runs', 'INSERT') OR has_table_privilege('report_reader', 'reports.report_runs', 'UPDATE') OR has_table_privilege('report_reader', 'reports.report_runs', 'DELETE'))
   UNION ALL SELECT 11, 'neither role can create objects in schemas reports or public',
-         NOT (has_schema_privilege('report_writer', 'reports', 'CREATE') OR has_schema_privilege('report_reader', 'reports', 'CREATE') OR has_schema_privilege(to_regrole('report_viewer'), 'reports', 'CREATE')
-              OR has_schema_privilege('report_writer', 'public', 'CREATE') OR has_schema_privilege('report_reader', 'public', 'CREATE') OR has_schema_privilege(to_regrole('report_viewer'), 'public', 'CREATE'))
+         NOT (has_schema_privilege('report_writer', 'reports', 'CREATE') OR has_schema_privilege('report_reader', 'reports', 'CREATE') OR coalesce(has_schema_privilege(to_regrole('report_viewer'), 'reports', 'CREATE'), false)
+              OR has_schema_privilege('report_writer', 'public', 'CREATE') OR has_schema_privilege('report_reader', 'public', 'CREATE') OR coalesce(has_schema_privilege(to_regrole('report_viewer'), 'public', 'CREATE'), false))
   UNION ALL SELECT 12, 'connection limits are 10 for report_writer and 5 for report_reader',
          (SELECT bool_and(rolconnlimit = CASE rolname WHEN 'report_writer' THEN 10 ELSE 5 END) FROM pg_roles WHERE rolname IN ('report_writer', 'report_reader'))
   UNION ALL SELECT 13, 'report_viewer exists without elevated attributes, can log in, and is limited to 10 connections',
