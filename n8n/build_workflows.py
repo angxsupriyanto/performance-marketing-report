@@ -219,13 +219,28 @@ FLOWS = {
 }
 
 
+def slug(text: str) -> str:
+    return "".join(c if c.isalnum() else "_" for c in text).strip("_")
+
+
 def build() -> dict[str, str]:
-    return {name: json.dumps(factory().export(), ensure_ascii=False, indent=2) + "\n" for name, factory in FLOWS.items()}
+    """Workflow JSON plus, for each Code node, the rendered script. The scripts let you fix a node in a running n8n
+    by pasting new code, without re-importing the workflow and losing its credentials and placeholders."""
+    files = {}
+    for name, factory in FLOWS.items():
+        flow = factory()
+        files[name] = json.dumps(flow.export(), ensure_ascii=False, indent=2) + "\n"
+        for n in flow.nodes:
+            if n["type"] == "n8n-nodes-base.code":
+                files[f"code/{name.removesuffix('.json')}__{slug(n['name'])}.js"] = n["parameters"]["jsCode"]
+    return files
 
 
 if __name__ == "__main__":
     out = HERE / "workflows"
     out.mkdir(exist_ok=True)
     for name, text in build().items():
-        (out / name).write_text(text, encoding="utf-8")
-        print("wrote", out / name)
+        target = out / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(text, encoding="utf-8")
+        print("wrote", target)

@@ -187,6 +187,31 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual(table[0]["Total Contract SQL"], "765032431.55")
         self.assertEqual(table[0]["Company"], 'PT "Maju", Jaya\nTbk')
 
+    def test_empty_cells_may_be_omitted_by_the_sheets_api(self):
+        # A column that is empty in EVERY row cannot be told apart from a missing one, so give Remark one value.
+        leads = [dict(lead, Remark="Follow Up" if i == 0 else "") for i, lead in enumerate(LEADS)]
+        full = self.build_csv(sheet_rows(leads))["result"][0]["json"]["csv"]
+        sparse_rows = [{k: v for k, v in row.items() if v not in ("", None)} for row in sheet_rows(leads)]
+        sparse = self.build_csv(sparse_rows)
+        self.assertTrue(sparse["ok"], sparse)
+        self.assertEqual(sparse["result"][0]["json"]["csv"], full)
+
+    def test_first_row_lacking_late_columns_is_not_an_error(self):
+        rows = sheet_rows(LEADS)
+        for key in ("Proposal Price Quote Date", " ARR + OTF (Tanpa PPN) ", "Deal Won Date", " Total Contract Deal Won"):
+            rows[0].pop(key, None)
+        self.assertTrue(self.build_csv(rows)["ok"])
+
+    def test_missing_column_message_names_it_and_suggests_a_near_match(self):
+        rows = sheet_rows(LEADS)
+        for row in rows:
+            row["Total contract Deal won"] = row.pop(" Total Contract Deal Won")
+        out = self.build_csv(rows)
+        self.assertFalse(out["ok"])
+        self.assertIn("Total Contract Deal Won", out["error"])
+        self.assertIn('header mirip: "Total contract Deal won"', out["error"])
+        self.assertIn("tidak ditemukan di satu baris pun", out["error"])
+
     def test_csv_fails_loudly_on_missing_column_or_empty_sheet(self):
         rows = sheet_rows(LEADS)
         for r in rows:

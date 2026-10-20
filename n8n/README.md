@@ -44,6 +44,12 @@ Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `
 5. Pasang *Error Workflow* yang sudah ada (H-17/H-18 Production Error Notification) di Settings tiap workflow.
 6. Eksekusi sukses tidak disimpan (`saveDataSuccessExecution: none`) karena data mengalir sebagai baris customer. Nyalakan sementara hanya saat debugging.
 
+## Memperbaiki satu node tanpa impor ulang
+
+Impor ulang membuat workflow baru dan membuat Anda memilih ulang credential dan mengisi placeholder lagi. Untuk perbaikan kode, cukup ganti isi satu Code node: buka node, hapus isinya, lalu tempel isi berkas yang sesuai di `n8n/workflows/code/` (mis. `Report_Generate_v1__Build_CSV.js`). Berkas itu sudah terender (daftar kolom dan prompt sudah terisi), dibuat oleh `build_workflows.py`, dan diuji agar selalu sama dengan isi JSON. Node `Prepare Analysis Request` perlu `<ANTHROPIC_MODEL>` diisi lagi setelah menempel.
+
+Sheets API tidak mengirim sel kosong, jadi `Build CSV` menganggap suatu kolom hilang hanya bila **tidak ada satu baris pun** yang memilikinya. Kolom yang kosong di seluruh sheet tidak bisa dibedakan dari kolom yang tidak ada, dan akan dilaporkan sebagai hilang.
+
 ## Hal yang belum diverifikasi terhadap n8n sungguhan
 
 Semua Code node, SQL, layanan, dan alurnya diuji di luar n8n (harness Node, PostgreSQL 16, server HTTP). Yang **belum** bisa dibuktikan tanpa instance n8n Anda:

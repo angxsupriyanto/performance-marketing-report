@@ -19,19 +19,30 @@ function cell(column, value) {
 
 const quote = (text) => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text);
 
+// The Sheets API leaves out empty cells, so a column is judged missing only when NO row has it.
+const squash = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
+const seen = new Set();
 const rows = [];
-let missing = null;
 for (const item of $input.all()) {
   const byName = {};
-  for (const [key, value] of Object.entries(item.json)) byName[normalize(key)] = value;
-  if (missing === null) {
-    missing = COLUMNS.filter((column) => !(column in byName));
-    if (missing.length) throw new Error(`Kolom tidak ada di sheet: ${missing.join(', ')}`);
+  for (const [key, value] of Object.entries(item.json)) {
+    const name = normalize(key);
+    byName[name] = value;
+    seen.add(name);
   }
   const values = COLUMNS.map((column) => cell(column, byName[column]));
   if (values.some((v) => v !== '')) rows.push(values.map(quote).join(','));
 }
 if (!rows.length) throw new Error('Sheet tidak mengembalikan baris data');
+
+const missing = COLUMNS.filter((column) => !seen.has(column));
+if (missing.length) {
+  const hints = missing.map((column) => {
+    const close = [...seen].filter((name) => squash(name) === squash(column));
+    return close.length ? `${column} (header mirip: "${close[0]}")` : column;
+  });
+  throw new Error(`Kolom tidak ditemukan di satu baris pun (tidak ada di sheet atau kosong seluruhnya): ${hints.join('; ')}. Baris dibaca: ${rows.length}, header unik: ${seen.size}`);
+}
 
 const csv = [COLUMNS.map(quote).join(','), ...rows].join('\n') + '\n';
 const plans = $('Normalize Plan').first().json.plans;
