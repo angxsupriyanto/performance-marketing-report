@@ -15,20 +15,15 @@ Tiga workflow siap impor (n8n 2.x). Semuanya **dihasilkan** oleh `n8n/build_work
 
 Urutan pemakaian: jalankan Generate dulu untuk periode itu, lalu Analysis. Analysis menolak bila belum ada laporan numerik untuk BU dan periode tersebut.
 
-## Seberapa terpisah databasenya
+## Database
 
-`marketing_reports` adalah database **sendiri**. Skripnya tidak menyentuh `inbound_marketing`, `core`, `core_v2`, atau `staging`, dan role-nya (`report_owner`, `report_writer`, `report_reader`) tidak punya akses ke sana. Ada dua cara menempatkannya:
+`marketing_reports` adalah database **sendiri** di server PostgreSQL yang sudah ada. Skripnya tidak menyentuh `inbound_marketing`, `core`, `core_v2`, atau `staging`, dan role-nya (`report_owner`, `report_writer`, `report_reader`) tidak punya akses ke sana. Yang tetap dibagi dengan server yang ada: proses server, penyimpanan dan backup, serta daftar role (role bersifat tingkat server). Memasangnya butuh akun yang boleh membuat database dan role.
 
-| Opsi | Terpisah | Masih dibagi dengan server yang ada |
-|---|---|---|
-| **A. Database baru di server PostgreSQL yang sudah ada** (`database/000_*` dan `001_*`) | database, tabel, role, password, hak akses | proses server, penyimpanan dan backup, serta daftar role (role bersifat tingkat server), dan Anda butuh akun superuser untuk membuatnya |
-| **B. Instance PostgreSQL tersendiri** (`deploy/docker-compose.reports-db.example.yml`) | semuanya: proses, volume, backup, password admin | hanya jaringan Docker yang sama dengan n8n |
-
-Opsi B memang lebih terisolasi, tetapi menambah satu container yang harus Anda backup dan perbarui. Pilih salah satu; isi skripnya sama.
+Setelah dipasang, tambahkan `marketing_reports` ke rutinitas backup yang sudah ada (mis. `pg_dump -d marketing_reports`). Bila `pg_hba.conf` membatasi akses per database atau per user, izinkan `report_writer` dan `report_reader` dari container n8n ke database ini.
 
 ## Memasang
 
-1. **Database.** Opsi A: jalankan `database/000_create_database_and_roles.sql` lalu `database/001_reports_schema.sql` (perintahnya ada di komentar tiap berkas; kata sandi diberikan lewat `-v`, bukan disimpan di Git). Opsi B: `docker compose -f deploy/docker-compose.reports-db.example.yml up -d` setelah membuat tiga berkas secret; skrip inisialisasi menjalankan kedua SQL itu sekali pada volume kosong. Hasilnya sama: database `marketing_reports` dengan role `report_writer` (SELECT dan INSERT saja) dan `report_reader` (SELECT).
+1. **Database.** Jalankan `psql -d postgres -f database/preflight.sql` (read-only; semua baris harus `OK`), lalu `database/000_create_database_and_roles.sql` dan `database/001_reports_schema.sql` (perintah lengkap ada di komentar tiap berkas; kata sandi diberikan lewat `-v`, bukan disimpan di Git). Hasilnya database `marketing_reports` dengan role `report_writer` (SELECT dan INSERT saja) dan `report_reader` (SELECT). Buat dua credential Postgres di n8n yang menunjuk ke database ini.
 2. **Layanan laporan.** Gabungkan `deploy/docker-compose.report-service.example.yml` ke proyek Compose yang menjalankan n8n, buat token dengan `openssl rand -hex 32 > report_service_token.txt`, lalu `docker compose up -d --build report-service`. Jangan publikasikan portnya; n8n memanggilnya sebagai `http://report-service:8080`. Bila nama layanan atau portnya berbeda, ubah `SERVICE_URL` di `build_workflows.py` dan jalankan ulang.
 3. **Impor** ketiga JSON, lalu buat dan pilih credential (nama bebas):
 
