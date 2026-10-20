@@ -59,3 +59,11 @@ Header dibaca setelah spasi berulang dan spasi di ujung dinormalisasi. Ejaan int
 | Raw Deal Won | `Company`, `Channel`, `Source`, `Campaign`, `Campaign Hardware`, `Industry`, `Inbound Date`, `Deal Won Date`, `SUM of Total Contract Deal Won` |
 
 Tanggal diterima dalam `M/D/YYYY` seperti ekspor CSV atau ISO `YYYY-MM-DD`, boleh diikuti jam (mis. `2026-01-19 00:00:00`, `1/19/2026 5:30 PM`, `2026-01-19T08:15:00+07:00`). Bagian jam diabaikan dan tidak pernah dikonversi antar zona waktu: tanggal diambil seperti tertulis di sel, sama dengan cara pivot Google Sheet mengelompokkan sel tanggal-jam. Bentuk yang ambigu seperti `19/01/2026` atau `20260119` tetap ditolak. Semua baris bermasalah dilaporkan sekaligus, dikelompokkan per kolom dengan satu contoh. Nilai uang harus bilangan bulat Rupiah dengan atau tanpa pemisah ribuan; format desimal ditolak agar tidak salah skala. Denominator 0 pada rate ditampilkan N/A. Tidak ada deduplikasi nama perusahaan otomatis dan tidak ada join lintas empat file berdasarkan nama/telepon; perubahan definisi tersebut membutuhkan identifier stabil dan review terpisah.
+
+## Target, progress, dan penetapan bulan
+
+- Bulan, semester, dan tahun sebuah minggu ISO ditentukan oleh hari **Kamis** di minggu itu. Akumulasi bulan, semester, atau tahun menjumlahkan minggu ISO utuh yang termasuk bucket itu, dari awalnya sampai minggu report (`facts.progress.windows`). Untuk report bulanan memakai batas kalender.
+- Progress = aktual ÷ target. Aktual memakai definisi SQL profil BU (tanggal SQL dan nilai SQL), bukan definisi terpisah.
+- BU1: target SQL Value bulanan per hardware (Campaign Hardware bertanda), serta target SQL Value semester dan 1 tahun untuk seluruh SQL BU1. BU2: target jumlah SQL campaign Ecosystem untuk semester dan 1 tahun.
+- Target 1 tahun hanya ada bila kedua semester terisi. Target 0 berarti tidak ada target.
+

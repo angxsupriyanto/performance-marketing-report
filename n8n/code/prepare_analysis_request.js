@@ -9,7 +9,9 @@ const request = $('Validate Request').first().json;
 const run = $input.first().json;
 if (!run.run_id) throw new Error(`Belum ada laporan numerik untuk ${request.bu} ${request.period}; jalankan Report Generate terlebih dahulu`);
 
-const userText = JSON.stringify({ analysis_keys: run.analysis_keys, facts: run.facts });
+const userInput = { analysis_keys: run.analysis_keys, facts: run.facts };
+if (request.targets) userInput.targets = request.targets;
+const userText = JSON.stringify(userInput);
 return [{
   json: {
     run_id: run.run_id,

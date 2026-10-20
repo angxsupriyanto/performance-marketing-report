@@ -161,11 +161,31 @@ class CodeNodeTests(unittest.TestCase):
     def test_validate_request_accepts_manual_fields_and_query_string(self):
         code = node(load("Report_Analysis_Button_v1.json"), "Validate Request")["parameters"]["jsCode"]
         manual = run_code(code, [{"bu": "BU2", "period": "2026-W39", "requested_by": "anggit"}])
-        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit"})
+        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit", "targets": None})
         query = run_code(code, [{"query": {"bu": "bu1", "period": "2026-09"}}])
         self.assertEqual(query["result"][0]["json"]["requested_by"], "manual")
         for bad in ({"bu": "<BU>", "period": "2026-W39"}, {"bu": "bu1", "period": "<PERIOD>"}):
             self.assertFalse(run_code(code, [bad])["ok"], bad)
+
+    def test_viewer_targets_reach_the_model_request_as_numbers_only(self):
+        flow = load("Report_Analysis_Button_v1.json")
+        validate = node(flow, "Validate Request")["parameters"]["jsCode"]
+        targets = {"unit": "idr", "semester": {"label": "Semester 2 2026", "actual": 1000000, "target": 12000000, "progress_percent": 8.3}}
+        checked = run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "requested_by": "viewer", "targets": targets}}])["result"][0]["json"]
+        self.assertEqual((checked["requested_by"], checked["targets"]), ("viewer", targets))
+        for bad in ("teks", [1, 2], 5):
+            self.assertIsNone(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "targets": bad}}])["result"][0]["json"]["targets"])
+        self.assertFalse(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "targets": {"x": "y" * 21000}}}])["ok"])
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu1", "2026-W39", False)
+        run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"].replace("<ANTHROPIC_MODEL>", "m")
+        with_targets = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]["request"]["messages"][0]["content"]
+        without = run_code(code, [run], {"Validate Request": {"items": [{"bu": "bu1", "period": "2026-W39", "targets": None}]}})["result"][0]["json"]["request"]["messages"][0]["content"]
+        self.assertEqual(json.loads(with_targets)["targets"], targets)
+        self.assertNotIn("targets", json.loads(without))
+        self.assertIn("hardware_gps_tracker", json.loads(with_targets)["analysis_keys"])
+        prompt = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        self.assertIn("targets", prompt)
 
     def format_error(self, item):
         code = node(load("Report_Generate_v1.json"), "Format Generate Error")["parameters"]["jsCode"]

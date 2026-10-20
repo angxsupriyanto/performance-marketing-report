@@ -143,6 +143,16 @@ Jalur tanpa mengekspor CSV sendiri, **tanpa penjadwalan** (Anda yang memicu, den
 
 Pengujian: `python -m unittest discover -s tests`. Test database membutuhkan server PostgreSQL sekali pakai: `REPORTS_TEST_ADMIN="host=127.0.0.1 port=5432 user=postgres" python -m unittest tests.test_database` (dengan `pip install -r requirements-dev.txt`). Test itu menolak berjalan bila database `marketing_reports` atau role `report_*` sudah ada.
 
+## Viewer web dan target
+
+`viewer/` adalah web internal (password bersama) untuk melihat report dari database, menekan tombol analisis, dan mengatur target. Pasang dengan `deploy/VIEWER.md`; keputusan desainnya:
+
+- **Target tidak ada di report.** Generator hanya menulis angka aktual dan slot kosong (`Target`, `Progress`, kartu progress). Viewer mengisinya saat report dibuka dari tabel `target_entries`, jadi target bisa diubah kapan saja tanpa membuat report baru.
+- **Tabel target append-only.** Menyimpan target menambah baris; tidak ada UPDATE atau DELETE. Mengosongkan target berarti menyimpan 0. Target bulanan per hardware (BU1, Rupiah) berlaku mulai bulan yang dipilih dan seterusnya sampai ada baris baru. Target semester berlaku per semester; target 1 tahun adalah jumlah dua semester. BU2 hanya memakai target semester dan tahun, dalam jumlah SQL campaign Ecosystem.
+- **Bulan sebuah minggu = bulan yang memuat hari Kamis minggu itu** (juga untuk semester dan tahun), aturan yang sama dengan penomoran minggu ISO. Progress bulan berjalan menjumlahkan minggu-minggu ISO utuh milik bulan itu sampai minggu report, jadi minggu yang melewati pergantian bulan tidak terbelah.
+- **BU1** menampilkan tabel Campaign Hardware (Submission, MQL, SQL, SQL Value, Target, Progress), funnel per hardware dengan bar progress target, dan panel analisis per hardware. **BU2** tidak punya panel hardware; ia menampilkan progress SQL Ecosystem terhadap target semester dan tahun, daftar SQL Ecosystem periode itu (kosong bila tidak ada), dan daftar Deal Won.
+- Analisis menerima `targets` (angka progress hasil hitung viewer) di samping `facts`. Model tetap tidak melihat nama perusahaan.
+
 ## Analisis deskriptif: langkah kedua setelah angka benar
 
 Salin `analysis.example.json` (BU2: `analysis.bu2.example.json`) menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.

@@ -6,12 +6,12 @@ Tiga workflow siap impor (n8n 2.x). Semuanya **dihasilkan** oleh `n8n/build_work
 |---|---|
 | `Report_Generate_v1` | Membaca tab *NEW Customers List*, mengirim hanya kolom yang dibutuhkan ke layanan laporan, menyimpan hasilnya ke PostgreSQL, lalu mengirim ringkasan agregat ke Telegram. |
 | `Report_Analysis_Button_v1` | Membaca run terbaru untuk BU dan periode yang dipilih, mengirim **hanya `facts` agregat** ke Claude, memvalidasi JSON balasan, menyisipkannya ke laporan, dan menyimpan hasilnya. |
-| `Report_View_v1` | GET `/webhook/report?bu=bu2&period=2026-W39` menampilkan laporan terbaru (dengan analisis bila ada). Dilindungi Basic Auth karena HTML memuat nama perusahaan. |
+| `Report_View_v1` | GET `/webhook/report?bu=bu2&period=2026-W39` menampilkan laporan terbaru (dengan analisis bila ada). Dilindungi Basic Auth karena HTML memuat nama perusahaan. **Digantikan oleh viewer web (`deploy/VIEWER.md`); tidak perlu diimpor bila Anda memakai viewer.** Kolom Target dan Progress tampil sebagai `Belum diatur` di sini karena target hanya diisi viewer. |
 
 **Tidak ada penjadwalan.** Semua dijalankan manual, dan periode selalu disebut eksplisit (tidak ada tebakan "minggu lalu"). Dua cara memicu `Generate` dan `Analysis`:
 
 - **Dari editor n8n:** buka workflow, ubah nilai di node **Manual Parameters** (`bu` = `all`, `bu1`, atau `bu2`; `period` = `2026-W39` untuk mingguan atau `2026-09` untuk bulanan; khusus Analysis `bu` wajib `bu1` atau `bu2`), lalu klik *Execute workflow*. Nilai bawaan `<PERIOD>` dan `<BU>` sengaja membuat eksekusi gagal dengan pesan jelas sampai Anda mengisinya.
-- **Dari luar (tombol):** `POST /webhook/report-generate` atau `/webhook/report-analysis` dengan header token dan body `{"bu":"bu2","period":"2026-W39"}`.
+- **Dari luar (tombol):** `POST /webhook/report-generate` atau `/webhook/report-analysis` dengan header token dan body `{"bu":"bu2","period":"2026-W39"}`. Viewer memanggil `/webhook/report-analysis` dengan body yang sama ditambah `targets` (angka progress terhadap target, tanpa nama perusahaan) yang diteruskan ke model.
 
 Urutan pemakaian: jalankan Generate dulu untuk periode itu, lalu Analysis. Analysis menolak bila belum ada laporan numerik untuk BU dan periode tersebut.
 
