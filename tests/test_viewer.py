@@ -379,7 +379,7 @@ class ViewerTests(ViewerCase):
         self.assertIn("Tercapai Rp 1.000.000 dari target Rp 12.000.000", text)
         self.assertIn("Tercapai Rp 1.000.000 dari target Rp 20.000.000", text)
         self.assertIn("5,0% dari target tahun", text)
-        rows = soup.select("table")[1].select("tbody tr")
+        rows = [t for t in soup.select("table") if "Campaign Hardware" in t.select_one("caption").get_text() and not t.find_parent(attrs={"data-cohort-view": "same"})][0].select("tbody tr")
         self.assertEqual([c.get_text() for c in rows[1].select("td")][5:], ["Rp 4.000.000", "25,0%"])
         self.assertEqual([c.get_text() for c in rows[0].select("td")][5:], ["Belum diatur", "-"])
         self.assertIn("Total target September 2026", text)

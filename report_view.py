@@ -268,18 +268,58 @@ def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> 
     return "".join(parts)
 
 
+COHORT_JS = (
+    "(function(){document.querySelectorAll('[data-cohort-group]').forEach(function(g){var t=g.querySelector('[data-cohort-toggle]');"
+    "function sync(){var on=t.checked;g.querySelectorAll('[data-cohort-view]').forEach(function(v){v.hidden=(v.dataset.cohortView==='same')!==on;});"
+    "g.querySelectorAll('[data-cohort-note]').forEach(function(n){n.hidden=!on;});}t.addEventListener('change',sync);sync();});})();"
+)
+
+
+def cohort_toggle(label: str, what: str, own: str) -> str:
+    """The switch above a list: off shows everything in the period, on only leads whose Inbound Date is also in the period."""
+    return (
+        '<div style="margin: 0 0 12px"><label style="display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: #17283e; font-weight: 500; cursor: pointer">'
+        f'<input type="checkbox" role="switch" data-cohort-toggle style="width: 20px; height: 20px; margin: 0">Hanya yang submission-nya di {e(label)}</label>'
+        f'<div style="color: {MUTED}">Mati: semua {e(what)} pada {e(label)}. Menyala: hanya {e(own)} yang Inbound Date-nya juga di {e(label)}. Untuk report bulanan memakai bulan yang sama.</div></div>'
+    )
+
+
+def cohort_lists(label: str, what: str, own: str, all_html: str, same_html: str, shown: int, total: int, unit: str) -> str:
+    return (
+        f'<div data-cohort-group>{cohort_toggle(label, what, own)}<div data-cohort-view="all">{all_html}</div>'
+        f'<div data-cohort-view="same" hidden><p style="margin: 0 0 12px; color: {TEXT}">Menampilkan {dotted(shown)} dari {dotted(total)} {e(unit)} yang submission-nya di {e(label)}.</p>{same_html}</div></div>'
+    )
+
+
+def sql_table(view: dict, rows: list[dict], total_value) -> str:
+    label = view["label"]
+    body = "".join(
+        f"<tr>{td('Company', r['company'])}{td('Industry', r['industry'])}{td('Campaign', r['campaign'])}{td('SQL Value', idr(r['value']), True)}{td('Inbound ke SQL', r['timing'])}</tr>" for r in rows
+    ) or f'<tr><td colspan="5" data-label="" style="color: {MUTED}">Tidak ada SQL di {e(label)}.</td></tr>'
+    foot = f'<tr><td colspan="3" data-label="">TOTAL {dotted(len(rows))} SQL</td>{td("SQL Value", idr(total_value), True)}<td data-label=""></td></tr>'
+    return box_table(f"Daftar SQL {label}, diurutkan dari SQL Value terbesar", [th("Company"), th("Industry"), th("Campaign"), th("SQL Value", True, True), th("Inbound ke SQL")], body, foot)
+
+
 def sql_section(view: dict) -> str:
     rows = view["sql_list"]["rows"]
     label = view["label"]
     note = "Diurutkan dari SQL Value terbesar."
     if view.get("sql_note"):
         note += " " + view["sql_note"]
-    body = "".join(
-        f"<tr>{td('Company', r['company'])}{td('Industry', r['industry'])}{td('Campaign', r['campaign'])}{td('SQL Value', idr(r['value']), True)}{td('Inbound ke SQL', r['timing'])}</tr>" for r in rows
-    ) or f'<tr><td colspan="5" data-label="" style="color: {MUTED}">Tidak ada SQL di {e(label)}.</td></tr>'
-    foot = f'<tr><td colspan="3" data-label="">TOTAL {dotted(view["sql_list"]["count"])} SQL</td>{td("SQL Value", idr(view["sql_list"]["value"]), True)}<td data-label=""></td></tr>'
-    table = box_table(f"Daftar SQL {label}, diurutkan dari SQL Value terbesar", [th("Company"), th("Industry"), th("Campaign"), th("SQL Value", True, True), th("Inbound ke SQL")], body, foot)
+    table = sql_table(view, rows, view["sql_list"]["value"])
+    if rows and "same" in rows[0]:
+        same_rows = [r for r in rows if r["same"]]
+        table = cohort_lists(label, "SQL", "SQL", table, sql_table(view, same_rows, sum(r["value"] for r in same_rows)), len(same_rows), len(rows), "SQL")
     return f'<div style="margin-top: 24px">{h3("Daftar SQL " + label)}{muted_p(e(note))}{table}</div>'
+
+
+def won_table(view: dict, rows: list[dict], total_value) -> str:
+    label = view["label"]
+    body = "".join(
+        f"<tr>{td('Company', r['company'])}{td('Industry', r['industry'])}{td('Campaign', r['campaign'])}{td('Deal Value', idr(r['value']), True)}{td('Inbound ke Deal Won', r['timing'])}</tr>" for r in rows
+    ) or f'<tr><td colspan="5" data-label="" style="color: {MUTED}">Tidak ada Deal Won di {e(label)}.</td></tr>'
+    foot = f'<tr><td colspan="3" data-label="">TOTAL {dotted(len(rows))} DEAL WON</td>{td("Deal Value", idr(total_value), True)}<td data-label=""></td></tr>'
+    return box_table(f"Daftar Deal Won {view['bu']} {label}, diurutkan dari Deal Value terbesar", [th("Company"), th("Industry"), th("Campaign"), th("Deal Value", True, True), th("Inbound ke Deal Won")], body, foot)
 
 
 def won_section(view: dict) -> str:
@@ -288,11 +328,11 @@ def won_section(view: dict) -> str:
     head = h3("Daftar Deal Won " + label) + muted_p(e(f"Diurutkan dari Deal Value terbesar. Nilai mengikuti kolom {won['column']} di Campaign Tracker."))
     if not won["rows"]:
         return f'<div style="margin-top: 24px">{head}<div style="background: #ffffff; border: 1px solid {LINE}; border-radius: 6px; padding: 20px 24px; color: {MUTED}">Tidak ada Deal Won di {e(label)}.</div></div>'
-    body = "".join(
-        f"<tr>{td('Company', r['company'])}{td('Industry', r['industry'])}{td('Campaign', r['campaign'])}{td('Deal Value', idr(r['value']), True)}{td('Inbound ke Deal Won', r['timing'])}</tr>" for r in won["rows"]
-    )
-    foot = f'<tr><td colspan="3" data-label="">TOTAL {dotted(won["count"])} DEAL WON</td>{td("Deal Value", idr(won["value"]), True)}<td data-label=""></td></tr>'
-    table = box_table(f"Daftar Deal Won {view['bu']} {label}, diurutkan dari Deal Value terbesar", [th("Company"), th("Industry"), th("Campaign"), th("Deal Value", True, True), th("Inbound ke Deal Won")], body, foot)
+    rows = won["rows"]
+    table = won_table(view, rows, won["value"])
+    if "same" in rows[0]:
+        same_rows = [r for r in rows if r["same"]]
+        table = cohort_lists(label, "Deal Won", "Deal Won", table, won_table(view, same_rows, sum(r["value"] for r in same_rows)), len(same_rows), len(rows), "Deal Won")
     return f'<div style="margin-top: 24px">{head}{table}</div>'
 
 
@@ -331,25 +371,35 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
             f'<span style="font-weight: 600; color: {INK}">{e(pct_text(done))} dari target</span></div><div class="track" aria-hidden="true"><div class="fill" style="width: {width(done)}"></div></div></div></div>'
         )
     panel.append("</div>")
-    body = ""
-    for h in hw:
-        target = targets.get(h["name"])
-        body += (
-            f"<tr>{td('Produk', h['name'])}{td('Submission', dotted(h['submission']), True)}{td('MQL', dotted(h['mql']), True)}{td('SQL', dotted(h['sql']), True)}"
-            f"{td('SQL Value', idr(h['week']), True)}{td('Target', idr(target) if target else 'Belum diatur', True)}"
-            f"{td('Progress', pct_text(percent(h['month_to_date'], target)) if target else '-', True)}</tr>"
+    def hw_table(same: bool) -> str:
+        mql, sql, value = ("same_mql", "same_sql", "same_value") if same else ("mql", "sql", "week")
+        body = ""
+        for h in hw:
+            target = targets.get(h["name"])
+            body += (
+                f"<tr>{td('Produk', h['name'])}{td('Submission', dotted(h['submission']), True)}{td('MQL', dotted(h[mql]), True)}{td('SQL', dotted(h[sql]), True)}"
+                f"{td('SQL Value', idr(h[value]), True)}{td('Target', idr(target) if target else 'Belum diatur', True)}"
+                f"{td('Progress', pct_text(percent(h['month_to_date'], target)) if target else '-', True)}</tr>"
+            )
+        total = {k: sum(h[k] for h in hw) for k in ("submission", mql, sql)}
+        shown_value = sum(h[value] for h in hw)
+        foot = (
+            f"<tr>{td('Produk', f'TOTAL {len(hw)} PRODUK')}{td('Submission', dotted(total['submission']), True)}{td('MQL', dotted(total[mql]), True)}{td('SQL', dotted(total[sql]), True)}"
+            f"{td('SQL Value', idr(shown_value), True)}{td('Target', idr(total_target) if total_target > 0 else 'Belum diatur', True)}"
+            f"{td('Progress', pct_text(percent(mtd_total, total_target)) if total_target > 0 else '-', True)}</tr>"
         )
-    total = {k: sum(h[k] for h in hw) for k in ("submission", "mql", "sql")}
-    foot = (
-        f"<tr>{td('Produk', f'TOTAL {len(hw)} PRODUK')}{td('Submission', dotted(total['submission']), True)}{td('MQL', dotted(total['mql']), True)}{td('SQL', dotted(total['sql']), True)}"
-        f"{td('SQL Value', idr(week_total), True)}{td('Target', idr(total_target) if total_target > 0 else 'Belum diatur', True)}"
-        f"{td('Progress', pct_text(percent(mtd_total, total_target)) if total_target > 0 else '-', True)}</tr>"
-    )
-    headers = [th("Produk"), th("Submission", True), th("MQL", True), th("SQL", True), th("SQL Value", True), th("Target", True), th("Progress", True)]
-    table = (
-        f'<div><div><div class="tablebox"><table class="list"><caption class="sr">Campaign Hardware {e(label)} per produk</caption><thead><tr>{"".join(headers)}</tr></thead>'
-        f"<tbody>{body}</tbody><tfoot>{foot}</tfoot></table></div></div>{analysis_box('Analysis', 'hardware_summary', analysis)}</div>"
-    )
+        headers = [th("Produk"), th("Submission", True), th("MQL", True), th("SQL", True), th("SQL Value", True), th("Target", True), th("Progress", True)]
+        return (
+            f'<div><div class="tablebox"><table class="list"><caption class="sr">Campaign Hardware {e(label)} per produk</caption><thead><tr>{"".join(headers)}</tr></thead>'
+            f"<tbody>{body}</tbody><tfoot>{foot}</tfoot></table></div></div>"
+        )
+
+    has_cohort = "same_mql" in hw[0]
+    if has_cohort:
+        table_html = f'<div data-cohort-view="all">{hw_table(False)}</div><div data-cohort-view="same" hidden>{hw_table(True)}</div>'
+    else:
+        table_html = hw_table(False)
+    table = f"<div>{table_html}{analysis_box('Analysis', 'hardware_summary', analysis)}</div>"
     blocks = []
     for h in hw:
         target = targets.get(h["name"])
@@ -377,9 +427,15 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
             f'<div style="margin-top: 20px"><div style="font-weight: 600; color: {INK}; margin-bottom: 8px">SQL Value {e(month["label"])} terhadap target</div>{stack}</div></div>'
             f'{analysis_panel("Analysis " + h["name"], "hardware_" + h["slug"], analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px", "split-side")}</div>'
         )
+    toggle = note = ""
+    if has_cohort:
+        toggle = cohort_toggle(label, "MQL, SQL, dan SQL Value", "lead")
+        note = (f'<p data-cohort-note hidden style="margin: 0 0 12px; color: {TEXT}">Kolom MQL, SQL, dan SQL Value hanya menghitung lead yang submission-nya di {e(label)}. '
+                f'Kolom Target dan Progress tetap memakai semua SQL bulan berjalan.</p>')
+    group = ("<div data-cohort-group>", "</div>") if has_cohort else ("", "")
     return (
         f'<div style="margin-top: 32px">{h3("Campaign Hardware")}{muted_p(f"{count} produk hardware di {e(company_name(view["bu"], names))}. Produk lain dan tag kosong tidak dihitung.")}'
-        f'{"".join(panel)}{table}</div>'
+        f'{group[0]}{toggle}{note}{"".join(panel)}{table}{group[1]}</div>'
         f'<div style="margin-top: 32px">{h3("Funnel per hardware")}'
         f'{muted_p(f"Submission, MQL, SQL, dan Deal Won {e(label)} untuk tiap produk, ditambah progress SQL Value bulan ini terhadap target produk itu.", 8)}{"".join(blocks)}</div>'
     )
@@ -426,7 +482,7 @@ def render_document(view: dict, tg: dict | None = None, analysis: dict | None = 
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
         f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names)}</main>'
-        f'<script type="application/json" id="{VIEW_ID}">{data}</script></body></html>'
+        f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
 
 

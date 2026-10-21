@@ -112,7 +112,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(view["progress"]["unit"], "count")
         self.assertEqual(view["progress"]["year"]["actual"], 1)
         self.assertEqual(view["focus"]["rows"], [{"company": "Co3", "industry": "Mfg", "date": "2026-09-25", "value": 5000000}])
-        self.assertEqual(view["won_list"]["rows"], [{"company": "Co5", "industry": "Mfg", "campaign": "Camp A", "value": 2500000, "timing": "4 hari"}])
+        self.assertEqual(view["won_list"]["rows"], [{"company": "Co5", "industry": "Mfg", "campaign": "Camp A", "value": 2500000, "timing": "4 hari", "same": True}])
         self.assertEqual(apply_analysis.analysis_keys(out.read_text()), ["executive_summary"])
 
     def test_bu2_lists_say_so_when_the_period_has_none(self):

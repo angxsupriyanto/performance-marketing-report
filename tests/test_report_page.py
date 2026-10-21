@@ -27,6 +27,11 @@ def page(bu, period="2026-W39"):
     return html, BeautifulSoup(html, "html.parser")
 
 
+def visible_tables(soup):
+    """The cohort switch keeps a second copy of a table for the "same period" view; the mockup's tables are the default view."""
+    return [t for t in soup.select("table") if not t.find_parent(attrs={"data-cohort-view": "same"})]
+
+
 def headings(soup):
     return [h.get_text() for h in soup.select("h2, h3, h4")]
 
@@ -54,8 +59,8 @@ class MockupConformanceTests(unittest.TestCase):
         _, soup = page("bu1")
         self.assertEqual(headers(soup, "Daftar SQL Week 39"), ["Company", "Industry", "Campaign", "SQL Value", "Inbound ke SQL"])
         self.assertEqual(headers(soup, "Campaign Hardware"), ["Produk", "Submission", "MQL", "SQL", "SQL Value", "Target", "Progress"])
-        self.assertEqual(len(soup.select("table")), 2)
-        self.assertEqual([td.get_text() for td in soup.select("table")[1].select("tfoot td")][0], "TOTAL 5 PRODUK")
+        self.assertEqual(len(visible_tables(soup)), 2)
+        self.assertEqual([td.get_text() for td in visible_tables(soup)[1].select("tfoot td")][0], "TOTAL 5 PRODUK")
 
     def test_bu2_has_exactly_the_mockup_sections_in_the_mockup_order(self):
         html, soup = page("bu2")
@@ -104,7 +109,8 @@ class MockupConformanceTests(unittest.TestCase):
         markup = html.split('<script type="application/json"')[0]  # the data block is inert; the visible page must be escaped
         self.assertNotIn("<img src=x", markup)
         self.assertNotIn("<b>", markup)
-        self.assertEqual(html.count("</script>"), 1)  # a company name cannot close the data block early
+        self.assertEqual(html.count("</script>"), 2)  # the data block and the switch script; a company name cannot close the data block early
+        self.assertEqual(html.split('<script type="application/json"')[1].split("</script>")[0].count("</"), 0)
         self.assertIn("&lt;img src=x onerror=alert(1)&gt;", markup)
         view = report_view.extract_view(html)
         self.assertEqual(view["focus"]["rows"][0]["company"], "<img src=x onerror=alert(1)>")
@@ -124,7 +130,7 @@ class MockupConformanceTests(unittest.TestCase):
         self.assertIn("SQL &lt;b&gt;naik&lt;/b&gt;".replace("&lt;", "<").replace("&gt;", ">"), text)
         self.assertEqual(soup.select_one('[data-analysis="executive_summary"]').get("style"), None)
         self.assertEqual(soup.select_one('[data-analysis="hardware_dashcam"]').get_text(), "Kosong sampai analisis dibuat.")
-        rows = soup.select("table")[1].select("tbody tr")
+        rows = visible_tables(soup)[1].select("tbody tr")
         self.assertEqual([c.get_text() for c in rows[1].select("td")][4:], ["Rp 1.000.000", "Rp 4.000.000", "25,0%"])
         self.assertEqual([c.get_text() for c in rows[2].select("td")][5:], ["Belum diatur", "-"])
         broken = BeautifulSoup(report_view.render_document(view, {"error": True, "semester": None, "year": None, "hardware": {}}), "html.parser")

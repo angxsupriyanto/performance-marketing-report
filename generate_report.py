@@ -474,7 +474,8 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
         inbound = parse_date(r.get("Inbound Date", ""), "Inbound Date")
         event = parse_date(r[STAGES["SQL"]], "SQL date")
         timing = f"{(event - inbound).days} hari, {same_word if inbound_in_period(r, period) else 'Backlog'}" if inbound else "—"
-        sql_rows.append({"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "campaign": campaign(r), "value": whole(stage_value(r, "SQL")), "timing": timing})
+        sql_rows.append({"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "campaign": campaign(r), "value": whole(stage_value(r, "SQL")), "timing": timing,
+                         "same": bool(inbound and inbound_in_period(r, period))})
     now, prev = metrics["now"], metrics["prev"]
     whole_all = lambda d: {k: whole(v) for k, v in d.items()}
     year, sem = progress["windows"]["year"], progress["windows"]["semester"]
@@ -504,7 +505,9 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
             sets = {stage: [r for r in weeks["now"][stage] if product(r) == name] for stage in STAGES}
             values = progress["hardware"][name]
             hardware.append({"name": name, "slug": slug(name), "submission": len(sets["Submission"]), "mql": len(sets["MQL"]), "sql": len(sets["SQL"]),
-                             "deal_won": len(sets["Deal Won"]), "week": whole(values["week_sql_value"]), "before": whole(values["month_before_period"]), "month_to_date": whole(values["month_to_date"])})
+                             "deal_won": len(sets["Deal Won"]), "same_mql": sum(inbound_in_period(r, period) for r in sets["MQL"]),
+                             "same_sql": sum(inbound_in_period(r, period) for r in sets["SQL"]),
+                             "same_value": whole(sum((stage_value(r, "SQL") for r in sets["SQL"] if inbound_in_period(r, period)), 0)), "week": whole(values["week_sql_value"]), "before": whole(values["month_before_period"]), "month_to_date": whole(values["month_to_date"])})
             junk = sum(r.get("Remark", "").casefold() == "junk leads" for r in sets["Submission"])
             facts["hardware"].append({"product": name, "now": dict(zip(keys, [len(sets["Submission"]), len(sets["MQL"]), len(sets["SQL"]), sum(stage_value(r, "SQL") for r in sets["SQL"]), len(sets["Deal Won"]), sum(stage_value(r, "Deal Won") for r in sets["Deal Won"]), junk]))})
         view["hardware"] = hardware
@@ -519,7 +522,8 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
         won_rows = []
         for r in rows:
             inbound, event = parse_date(r.get("Inbound Date", ""), "Inbound Date"), parse_date(r[STAGES["Deal Won"]], STAGES["Deal Won"])
-            won_rows.append({"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "campaign": campaign(r), "value": whole(stage_value(r, "Deal Won")), "timing": f"{(event - inbound).days} hari" if inbound else "—"})
+            won_rows.append({"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "campaign": campaign(r), "value": whole(stage_value(r, "Deal Won")), "timing": f"{(event - inbound).days} hari" if inbound else "—",
+                             "same": bool(inbound and inbound_in_period(r, period))})
         view["won_list"] = {"rows": won_rows, "count": len(rows), "value": whole(now["Deal Won Value"]), "column": WON_VALUE.replace("SUM of ", "")}
     view["analysis_keys"] = report_view.analysis_keys(view)
     return view, metrics, same, facts, lists

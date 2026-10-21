@@ -53,6 +53,12 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 - **Nama perusahaan** mengatur nama tampil untuk `bu1` dan `bu2` (contoh McEasy dan LOL). Identitas internal, tautan, data, dan akses pengguna tidak berubah ketika nama diganti. Sebelum diatur, tampil "Perusahaan 1" dan "Perusahaan 2". Telegram dan prompt analisis tidak memakai nama ini.
 - Lupa password admin satu-satunya: jalankan `UPDATE reports.viewer_users SET password_hash = '<hash dari python -m viewer.hash_password>' WHERE username = 'admin'` sebagai superuser.
 
+## Toggle "Hanya yang submission-nya di Week n"
+
+- Satu saklar di tiap bagian berikut: **McEasy** (`hardware_report`): Daftar SQL dan tabel Campaign Hardware. **LOL** (`deal_won_list`): Daftar SQL dan Daftar Deal Won. Mati (bawaan): semua SQL, MQL, atau Deal Won pada periode itu. Menyala: hanya yang **Inbound Date**-nya juga di periode itu (untuk report bulanan, bulan yang sama).
+- Pada tabel Campaign Hardware, hanya kolom MQL, SQL, dan SQL Value yang berubah. Submission, Target, dan Progress tetap, begitu pula kartu target, bagian Progress target, dan blok Funnel per hardware.
+- Saklar bekerja di browser dari data yang sudah ada di halaman, tanpa permintaan ke server. Report yang disimpan sebelum fitur ini tampil tanpa saklar sampai Report Generate dijalankan lagi.
+
 ## Edit analisis manual
 
 - Setiap panel analisis (Executive Summary, ringkasan hardware, dan satu per produk) punya chip status: **AI · nama model** atau **Edited**, plus baris asal teks ("Dibuat oleh model ... · waktu", "Diedit oleh admin · waktu · model awal: ...", atau "Ditulis manual oleh ... · belum ada analisis AI"). Semua orang dengan akses ke report melihatnya; hanya admin yang melihat tombol Edit, Tulis manual, dan Kembalikan ke versi AI.
