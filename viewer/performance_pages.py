@@ -1,4 +1,5 @@
-"""HTML of the Performa page, following the approved mockup (Performa.dc.html)."""
+"""HTML of the Performa page, following the approved mockup (Performa.dc.html): a sticky sidebar with the display settings and the six
+filters, a "Menampilkan" box with the active filters, the charts, the range summary and the cohort matrices."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -6,7 +7,7 @@ from html import escape
 from urllib.parse import urlencode
 
 from viewer import pages
-from viewer.performance import ERR_DAYS, ERR_ORDER, HEAT, MATRIX_COLUMNS, MATRIX_KEYS, METRICS, UNITS, compact, nice_max
+from viewer.performance import DIMENSIONS, ERR_DAYS, ERR_ORDER, HEAT, MATRIX_COLUMNS, MATRIX_KEYS, UNITS, compact, nice_max
 
 W, H, LEFT, RIGHT, TOP, BOTTOM = 640, 240, 48, 620, 16, 200
 INK, MUTED, LINE, BLUE = "#17283e", "#607188", "#dfe7f0", "#2159a9"
@@ -14,17 +15,41 @@ SERIES_STYLE = {  # key: (label, colour, marker shape), the same four marks as t
     "sub": ("Submission", "#6f8199", "circle"), "mql": ("MQL", BLUE, "square"), "sql": ("SQL", "#087450", "diamond"), "won": ("Deal Won", INK, "triangle"),
     "sqlv": ("SQL Value", "#087450", "diamond"), "wonv": ("Deal Won Value", INK, "triangle"),
 }
-TINTS = ("0.18", "0.14", "0.10", "0.07", "0.04")
 CSS = f"""
-.pf-seg{{display:inline-flex}}
-.pf-seg a{{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 16px;border:1px solid #6f8199;background:#fff;color:{INK};font:500 14px Inter,Arial,sans-serif;text-decoration:none}}
-.pf-seg a+a{{margin-left:-1px}}
-.pf-seg a:first-child{{border-radius:6px 0 0 6px}}.pf-seg a:last-child{{border-radius:0 6px 6px 0}}
-.pf-seg a[aria-current=true]{{background:{BLUE};border-color:{BLUE};color:#fff;font-weight:600;position:relative}}
+.pf-layout{{display:grid;grid-template-columns:288px minmax(0,1fr);gap:24px;align-items:start}}
+.pf-side{{position:sticky;top:16px;max-height:calc(100vh - 32px);overflow-y:auto;padding:20px;box-sizing:border-box}}
+.pf-content{{min-width:0}}
+.pf-actions{{display:flex;flex-direction:column;gap:4px;margin-top:16px;position:sticky;bottom:-20px;padding:12px 0 4px;background:#fff}}
+.pf-seg{{display:flex}}
+.pf-seg label{{flex:1;position:relative;display:block}}
+.pf-seg input{{position:absolute;opacity:0;inset:0;width:100%;height:100%;margin:0;cursor:pointer}}
+.pf-seg span{{display:flex;align-items:center;justify-content:center;height:44px;padding:0 8px;border:1px solid #6f8199;background:#fff;color:{INK};font:500 14px Inter,Arial,sans-serif}}
+.pf-seg label+label span{{margin-left:-1px}}
+.pf-seg label:first-child span{{border-radius:6px 0 0 6px}}.pf-seg label:last-child span{{border-radius:0 6px 6px 0}}
+.pf-seg input:checked+span{{background:{BLUE};border-color:{BLUE};color:#fff;font-weight:600}}
+.pf-seg input:focus-visible+span{{outline:2px solid {BLUE};outline-offset:2px}}
+.pf-dd summary{{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:{INK};cursor:pointer;list-style:none}}
+.pf-dd summary::-webkit-details-marker{{display:none}}
+.pf-dd summary::after{{content:"";width:8px;height:8px;border-right:2px solid {MUTED};border-bottom:2px solid {MUTED};transform:rotate(45deg);margin:-4px 0 0 4px;flex:none}}
+.pf-dd[open] summary::after{{transform:rotate(-135deg);margin-top:4px}}
+.pf-dd .fl{{font-weight:500;flex:1}}.pf-dd .fv{{color:{MUTED}}}
+.pf-panel{{margin-top:6px;border:1px solid {LINE};border-radius:6px;background:#fff;padding:4px 12px;max-height:260px;overflow-y:auto}}
+.pf-opt{{display:flex;align-items:center;gap:10px;min-height:44px;color:{INK};cursor:pointer}}
+.pf-opt input{{width:20px;height:20px;margin:0;flex:none}}
+.pf-opt .t{{flex:1;min-width:0;overflow-wrap:anywhere}}.pf-opt .n{{color:{MUTED}}}
+.pf-chips{{display:flex;flex-wrap:wrap;gap:8px;list-style:none;margin:0;padding:0}}
+.pf-chip{{display:inline-flex;align-items:center;min-height:32px;padding:0 4px 0 12px;border:1px solid #6f8199;border-radius:16px;background:#edf4ff;color:{INK};font-weight:500}}
+.pf-chip a{{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:16px;color:{INK};text-decoration:none;font:600 18px/1 Inter,Arial,sans-serif}}
 .pf-legend{{display:flex;flex-wrap:wrap;gap:8px 24px;margin-top:12px;color:#394d65}}
 .pf-chart text{{font-family:Inter,Arial,sans-serif}}
 .pf-heat th.num,.pf-heat td.num{{text-align:center;min-width:64px}}
-@media (max-width:680px){{.pf-heat thead{{position:static}}.pf-heat tr{{display:table-row;padding:0}}.pf-heat td,.pf-heat th{{display:table-cell;padding:12px 16px}}.pf-heat td::before{{content:none}}}}
+.pf-heat thead th{{background:#fff}}
+.pf-heat .older{{min-width:88px;white-space:nowrap}}
+.pf-heat .stick-l{{position:sticky;left:0;z-index:2;background:#fff;min-width:104px;white-space:nowrap}}
+.pf-heat .stick-r{{position:sticky;right:0;z-index:2;background:#fff;box-shadow:-1px 0 0 {LINE}}}
+.pf-heat .grp-th{{background:#edf4ff!important;text-align:left}}
+.pf-heat .grp{{position:sticky;left:120px;display:inline-block;color:{INK};font-weight:600}}
+@media (max-width:1000px){{.pf-layout{{grid-template-columns:1fr}}.pf-side{{position:static;max-height:none}}.pf-actions{{position:static}}}}
 """
 
 
@@ -93,76 +118,124 @@ def _pct(v) -> str:
     return "N/A" if v is None else f"{v:.1f}".replace(".", ",") + "%"
 
 
+def query_for(bu: str, params, drop: tuple[str, str] | None = None, keep_filters: bool = True) -> str:
+    """The address of this page for the current choices; `drop` removes one chosen filter value (a chip), keep_filters=False removes all."""
+    pairs = [("bu", bu), ("from", params.start.isoformat()), ("to", params.end.isoformat()), ("per", params.per), ("matriks", params.matriks)]
+    if keep_filters:
+        for key, _ in DIMENSIONS:
+            pairs += [(key, v) for v in params.filters.get(key, []) if drop != (key, v)]
+    return "/performa?" + urlencode(pairs)
+
+
+def _date_text(day) -> str:
+    return f"{day.day} {pages.MONTHS[day.month - 1]} {day.year}"
+
+
 def matrix_section(params, matrix: dict | None, unit: str) -> str:
     """The "Matriks cohort" block: leads counted by the period a stage happened (rows) and the period they came from (columns)."""
     _, row_what, col_what = MATRIX_KEYS[params.matriks]
-    col_date = "Inbound Date" if col_what == "submission" else "MQL Date"
-    note = (f"Setiap baris adalah {unit} terjadinya {row_what}. Setiap kolom adalah {unit} asal lead itu menurut {col_date}. Isi sel adalah jumlah lead. "
-            f"Kolom menampilkan {MATRIX_COLUMNS} {unit} terakhir pada rentang yang dipilih; yang lebih lama digabung di kolom Lebih lama. Kolom paling kanan adalah total tiap baris.")
     options = "".join(f'<option value="{k}"{" selected" if k == params.matriks else ""}>{escape(v[0])}</option>' for k, v in MATRIX_KEYS.items())
-    head = (f'<section aria-label="Matriks cohort" style="margin-top:32px"><h2 class="vw-h2">Matriks cohort</h2><p style="margin:0 0 16px;max-width:760px;color:{MUTED}">{escape(note)}</p>'
+    head = (f'<section aria-label="Matriks cohort"><h2 class="vw-h2" style="margin-bottom:16px">Matriks cohort</h2>'
             f'<div class="vw-field" style="max-width:280px;margin-bottom:16px"><label for="matriks">Matriks yang ditampilkan</label><select id="matriks" name="matriks" form="perf-form" data-auto>{options}</select></div>')
     if matrix is None:
         return head + ('<div class="vw-box" style="padding:24px"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Matriks tersedia per Minggu atau Bulan</div>'
-                       '<div>Pilih Minggu atau Bulan pada Pengaturan tampilan di atas. Per hari, kolomnya terlalu banyak untuk dibaca.</div></div></section>')
-    if matrix["missing"]:
-        return head + ('<div class="vw-box" style="padding:24px"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Matriks belum ada di data ini</div>'
-                       '<div>Data Performa ini dibuat sebelum matriks tersedia. Jalankan workflow Performa Generate di n8n lagi, lalu muat ulang halaman ini.</div></div></section>')
-    row_head = ("Bulan " if params.per == "bulan" else "Minggu ") + row_what
-    col_head = ("Bulan " if params.per == "bulan" else "Minggu ") + col_what
-    col_ths = "".join(f'<th scope="col" class="num">{escape(c)}</th>' for c in matrix["columns"]) + '<th scope="col" class="num">Lebih lama</th><th scope="col" class="num">Total baris</th>'
+                       '<div>Pilih Minggu atau Bulan pada Tampilan di sebelah kiri. Per hari, kolomnya terlalu banyak untuk dibaca.</div></div></section>')
+    prefix = "Bulan " if params.per == "bulan" else "Minggu "
+    col_ths = "".join(f'<th scope="col" class="num">{escape(c)}</th>' for c in matrix["columns"]) + '<th scope="col" class="num older">Lebih lama</th><th scope="col" class="num stick-r">Total baris</th>'
     body = ""
     for row in matrix["rows"]:
         cells = "".join(
             f'<td data-label="{escape(col)}" class="num"' + (f' style="background:{c["bg"]};color:#17283e;font-weight:500"' if c["n"] else "") + f'>{c["n"] if c["n"] else ""}</td>'
             for col, c in zip(matrix["columns"], row["cells"])
         )
-        body += (f'<tr><th scope="row" style="font-weight:400;color:#17283e;text-align:left;padding:12px 16px;border-top:1px solid {LINE};white-space:nowrap">{escape(row["label"])}</th>{cells}'
-                 f'<td class="num">{row["older"] if row["older"] else ""}</td><td class="num" style="font-weight:600;color:#17283e">{row["total"]}</td></tr>')
+        body += (f'<tr><th scope="row" class="stick-l" style="font-weight:400;color:#17283e;text-align:left;padding:12px 16px;border-top:1px solid {LINE}">{escape(row["label"])}</th>{cells}'
+                 f'<td class="num older">{row["older"] if row["older"] else ""}</td><td class="num stick-r" style="font-weight:600;color:#17283e">{row["total"]}</td></tr>')
     labels = ("1 lead", "2", "3", "4 sampai 5", "6 atau lebih")
     swatches = [(HEAT[4][1], labels[0]), (HEAT[3][1], labels[1]), (HEAT[2][1], labels[2]), (HEAT[1][1], labels[3]), (HEAT[0][1], labels[4])]
     legend = "".join(f'<span><span style="display:inline-block;width:14px;height:14px;border:1px solid #6f8199;border-radius:3px;margin-right:6px;vertical-align:-2px;background:{c}"></span>{escape(t)}</span>' for c, t in swatches)
     cut = f'<p style="margin:12px 0 0;color:{MUTED}">Menampilkan 60 baris terbaru. Persempit rentang untuk melihat yang lebih lama.</p>' if matrix["truncated"] else ""
     caption = f'Matriks cohort {"Submission" if col_what == "submission" else "MQL"} ke {row_what} per {unit}'
     return (head + f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table pf-heat"><caption class="vw-sr">{escape(caption)}</caption><thead>'
-            f'<tr><th scope="col" rowspan="2" style="vertical-align:bottom">{escape(row_head)}</th><th scope="colgroup" colspan="{MATRIX_COLUMNS + 2}" style="text-align:right;background:#edf4ff;color:#17283e;font-weight:600">{escape(col_head)}</th></tr>'
+            f'<tr><th scope="col" rowspan="2" class="stick-l" style="vertical-align:bottom">{escape(prefix + row_what)}</th><th scope="colgroup" colspan="{MATRIX_COLUMNS + 2}" class="grp-th"><span class="grp">{escape(prefix + col_what)}</span></th></tr>'
             f'<tr>{col_ths}</tr></thead><tbody>{body}</tbody></table></div><div class="pf-legend" style="color:#394d65">{legend}</div>'
             f'<p style="margin:12px 0 0;color:{MUTED}">Sel kosong berarti tidak ada lead. Warna hanya membantu membaca; angka tetap tertulis di tiap sel. Kolom paling kanan adalah total baris: jumlah semua kolom di baris itu, termasuk Lebih lama.</p>{cut}</section>')
 
 
-def performance_page(*, names: dict, bu: str, choices: list[str], params, state: str, snapshot: dict | None, points: list[dict], totals: dict | None, cohort: list[dict],
-                     csrf: str, nonce: str, me: dict, matrix: dict | None = None) -> str:
-    """state: ok, belum (no snapshot yet), kosong (nothing in the range), error (date or database problem), gagal (database did not answer)."""
+SIDEBAR_JS = (
+    "(function(){var f=document.getElementById('perf-form'),note=document.getElementById('pf-dirty');"
+    "function count(d){var n=d.querySelectorAll('input[type=checkbox]:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';}"
+    "f.addEventListener('change',function(e){var d=e.target.closest('details');if(d)count(d);if(note)note.hidden=false;});"
+    "document.querySelectorAll('[data-auto]').forEach(function(el){el.addEventListener('change',function(){f.requestSubmit();});});})();"
+)
+
+
+def sidebar(*, names: dict, bu: str, choices: list[str], params, state: str, option_lists: dict | None) -> str:
     label = names.get(bu, bu)
-    unit = {"hari": "hari", "minggu": "minggu", "bulan": "bulan"}[params.per]
-
-    def link(per: str) -> str:
-        q = {"bu": bu, "per": per, "metrik": params.metrik, "matriks": params.matriks}
-        return "/performa?" + urlencode(q)
-
-    seg = "".join(f'<a href="{escape(link(p))}"' + (' aria-current="true"' if p == params.per else "") + f">{p.capitalize()}</a>" for p in UNITS)
     if len(choices) > 1:
-        company = ('<div class="vw-field" style="flex:0 1 200px"><label for="bu">Perusahaan</label><select id="bu" name="bu" form="perf-form" data-auto>'
+        company = ('<div class="vw-field"><label for="bu">Perusahaan</label><select id="bu" name="bu">'
                    + "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(names.get(b, b))}</option>' for b in choices) + "</select></div>")
     else:
-        company = (f'<div class="vw-field" style="flex:0 1 200px"><span style="color:{INK};font-weight:500;margin-bottom:6px">Perusahaan</span>'
-                   f'<span style="display:flex;align-items:center;height:44px;font-weight:600;color:{INK}">{escape(label)}</span><input type="hidden" name="bu" value="{escape(bu)}" form="perf-form"></div>')
-    err = params.error
-    invalid = ' aria-invalid="true"' if err == ERR_ORDER else ""
-    settings = (
-        '<section aria-label="Pengaturan tampilan" class="vw-box" style="padding:20px 24px;margin-bottom:24px">'
-        f'<form id="perf-form" method="get" action="/performa" style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-end">{company}'
-        f'<div class="vw-field" style="flex:0 1 180px"><label for="dari">Dari</label><input id="dari" name="from" type="date" value="{params.start.isoformat()}" data-auto{invalid}></div>'
-        f'<div class="vw-field" style="flex:0 1 180px"><label for="sampai">Sampai</label><input id="sampai" name="to" type="date" value="{params.end.isoformat()}" data-auto{invalid}></div>'
-        f'<input type="hidden" name="per" value="{params.per}">' + ("" if state == "ok" else f'<input type="hidden" name="metrik" value="{params.metrik}"><input type="hidden" name="matriks" value="{params.matriks}">') +
-        '<noscript><button class="vw-btn" type="submit">Terapkan</button></noscript>'
-        f'<div><div class="vw-field"><span id="gran-label" style="font-weight:500;color:{INK};margin-bottom:6px">Per</span></div><div class="pf-seg" role="group" aria-labelledby="gran-label">{seg}</div></div></form>'
-        + (f'<p role="alert" class="vw-alert" style="margin:16px 0 0">{escape(err)}</p>' if err else "") + "</section>"
+        company = (f'<div class="vw-field"><span style="color:{INK};font-weight:500;margin-bottom:6px">Perusahaan</span>'
+                   f'<span style="display:flex;align-items:center;height:44px;font-weight:600;color:{INK}">{escape(label)}</span><input type="hidden" name="bu" value="{escape(bu)}"></div>')
+    invalid = ' aria-invalid="true"' if params.error == ERR_ORDER else ""
+    seg = "".join(f'<label><input type="radio" name="per" value="{p}"' + (" checked" if p == params.per else "") + f"><span>{p.capitalize()}</span></label>" for p in UNITS)
+    can_filter = option_lists is not None
+    dropdowns = ""
+    for key, title in DIMENSIONS:
+        rows = (option_lists or {}).get(key, [])
+        chosen = len(params.filters.get(key, []))
+        items = "".join(
+            f'<label class="pf-opt"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "") + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>'
+            for r in rows
+        ) or f'<div style="padding:12px 0;color:{MUTED}">Tidak ada nilai.</div>'
+        dropdowns += (f'<details class="pf-dd"><summary><span class="fl">{escape(title)}</span><span class="fv">{f"{chosen} dipilih" if chosen else "Semua"}</span></summary>'
+                      f'<div class="pf-panel">{items}</div></details>')
+    note = ""
+    if not can_filter:
+        note = (f'<div role="status" style="padding:10px 12px;border-radius:6px;background:#edf4ff;color:{INK};margin-bottom:12px">Filter belum tersedia di data ini. '
+                "Jalankan workflow Performa Generate di n8n lagi, lalu muat ulang halaman ini.</div>")
+    clear = f'<a class="vw-link" href="{escape(query_for(bu, params, keep_filters=False))}" style="font-weight:600">Hapus semua filter</a>' if params.active else ""
+    return (
+        '<aside aria-label="Tampilan dan filter" class="vw-box pf-side">'
+        f'<form id="perf-form" method="get" action="/performa"><h2 class="vw-h2" style="margin-bottom:12px">Tampilan</h2>'
+        f'<div style="display:flex;flex-direction:column;gap:12px">{company}'
+        f'<div class="vw-field"><label for="dari">Dari</label><input id="dari" name="from" type="date" value="{params.start.isoformat()}"{invalid}></div>'
+        f'<div class="vw-field"><label for="sampai">Sampai</label><input id="sampai" name="to" type="date" value="{params.end.isoformat()}"{invalid}></div>'
+        f'<div><div id="gran-label" style="font-weight:500;color:{INK};margin-bottom:6px">Per</div><div class="pf-seg" role="radiogroup" aria-labelledby="gran-label">{seg}</div></div></div>'
+        + (f'<p role="alert" class="vw-alert" style="margin:12px 0 0">{escape(params.error)}</p>' if params.error else "")
+        + f'<h2 class="vw-h2" style="margin:24px 0 12px;padding-top:20px;border-top:1px solid {LINE}">Filter</h2>{note}'
+        f'<fieldset style="border:0;margin:0;padding:0;min-width:0"{"" if can_filter else " disabled"}><legend class="vw-sr">Pilih nilai untuk tiap filter</legend>'
+        f'<div style="display:flex;flex-direction:column;gap:8px">{dropdowns}</div></fieldset>'
+        + ("" if state == "ok" else f'<input type="hidden" name="matriks" value="{params.matriks}">') +
+        '<div class="pf-actions"><button class="vw-btn" type="submit" style="width:100%">Terapkan</button>'
+        f'<div style="display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 12px">{clear}<span id="pf-dirty" role="status" hidden style="color:{MUTED}">Belum diterapkan.</span></div></div></form></aside>'
     )
+
+
+def context_box(*, names: dict, bu: str, params) -> str:
+    unit = params.per
+    line = f"{names.get(bu, bu)} · {_date_text(params.start)} sampai {_date_text(params.end)} · per {unit}"
+    chips = ""
+    if params.active:
+        items = "".join(
+            f'<li><span class="pf-chip">{escape(title)}: {escape(v)}<a href="{escape(query_for(bu, params, drop=(key, v)))}" aria-label="Hapus filter {escape(title)}: {escape(v)}">&times;</a></span></li>'
+            for key, title in DIMENSIONS for v in params.filters.get(key, [])
+        )
+        chips = f'<div style="margin-top:10px"><div id="aktif-label" style="font-weight:500;color:{INK};margin-bottom:6px">Filter aktif</div><ul class="pf-chips" aria-labelledby="aktif-label">{items}</ul></div>'
+    return (f'<div class="vw-box" aria-label="Data yang sedang ditampilkan" style="padding:14px 20px;margin-bottom:24px"><div style="color:{MUTED}">Menampilkan</div>'
+            f'<div style="font-weight:600;color:{INK}">{escape(line)}</div>{chips}</div>')
+
+
+def performance_page(*, names: dict, bu: str, choices: list[str], params, state: str, snapshot: dict | None, points: list[dict], totals: dict | None,
+                     matrix: dict | None, option_lists: dict | None, csrf: str, nonce: str, me: dict) -> str:
+    """state: ok, belum (no snapshot yet), lama (snapshot without lead rows), kosong (nothing in the range), kosong_filter (nothing matches the
+    filters), error (date problem) or gagal (database did not answer)."""
+    label = names.get(bu, bu)
+    unit = params.per
     head = (
-        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Performa</span></nav>'
+        '<main class="vw-main" style="max-width:1320px"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Performa</span></nav>'
         '<h1 class="vw-h1">Performa</h1><p class="vw-lead" style="max-width:680px">Submission, MQL, SQL, dan Deal Won beserta nilainya pada rentang tanggal yang Anda pilih, per hari, minggu, atau bulan. '
-        'Cohort di bawahnya menunjukkan seberapa cepat lead dari satu periode submission menjadi MQL dan SQL.</p>'
+        'Matriks cohort di bawahnya menunjukkan dari periode mana lead yang menjadi MQL dan SQL berasal.</p>'
     )
     freshness = ""
     if snapshot:
@@ -172,11 +245,16 @@ def performance_page(*, names: dict, bu: str, choices: list[str], params, state:
     if state == "gagal":
         body = (f'<div role="alert" style="background:#fcecec;border:1px solid #ac3d3d;border-radius:6px;padding:32px"><h2 class="vw-h2" style="color:#ac3d3d;margin-bottom:8px">Data performa tidak bisa dimuat</h2>'
                 '<p style="margin:0 0 16px;color:#17283e">Database marketing_reports tidak menjawab. Coba lagi.</p><a class="vw-link" href="/performa" style="font-weight:600">Coba lagi</a></div>')
-    elif state == "belum":
+    elif state in ("belum", "lama"):
         hint = "Jalankan workflow Performa Generate di n8n, lalu muat ulang halaman ini." if me["role"] == "admin" else "Hubungi admin untuk menjalankannya."
-        body = f'<div class="vw-box" style="padding:32px"><h2 class="vw-h2" style="margin-bottom:8px">Belum ada data performa untuk {escape(label)}</h2><p style="margin:0">{escape(hint)}</p></div>'
+        title = f"Belum ada data performa untuk {label}" if state == "belum" else f"Data performa {label} dibuat dengan versi lama"
+        body = f'<div class="vw-box" style="padding:32px"><h2 class="vw-h2" style="margin-bottom:8px">{escape(title)}</h2><p style="margin:0">{escape(hint)}</p></div>'
     elif state == "error":
         body = ""
+    elif state == "kosong_filter":
+        body = (f'<div class="vw-box" style="padding:32px"><h2 class="vw-h2" style="margin-bottom:8px">Tidak ada lead yang cocok dengan filter ini</h2>'
+                '<p style="margin:0 0 8px">Pada rentang tanggal ini tidak ada lead dengan kombinasi filter yang dipilih. Hapus sebagian filter atau ubah rentang tanggal.</p>'
+                f'<a class="vw-link" href="{escape(query_for(bu, params, keep_filters=False))}" style="font-weight:600">Hapus semua filter</a></div>')
     elif state == "kosong":
         body = '<div class="vw-box" style="padding:32px"><h2 class="vw-h2" style="margin-bottom:8px">Tidak ada data pada rentang ini</h2><p style="margin:0">Ubah rentang tanggal atau pilih perusahaan lain.</p></div>'
     else:
@@ -186,26 +264,6 @@ def performance_page(*, names: dict, bu: str, choices: list[str], params, state:
             ("SQL Value", _rp(totals["sqlv"]), ""), ("Deal Won", _n(totals["won"]), f'Deal Won Rate {_pct(totals["won_rate"])}'), ("Deal Won Value", _rp(totals["wonv"]), ""),
         )
         srows = "".join(f'<tr><td data-label="Metrik">{m}</td><td data-label="Total" class="num">{t}</td><td data-label="Rate">{escape(r)}</td></tr>' for m, t, r in summary_rows)
-        _, base_label, target_label = METRICS[params.metrik]
-        cohort_note = (f"Setiap baris adalah lead yang submission-nya jatuh pada {unit} itu. Kolom menunjukkan berapa persen dari {base_label} cohort tersebut yang sudah menjadi {target_label} "
-                       f"pada {unit} yang sama, lalu 1, 2, 3, dan 4 {unit} kemudian.")
-        crows = ""
-        for row in cohort:
-            cells = "".join(
-                f'<td data-label="{"Periode yang sama" if k == 0 else f"+{k} {unit}"}" class="num"' + (f' style="background:rgba(33,89,169,{TINTS[k]})"' if v is not None else "") + f'>{"-" if v is None else escape(_pct(v))}</td>'
-                for k, v in enumerate(row["cells"])
-            )
-            crows += f'<tr><td data-label="Cohort submission">{escape(row["label"])}</td><td data-label="{escape(base_label)}" class="num">{_n(row["base"])}</td>{cells}</tr>'
-        metric_options = "".join(f'<option value="{k}"{" selected" if k == params.metrik else ""}>{escape(v[0])}</option>' for k, v in METRICS.items())
-        cohort_html = (
-            f'<section aria-label="Cohort"><h2 class="vw-h2">Cohort konversi</h2><p style="margin:0 0 16px;max-width:760px;color:{MUTED}">{escape(cohort_note)}</p>'
-            f'<div class="vw-field" style="max-width:280px;margin-bottom:16px"><label for="metrik">Konversi yang dinilai</label><select id="metrik" name="metrik" form="perf-form" data-auto>{metric_options}</select></div>'
-            + (f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table"><caption class="vw-sr">Cohort {escape(base_label)} ke {escape(target_label)} per {unit}</caption><thead><tr><th scope="col">Cohort submission</th>'
-               f'<th scope="col" class="num">{escape(base_label)}</th><th scope="col" class="num">Periode yang sama</th>' + "".join(f'<th scope="col" class="num">+{k} {unit}</th>' for k in range(1, 5))
-               + f"</tr></thead><tbody>{crows}</tbody></table></div>" if cohort else f'<div class="vw-box" style="padding:24px">Belum ada cohort yang periodenya dimulai di rentang ini.</div>')
-            + f'<p style="margin:12px 0 0;color:{MUTED}">Tanda "-" berarti periode itu belum berjalan, jadi belum bisa dinilai. Persen bersifat kumulatif: lead yang sudah menjadi MQL atau SQL pada periode itu atau sebelumnya. '
-            "Cohort memuat periode yang tanggal awalnya ada di rentang.</p></section>"
-        )
         body = (
             f'<section aria-label="Volume" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2" style="margin-bottom:12px">Volume per {unit}</h2>'
             + line_chart(points, volume_keys, f"Grafik garis jumlah Submission, MQL, SQL, dan Deal Won per {unit}", False)
@@ -216,8 +274,9 @@ def performance_page(*, names: dict, bu: str, choices: list[str], params, state:
             f'<section aria-label="Ringkasan periode" style="margin-bottom:32px"><h2 class="vw-h2">Ringkasan rentang</h2><p style="margin:0 0 12px;color:{MUTED}">Total seluruh rentang yang dipilih, sebagai pendamping grafik. '
             "Minggu atau bulan di tepi rentang hanya menghitung hari di dalam rentang.</p>"
             f'<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Ringkasan performa pada rentang yang dipilih</caption><thead><tr><th scope="col">Metrik</th><th scope="col" class="num">Total</th><th scope="col">Rate</th></tr></thead><tbody>{srows}</tbody></table></div></section>'
-            + cohort_html + matrix_section(params, matrix, unit)
+            + matrix_section(params, matrix, unit)
         )
-    script = (f'<script nonce="{nonce}">document.querySelectorAll("[data-auto]").forEach(function(e){{e.addEventListener("change",function(){{'
-              'document.getElementById("perf-form").requestSubmit();});});</script>')
-    return pages.page("Performa", f"<style nonce=\"{nonce}\">{CSS}</style>" + head + settings + freshness + body + "</main>", nonce, csrf, pages.menu(csrf, me, "performa"), script)
+    layout = (f'<div class="pf-layout">{sidebar(names=names, bu=bu, choices=choices, params=params, state=state, option_lists=option_lists)}'
+              f'<div class="pf-content">{context_box(names=names, bu=bu, params=params)}{freshness}{body}</div></div>')
+    script = f'<script nonce="{nonce}">{SIDEBAR_JS}</script>'
+    return pages.page("Performa", f"<style nonce=\"{nonce}\">{CSS}</style>" + head + layout + "</main>", nonce, csrf, pages.menu(csrf, me, "performa"), script)

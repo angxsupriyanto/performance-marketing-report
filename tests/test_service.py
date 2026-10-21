@@ -131,13 +131,13 @@ class ServiceTests(unittest.TestCase):
     def test_performance_endpoint_returns_aggregates_and_a_stable_key(self):
         status, body = self.call("/v1/performa?bu=bu1", csv_text(LEADS))
         self.assertEqual(status, 200, body)
-        self.assertEqual((body["bu"], body["rows_in_bu"], body["days"]), ("bu1", 2, 5))
+        self.assertEqual((body["bu"], body["rows_in_bu"], body["leads"]), ("bu1", 2, 2))
         self.assertRegex(body["source_sha256"], r"^[0-9a-f]{64}$")
         self.assertIn("+", body["generator_version"])
         data = body["data"]
-        self.assertEqual(sorted(data), ["as_of", "cohorts", "days", "matrices", "v"])
-        self.assertEqual(sorted(data["cohorts"]), ["day", "month", "week"])
-        self.assertNotIn("Co1", json.dumps(data))  # aggregates only: no company names
+        self.assertEqual((sorted(data), data["v"], len(data["leads"])), (["as_of", "dims", "leads", "v"], 2, 2))
+        self.assertEqual(sorted(data["dims"]), ["campaign", "category", "channel", "hardware", "medium", "source"])
+        self.assertNotIn("Co1", json.dumps(data))  # anonymous rows: no company names
         self.assertEqual(self.call("/v1/performa?bu=bu1", csv_text(LEADS))[1]["source_sha256"], body["source_sha256"])
         self.assertEqual(self.call("/v1/performa?bu=nope", csv_text(LEADS))[0], 400)
         self.assertEqual(self.call("/v1/performa?bu=bu1", b"a,b\n1,2\n")[0], 422)

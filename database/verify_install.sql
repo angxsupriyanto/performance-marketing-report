@@ -75,5 +75,8 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
                       AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.performance_snapshots'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.performance_snapshots'), 'INSERT')
                                OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'UPDATE') OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'DELETE')
                                OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'TRUNCATE')), false)
+  UNION ALL SELECT 22, 'performance_snapshots accepts the v2 lead-row shape (constraint performance_snapshots_data_shape)',
+         EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'performance_snapshots_data_shape' AND conrelid = to_regclass('reports.performance_snapshots') AND contype = 'c'
+                 AND pg_get_constraintdef(oid) LIKE '%dims%')
 ) checks
 ORDER BY n;

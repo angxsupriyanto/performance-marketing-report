@@ -15,7 +15,6 @@ import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-import performa
 import report_view
 
 PROFILE_DIR = Path(__file__).with_name("profiles")
@@ -532,43 +531,44 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
     return view, metrics, same, facts, lists
 
 
+# The six filters of the Performa page: key, header in the NEW Customers List. The report itself never needs them.
+DIMENSIONS = (("channel", "Channel"), ("source", "Source"), ("medium", "Medium"), ("campaign", "Campaign"), ("category", "Category Campaign"), ("hardware", "Campaign Hardware"))
+DIMENSION_COLUMNS = tuple(column for _, column in DIMENSIONS)
+
+
+def dimension_value(row: dict[str, str], key: str, column: str) -> str:
+    if key == "hardware":
+        return product(row)  # the profile's own product names, so "GPS" and "GPS Tracker" are one value, as in the report
+    return " ".join(row.get(column, "").split())
+
+
 def performance(data: dict[str, list[dict[str, str]]], as_of: date) -> dict:
-    """Aggregates for the Performa page: counts and values per day of each stage on its own date (the same rule the reports use),
-    and cohort counts by Inbound Date. Aggregates only; no company names and no lead rows leave this function."""
-    days: dict[str, dict] = {}
-
-    def add(day: date, key: str, amount) -> None:
-        entry = days.setdefault(day.isoformat(), {})
-        entry[key] = entry.get(key, 0) + amount
-
-    for stage, count_key, value_key in (("Submission", "sub", None), ("MQL", "mql", None), ("SQL", "sql", "sqlv"), ("Deal Won", "won", "wonv")):
+    """Everything the Performa page needs, as one anonymous row per lead: the four stage dates (as day numbers, 0 = none), the SQL and Deal Won
+    value, and the six filter values (as positions in `dims`). No company name, contact or record key leaves this function.
+    Counting, grouping per day, week or month, the filters and the cohort matrices all happen later, in the viewer, from these rows."""
+    unique: dict[int, dict[str, str]] = {}
+    for stage in STAGES:  # the same sheet row appears in every stage list it belongs to
         for row in data[stage]:
-            day = parse_date(row[STAGES[stage]], STAGES[stage])
-            add(day, count_key, 1)
-            if value_key:
-                add(day, value_key, stage_value(row, stage))
-    for entry in days.values():  # money as text so that exact decimals survive JSON
-        for key in ("sqlv", "wonv"):
-            if key in entry:
-                entry[key] = str(entry[key])
-    leads = []
-    for row in data["Submission"]:
-        mql, sql = row.get(STAGES["MQL"], ""), row.get(STAGES["SQL"], "")
-        leads.append((parse_date(row[STAGES["Submission"]], STAGES["Submission"]),
-                      parse_date(mql, STAGES["MQL"]) if mql else None, parse_date(sql, STAGES["SQL"]) if sql else None))
-    events: dict[str, list[tuple[date, date]]] = {"sub_sql": [], "mql_sql": [], "sub_mql": []}
-    for row in data["SQL"]:
-        sql_day = parse_date(row[STAGES["SQL"]], STAGES["SQL"])
-        inbound, mql = row.get(STAGES["Submission"], ""), row.get(STAGES["MQL"], "")
-        if inbound:
-            events["sub_sql"].append((sql_day, parse_date(inbound, STAGES["Submission"])))
-        if mql:
-            events["mql_sql"].append((sql_day, parse_date(mql, STAGES["MQL"])))
-    for row in data["MQL"]:
-        inbound = row.get(STAGES["Submission"], "")
-        if inbound:
-            events["sub_mql"].append((parse_date(row[STAGES["MQL"]], STAGES["MQL"]), parse_date(inbound, STAGES["Submission"])))
-    return {"v": 1, "as_of": as_of.isoformat(), "days": dict(sorted(days.items())), "cohorts": performa.build(leads, as_of), "matrices": performa.build_matrices(events)}
+            unique.setdefault(id(row), row)
+
+    def day(row: dict[str, str], stage: str) -> int:
+        cell = row.get(STAGES[stage], "")
+        return parse_date(cell, STAGES[stage]).toordinal() if cell else 0
+
+    def amount(row: dict[str, str], stage: str, when: int):
+        if not when:
+            return 0
+        value = stage_value(row, stage)
+        return int(value) if value == int(value) else str(value)  # exact decimals survive as text
+
+    raw = []
+    for row in unique.values():
+        stages = [day(row, name) for name in ("Submission", "MQL", "SQL", "Deal Won")]
+        raw.append((stages, [amount(row, "SQL", stages[2]), amount(row, "Deal Won", stages[3])], [dimension_value(row, key, column) for key, column in DIMENSIONS]))
+    dims = {key: sorted({r[2][i] for r in raw}, key=lambda v: (v == "", v.casefold(), v)) for i, (key, _) in enumerate(DIMENSIONS)}
+    position = [{value: n for n, value in enumerate(dims[key])} for key, _ in DIMENSIONS]
+    leads = sorted([*stages, *values, *[position[i][value] for i, value in enumerate(values_dims)]] for stages, values, values_dims in raw)
+    return {"v": 2, "as_of": as_of.isoformat(), "dims": dims, "leads": leads}
 
 
 def find_inputs(directory: Path) -> dict[str, Path]:
@@ -593,7 +593,7 @@ def main():
     parser.add_argument("--mql",type=Path)
     parser.add_argument("--sql",type=Path)
     parser.add_argument("--won",type=Path)
-    parser.add_argument("--performa-json",type=Path,help="tulis agregat untuk halaman Performa (harian dan cohort) ke berkas ini, tanpa membuat report; --period tidak dipakai")
+    parser.add_argument("--performa-json",type=Path,help="tulis baris lead anonim untuk halaman Performa ke berkas ini, tanpa membuat report; --period tidak dipakai")
     parser.add_argument("--as-of",help="tanggal acuan cohort (YYYY-MM-DD), default hari ini menurut WIB")
     parser.add_argument("--period","--week",dest="period",default=None,help="YYYY-Www untuk mingguan (contoh 2026-W39) atau YYYY-MM untuk bulanan (contoh 2026-09)")
     parser.add_argument("--output",type=Path,help="default: output/<BU>_<periode>.html")
@@ -609,7 +609,7 @@ def main():
             result["audit"]={"bu":profile["name"],"rows_total":table_info["rows_total"],"rows_in_bu":table_info["rows_in_bu"],"source_sha256":hashlib.sha256(args.table.read_bytes()).hexdigest()}
             args.performa_json.parent.mkdir(parents=True,exist_ok=True)
             args.performa_json.write_text(json.dumps(result,ensure_ascii=False,default=json_default)+"\n",encoding="utf-8")
-            print(f"OK: {args.performa_json} ({len(result['days'])} hari)")
+            print(f"OK: {args.performa_json} ({len(result['leads'])} lead)")
             return
         if not args.period:parser.error("--period wajib diisi (kecuali dengan --performa-json)")
         period=parse_period(args.period)

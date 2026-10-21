@@ -179,6 +179,7 @@ class Handler(BaseHTTPRequestHandler):
     jobs: Jobs
     limiter: auth.LoginLimiter
     form_lists: dict = {}
+    query_lists: dict = {}
     user: dict = {}
 
     def log_message(self, fmt, *args):  # never log URLs, form fields or bodies
@@ -275,7 +276,8 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/healthz":
                 status = 200
                 return self.json(200, {"status": "ok", "database": self.cfg.store.ping()})
-            query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
+            self.query_lists = parse_qs(urlparse(self.path).query)
+            query = {k: v[0] for k, v in self.query_lists.items()}
             if method == "POST" and not self.same_origin():
                 raise HttpError(403, "asal permintaan tidak cocok")
             if path == "/login":
@@ -618,29 +620,31 @@ class Handler(BaseHTTPRequestHandler):
         if bu not in choices:
             raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke perusahaan ini.")
         today = self.now().date()
+
+        def render(status: int, params, state: str, snapshot=None, points=None, totals=None, matrix=None, option_lists=None) -> int:
+            self.send(status, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points or [], totals=totals,
+                                                                 matrix=matrix, option_lists=option_lists, csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+            return status
+
         try:
             snapshot = self.cfg.store.latest_performance(bu)
         except Exception:  # noqa: BLE001
-            params = performance.parse_params(query, today)
-            self.send(503, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state="gagal", snapshot=None, points=[], totals=None, cohort=[],
-                                                              csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
-            return 503
-        params = performance.parse_params(query, snapshot["as_of"] if snapshot else today)
-        state, points, totals, cohort, matrix = "ok", [], None, [], None
+            return render(503, performance.parse_params(query, today, self.query_lists), "gagal")
+        data = performance.load(snapshot) if snapshot else None
+        params = performance.parse_params(query, snapshot["as_of"] if snapshot else today, self.query_lists)
         if snapshot is None:
-            state = "belum"
-        elif params.error:
-            state = "error"
-        else:
-            points = performance.series(snapshot, params)
-            if not performance.has_activity(points):
-                state = "kosong"
-            else:
-                totals, cohort = performance.summary(points), performance.cohort_rows(snapshot, params)
-                matrix = performance.matrix(snapshot, params)
-        self.send(200, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points, totals=totals, cohort=cohort,
-                                                          csrf=csrf, nonce=nonce, me=self.user, matrix=matrix), nonce=nonce)
-        return 200
+            return render(200, params, "belum")
+        if data is None:
+            return render(200, params, "lama", snapshot=snapshot)
+        option_lists = performance.options(data, params)
+        if params.error:
+            return render(200, params, "error", snapshot=snapshot, option_lists=option_lists)
+        leads = performance.filter_leads(data, params)
+        points = performance.series(leads, params)
+        if not performance.has_activity(points):
+            unfiltered = params.active and performance.has_activity(performance.series(data.leads, params))
+            return render(200, params, "kosong_filter" if unfiltered else "kosong", snapshot=snapshot, option_lists=option_lists)
+        return render(200, params, "ok", snapshot=snapshot, points=points, totals=performance.summary(points), matrix=performance.matrix(leads, params), option_lists=option_lists)
 
     # ---- budget
     def report_budget(self, report: dict, view: dict) -> dict:

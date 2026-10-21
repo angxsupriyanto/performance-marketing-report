@@ -70,6 +70,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/006_budget.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -385,9 +387,16 @@ class DatabaseTests(unittest.TestCase):
             for statement in ("UPDATE reports.performance_snapshots SET bu = 'bu2'", "DELETE FROM reports.performance_snapshots"):
                 with self.assertRaises(pe.InsufficientPrivilege):
                     conn.execute(statement)
-            for bad in (("BU 1", "2026-10-21", SHA_B, "t", data), ("bu1", "2026-10-21", "short", "t", data), ("bu1", "2026-10-21", SHA_B, "t", "{}"), ("bu1", "2026-10-21", SHA_B, "t", "[]")):
+            v2 = json.dumps({"v": 2, "as_of": "2026-10-21", "dims": {"channel": ["Paid"]}, "leads": [[739860, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]]})
+            accepted = conn.execute(insert, named("bu1", "2026-10-23", SHA_B, "t+v2", v2)).fetchall()  # the lead-row format (migration 008) is accepted
+            self.assertTrue(accepted[0][1])
+            for bad in (("BU 1", "2026-10-21", SHA_B, "t", data), ("bu1", "2026-10-21", "short", "t", data), ("bu1", "2026-10-21", SHA_B, "t", "{}"), ("bu1", "2026-10-21", SHA_B, "t", "[]"),
+                        ("bu1", "2026-10-21", SHA_B, "t", json.dumps({"v": 2, "dims": {}})), ("bu1", "2026-10-21", SHA_B, "t", json.dumps({"v": 3, "dims": {}, "leads": []})),
+                        ("bu1", "2026-10-21", SHA_B, "t", json.dumps({"v": 2, "dims": [], "leads": []}))):
                 with self.assertRaises(pe.CheckViolation):
                     conn.execute(insert, named(*bad))
+        latest = store.latest_performance("bu1")
+        self.assertEqual(latest["data"]["v"], 2)  # the newest snapshot is the one the page reads
 
 
 if __name__ == "__main__":

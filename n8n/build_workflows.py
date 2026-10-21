@@ -59,6 +59,11 @@ def tracker_columns() -> tuple[list[str], list[str], list[str]]:
     return columns, dates, money
 
 
+def optional_columns(required: list[str]) -> list[str]:
+    """Performa filter columns the reports do not need. They are copied when the sheet has them and never make a run fail when it does not."""
+    return [header for header in generate_report.DIMENSION_COLUMNS if header not in required]
+
+
 def code(name: str, **replacements: str) -> str:
     source = (HERE / "code" / name).read_text(encoding="utf-8")
     for key, value in replacements.items():
@@ -132,7 +137,7 @@ def generate_flow() -> Flow:
             "outputFormatting": {"values": {"general": "UNFORMATTED_VALUE", "date": "SERIAL_NUMBER"}},
         },
     }, (500, 240))
-    code_node(flow, "Build CSV", "build_csv.js", (740, 240), COLUMNS=json.dumps(columns), DATE_COLUMNS=json.dumps(dates), MONEY_COLUMNS=json.dumps(money))
+    code_node(flow, "Build CSV", "build_csv.js", (740, 240), COLUMNS=json.dumps(columns), OPTIONAL_COLUMNS=json.dumps(optional_columns(columns)), DATE_COLUMNS=json.dumps(dates), MONEY_COLUMNS=json.dumps(money))
     flow.add("Generate Report", "n8n-nodes-base.httpRequest", 4.2, {
         "method": "POST", "url": f"{SERVICE_URL}/v1/reports",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
@@ -173,7 +178,7 @@ def performa_flow() -> Flow:
             "outputFormatting": {"values": {"general": "UNFORMATTED_VALUE", "date": "SERIAL_NUMBER"}},
         },
     }, (720, 0))
-    code_node(flow, "Build CSV", "build_csv.js", (960, 0), COLUMNS=json.dumps(columns), DATE_COLUMNS=json.dumps(dates), MONEY_COLUMNS=json.dumps(money))
+    code_node(flow, "Build CSV", "build_csv.js", (960, 0), COLUMNS=json.dumps(columns), OPTIONAL_COLUMNS=json.dumps(optional_columns(columns)), DATE_COLUMNS=json.dumps(dates), MONEY_COLUMNS=json.dumps(money))
     flow.add("Compute Performa", "n8n-nodes-base.httpRequest", 4.2, {
         "method": "POST", "url": f"{SERVICE_URL}/v1/performa",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",

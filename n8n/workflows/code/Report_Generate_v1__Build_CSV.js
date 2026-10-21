@@ -2,6 +2,8 @@
 // names, phone numbers, emails and CRM links never leave n8n. Dates arrive as Google Sheets serial numbers and are
 // written as ISO dates, which removes any M/D versus D/M ambiguity.
 const COLUMNS = ["Company", "Channel", "Source", "Campaign", "Campaign Hardware", "Industry", "Remark", "Inbound Date", "MQL Date", "Proposal Price Quote Date", "ARR + OTF (Tanpa PPN)", "Deal Won Date", "Total Contract Deal Won", "BU", "Record Key", "SQL Date", "Total Contract SQL"];
+// Filter columns for the Performa page (Medium, Category Campaign). Copied when the sheet has them; a sheet without them still works.
+const OPTIONAL_COLUMNS = ["Medium", "Category Campaign"];
 const DATE_COLUMNS = new Set(["Inbound Date", "MQL Date", "Proposal Price Quote Date", "Deal Won Date", "SQL Date"]);
 const MONEY_COLUMNS = new Set(["ARR + OTF (Tanpa PPN)", "Total Contract Deal Won", "Total Contract SQL"]);
 const SERIAL_EPOCH = Date.UTC(1899, 11, 30);
@@ -28,15 +30,20 @@ const quote = (text) => (/[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"`
 const squash = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '');
 const seen = new Set();
 const rows = [];
-for (const item of $input.all()) {
+const items = $input.all();
+for (const item of items) {  // first pass: which columns exist in at least one row
+  for (const key of Object.keys(item.json)) seen.add(normalize(key));
+}
+const ALL = COLUMNS.concat(OPTIONAL_COLUMNS.filter((column) => seen.has(column)));
+for (const item of items) {
   const byName = {};
   for (const [key, value] of Object.entries(item.json)) {
     const name = normalize(key);
     byName[name] = value;
     seen.add(name);
   }
-  const values = COLUMNS.map((column) => cell(column, byName[column]));
-  if (values.some((v) => v !== '')) rows.push(values.map(quote).join(','));
+  const values = ALL.map((column) => cell(column, byName[column]));
+  if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));
 }
 if (!rows.length) throw new Error('Sheet tidak mengembalikan baris data');
 
@@ -49,6 +56,6 @@ if (missing.length) {
   throw new Error(`Kolom tidak ditemukan di satu baris pun (tidak ada di sheet atau kosong seluruhnya): ${hints.join('; ')}. Baris dibaca: ${rows.length}, header unik: ${seen.size}`);
 }
 
-const csv = [COLUMNS.map(quote).join(','), ...rows].join('\n') + '\n';
+const csv = [ALL.map(quote).join(','), ...rows].join('\n') + '\n';
 const plans = $('Normalize Plan').first().json.plans;
 return plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));

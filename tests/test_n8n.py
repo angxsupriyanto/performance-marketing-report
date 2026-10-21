@@ -225,6 +225,22 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual((first["Inbound Date"], first["MQL Date"], first["Proposal Price Quote Date"]), ("2026-09-21", "2026-09-22", "2026-09-24"))
         self.assertEqual((first["ARR + OTF (Tanpa PPN)"], first["Total Contract SQL"]), ("1000000", "9000000"))
 
+    def test_filter_columns_are_copied_when_the_sheet_has_them_and_never_required(self):
+        with_columns = [{**r, "Medium": "cpc", "Category Campaign": "Brand"} for r in sheet_rows(LEADS)]
+        out = self.build_csv(with_columns)
+        self.assertTrue(out["ok"], out)
+        table = list(csv.DictReader(io.StringIO(out["result"][0]["json"]["csv"])))
+        self.assertEqual((table[0]["Medium"], table[0]["Category Campaign"]), ("cpc", "Brand"))
+        without = self.build_csv(sheet_rows(LEADS))  # a sheet that has no such columns still builds, so Report Generate cannot break on them
+        self.assertTrue(without["ok"], without)
+        header = without["result"][0]["json"]["csv"].splitlines()[0].split(",")
+        self.assertNotIn("Medium", header)
+        self.assertNotIn("Category Campaign", header)
+        partial = [dict(r, Medium="cpc") if i == 2 else r for i, r in enumerate(sheet_rows(LEADS))]  # the API omits empty cells: one row having it is enough
+        header = self.build_csv(partial)["result"][0]["json"]["csv"].splitlines()[0].split(",")
+        self.assertIn("Medium", header)
+        self.assertEqual(header.count("Medium"), 1)
+
     def test_csv_rounds_float_noise_and_quotes_special_characters(self):
         rows = sheet_rows(LEADS[:1])
         rows[0][" Total Contract SQL"] = 765032431.5500001
@@ -459,7 +475,13 @@ class CodeNodeTests(unittest.TestCase):
         self.assertIn("ON CONFLICT (bu, as_of, source_sha256, generator_version) DO NOTHING", query)
         self.assertIn("reports.performance_snapshots", query)
         self.assertEqual(max(int(n) for n in re.findall(r"\$(\d+)", query)), 5)
-        self.assertEqual(node(flow, "Build CSV")["parameters"]["jsCode"], node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"])  # same column whitelist: no PIC, phone or email
+        csv_code = node(flow, "Build CSV")["parameters"]["jsCode"]
+        self.assertEqual(csv_code, node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"])  # same column whitelist: no PIC, phone or email
+        declared = json.loads(re.search(r"const COLUMNS = (\[.*?\]);", csv_code).group(1)) + json.loads(re.search(r"const OPTIONAL_COLUMNS = (\[.*?\]);", csv_code).group(1))
+        for column in ("Channel", "Source", "Medium", "Campaign", "Category Campaign", "Campaign Hardware"):  # the six Performa filters
+            self.assertIn(column, declared)
+        for private in ("Phone", "Email", "PIC", "Contact", "CRM", "Link"):
+            self.assertFalse([c for c in declared if private.lower() in c.lower()], private)
 
     def test_performa_code_nodes(self):
         flow = load("Performa_Generate_v1.json")
@@ -468,13 +490,13 @@ class CodeNodeTests(unittest.TestCase):
         one = run_code(node(flow, "Normalize Plan")["parameters"]["jsCode"], [{"bu": "BU2"}])
         self.assertEqual([p["bu"] for p in one["result"][0]["json"]["plans"]], ["bu2"])
         self.assertFalse(run_code(node(flow, "Normalize Plan")["parameters"]["jsCode"], [{"bu": "bu9"}])["ok"])
-        response = {"bu": "bu1", "as_of": "2026-10-21", "source_sha256": "a" * 64, "generator_version": "dev+abc", "days": 3, "rows_in_bu": 9, "data": {"v": 1, "days": {}, "cohorts": {}}}
+        response = {"bu": "bu1", "as_of": "2026-10-21", "source_sha256": "a" * 64, "generator_version": "dev+abc", "leads": 3, "rows_in_bu": 9, "data": {"v": 2, "dims": {}, "leads": []}}
         prepared = run_code(node(flow, "Prepare Insert")["parameters"]["jsCode"], [{**response}])
         params = prepared["result"][0]["json"]["params"]
         self.assertEqual(params[:4], ["bu1", "2026-10-21", "a" * 64, "dev+abc"])
         self.assertEqual(json.loads(params[4]), response["data"])
         result = run_code(node(flow, "Result")["parameters"]["jsCode"], [{"snapshot_id": "s1", "inserted": True}], {"Prepare Insert": {"items": [r["json"] for r in prepared["result"]]}})
-        self.assertEqual(result["result"][0]["json"]["snapshots"], [{"bu": "bu1", "as_of": "2026-10-21", "days": 3, "snapshot_id": "s1", "inserted": True}])
+        self.assertEqual(result["result"][0]["json"]["snapshots"], [{"bu": "bu1", "as_of": "2026-10-21", "leads": 3, "snapshot_id": "s1", "inserted": True}])
         failed = run_code(node(flow, "Format Error")["parameters"]["jsCode"], [{"error": {"message": "x" * 3000, "httpCode": "422"}}], {"Build CSV": {"items": [{"bu": "bu2", "csv": "SECRET,ROW\nsecret,row"}]}}, )
         text = failed["result"]["json"]["text"] if isinstance(failed["result"], dict) else failed["result"][0]["json"]["text"]
         self.assertTrue(text.startswith("Performa BU2 GAGAL dihitung: 422"))

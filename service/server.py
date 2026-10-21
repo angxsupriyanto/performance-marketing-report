@@ -106,7 +106,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
 
 
 def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool) -> dict:
-    """Aggregates for the Performa page: per-day counts and values and cohort counts. Aggregates only; the CSV is never stored."""
+    """Anonymous per-lead rows for the Performa page (stage dates, values, filter values). The CSV itself is never stored."""
     if not PROFILE_NAME.fullmatch(bu):
         raise HttpError(400, "parameter bu tidak valid")
     try:
@@ -129,7 +129,7 @@ def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool) -> dict:
         data = json.loads(output.read_text(encoding="utf-8"))
     audit = data.pop("audit")
     return {"bu": bu, "as_of": data["as_of"], "source_sha256": audit["source_sha256"], "generator_version": GENERATOR_VERSION,
-            "rows_total": audit["rows_total"], "rows_in_bu": audit["rows_in_bu"], "days": len(data["days"]), "data": data}
+            "rows_total": audit["rows_total"], "rows_in_bu": audit["rows_in_bu"], "leads": len(data["leads"]), "data": data}
 
 
 def apply(body: bytes) -> dict:
