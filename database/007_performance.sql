@@ -13,7 +13,9 @@
 --   * The viewer reads the newest snapshot of a company and does the range, day/week/month grouping and percentages at display time.
 --   * data (jsonb) has the shape
 --       {"v": 1, "as_of": "YYYY-MM-DD", "days": {"YYYY-MM-DD": {"sub": n, "mql": n, "sql": n, "sqlv": "n", "won": n, "wonv": "n"}},
---        "cohorts": {"day"|"week"|"month": [[start, size, mql_base, valid_columns, [mql_by_k x5], [sql_by_k x5], [sql_of_mql_by_k x5]], ...]}}
+--        "cohorts": {"day"|"week"|"month": [[start, size, mql_base, valid_columns, [mql_by_k x5], [sql_by_k x5], [sql_of_mql_by_k x5]], ...]},
+--        "matrices": {"week"|"month": {"sub_sql"|"mql_sql"|"sub_mql": [[row_period_start, column_period_start, leads], ...]}}}
+--     (matrices were added later; snapshots without them still load and the page asks for a new Performa Generate run)
 
 SET ROLE report_owner;
 

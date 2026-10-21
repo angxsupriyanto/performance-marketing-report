@@ -66,3 +66,22 @@ def cohorts(leads: list[tuple[date, date | None, date | None]], as_of: date, gra
 
 def build(leads: list[tuple[date, date | None, date | None]], as_of: date) -> dict[str, list[list]]:
     return {gran: cohorts(leads, as_of, gran) for gran in GRANULARITIES}
+
+
+MATRICES = ("sub_sql", "mql_sql", "sub_mql")
+MATRIX_GRANULARITIES = ("week", "month")
+
+
+def matrix_counts(events: list[tuple[date, date]], gran: str) -> list[list]:
+    """events: (row date, column date), one per lead. Returns sparse [row period start, column period start, leads], oldest first.
+    The Performa page lays these out as a matrix: rows are the period a stage happened, columns the period the lead came from."""
+    counts: dict[tuple[date, date], int] = {}
+    for row_day, col_day in events:
+        key = (period_start(row_day, gran), period_start(col_day, gran))
+        counts[key] = counts.get(key, 0) + 1
+    return [[r.isoformat(), c.isoformat(), n] for (r, c), n in sorted(counts.items())]
+
+
+def build_matrices(events: dict[str, list[tuple[date, date]]]) -> dict[str, dict[str, list[list]]]:
+    """events per pair: sub_sql = (SQL date, Inbound date), mql_sql = (SQL date, MQL date), sub_mql = (MQL date, Inbound date)."""
+    return {gran: {key: matrix_counts(events[key], gran) for key in MATRICES} for gran in MATRIX_GRANULARITIES}

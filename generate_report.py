@@ -556,7 +556,19 @@ def performance(data: dict[str, list[dict[str, str]]], as_of: date) -> dict:
         mql, sql = row.get(STAGES["MQL"], ""), row.get(STAGES["SQL"], "")
         leads.append((parse_date(row[STAGES["Submission"]], STAGES["Submission"]),
                       parse_date(mql, STAGES["MQL"]) if mql else None, parse_date(sql, STAGES["SQL"]) if sql else None))
-    return {"v": 1, "as_of": as_of.isoformat(), "days": dict(sorted(days.items())), "cohorts": performa.build(leads, as_of)}
+    events: dict[str, list[tuple[date, date]]] = {"sub_sql": [], "mql_sql": [], "sub_mql": []}
+    for row in data["SQL"]:
+        sql_day = parse_date(row[STAGES["SQL"]], STAGES["SQL"])
+        inbound, mql = row.get(STAGES["Submission"], ""), row.get(STAGES["MQL"], "")
+        if inbound:
+            events["sub_sql"].append((sql_day, parse_date(inbound, STAGES["Submission"])))
+        if mql:
+            events["mql_sql"].append((sql_day, parse_date(mql, STAGES["MQL"])))
+    for row in data["MQL"]:
+        inbound = row.get(STAGES["Submission"], "")
+        if inbound:
+            events["sub_mql"].append((parse_date(row[STAGES["MQL"]], STAGES["MQL"]), parse_date(inbound, STAGES["Submission"])))
+    return {"v": 1, "as_of": as_of.isoformat(), "days": dict(sorted(days.items())), "cohorts": performa.build(leads, as_of), "matrices": performa.build_matrices(events)}
 
 
 def find_inputs(directory: Path) -> dict[str, Path]:

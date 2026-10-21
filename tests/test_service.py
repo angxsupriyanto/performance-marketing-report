@@ -135,7 +135,7 @@ class ServiceTests(unittest.TestCase):
         self.assertRegex(body["source_sha256"], r"^[0-9a-f]{64}$")
         self.assertIn("+", body["generator_version"])
         data = body["data"]
-        self.assertEqual(sorted(data), ["as_of", "cohorts", "days", "v"])
+        self.assertEqual(sorted(data), ["as_of", "cohorts", "days", "matrices", "v"])
         self.assertEqual(sorted(data["cohorts"]), ["day", "month", "week"])
         self.assertNotIn("Co1", json.dumps(data))  # aggregates only: no company names
         self.assertEqual(self.call("/v1/performa?bu=bu1", csv_text(LEADS))[1]["source_sha256"], body["source_sha256"])

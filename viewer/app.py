@@ -626,7 +626,7 @@ class Handler(BaseHTTPRequestHandler):
                                                               csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
             return 503
         params = performance.parse_params(query, snapshot["as_of"] if snapshot else today)
-        state, points, totals, cohort = "ok", [], None, []
+        state, points, totals, cohort, matrix = "ok", [], None, [], None
         if snapshot is None:
             state = "belum"
         elif params.error:
@@ -637,8 +637,9 @@ class Handler(BaseHTTPRequestHandler):
                 state = "kosong"
             else:
                 totals, cohort = performance.summary(points), performance.cohort_rows(snapshot, params)
+                matrix = performance.matrix(snapshot, params)
         self.send(200, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points, totals=totals, cohort=cohort,
-                                                          csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+                                                          csrf=csrf, nonce=nonce, me=self.user, matrix=matrix), nonce=nonce)
         return 200
 
     # ---- budget

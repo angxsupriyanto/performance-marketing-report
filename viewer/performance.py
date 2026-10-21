@@ -22,6 +22,14 @@ METRICS = {
     "sql_mql": ("MQL ke SQL", "MQL", "SQL"),
     "sql": ("Submission ke SQL", "Submission", "SQL"),
 }
+MATRIX_KEYS = {  # key: (menu text, what the rows are, what the columns are)
+    "sub_sql": ("Submission ke SQL", "SQL", "submission"),
+    "mql_sql": ("MQL ke SQL", "SQL", "MQL"),
+    "sub_mql": ("Submission ke MQL", "MQL", "submission"),
+}
+MATRIX_COLUMNS = 10
+MATRIX_MAX_ROWS = 60
+HEAT = ((6, "#5fbf84"), (4, "#a8cf5f"), (3, "#f6cf57"), (2, "#f2a54a"), (1, "#ec8359"))  # leads from, background; dark text keeps at least 5.6:1
 ERR_ORDER = "Tanggal mulai harus sebelum atau sama dengan tanggal akhir."
 ERR_DAYS = f"Per hari maksimal {MAX_DAY_POINTS} hari. Perkecil rentang atau pilih per minggu atau bulan."
 SHOWN_KEYS = ("sub", "mql", "sql", "sqlv", "won", "wonv")
@@ -34,6 +42,7 @@ class Params:
     end: date
     metrik: str
     error: str = ""
+    matriks: str = "sub_sql"
 
 
 def _date(text: str | None) -> date | None:
@@ -57,7 +66,7 @@ def parse_params(query: dict, as_of: date) -> Params:
     metrik = query.get("metrik") if query.get("metrik") in METRICS else "mql"
     end = _date(query.get("to")) or as_of
     start = _date(query.get("from")) or default_start(per, end)
-    params = Params(per, start, end, metrik)
+    params = Params(per, start, end, metrik, matriks=query.get("matriks") if query.get("matriks") in MATRIX_KEYS else "sub_sql")
     if start > end:
         params.error = ERR_ORDER
     elif per == "hari" and (end - start).days + 1 > MAX_DAY_POINTS:
@@ -140,3 +149,48 @@ def compact(value: Decimal) -> str:
         if n >= limit:
             return f"{n / limit:.1f}".rstrip("0").rstrip(".").replace(".", ",") + suffix
     return f"{int(n)}"
+
+
+def heat(n: int) -> str:
+    return next((color for floor, color in HEAT if n >= floor), "transparent")
+
+
+def matrix(snapshot: dict, params: Params) -> dict | None:
+    """Rows: the periods in the range in which a stage happened (newest first). Columns: the 10 latest periods the leads came from.
+    A cell is a number of leads. Older columns are folded into "Lebih lama"; the last column is the row total over every column.
+    Returns None for per-day (too many columns) and {"missing": True} for a snapshot made before matrices existed."""
+    if params.per == "hari":
+        return None
+    gran = UNITS[params.per]
+    triples = (snapshot["data"].get("matrices") or {}).get(gran, {}).get(params.matriks)
+    if triples is None:
+        return {"missing": True}
+    by_row: dict[date, dict[date, int]] = {}
+    for row_text, col_text, n in triples:
+        row, col = _date(row_text), _date(col_text)
+        if row is not None and col is not None:
+            by_row.setdefault(row, {})[col] = by_row.setdefault(row, {}).get(col, 0) + n
+    last = cohort_math.period_start(params.end, gran)
+    columns = [cohort_math.shift(last, gran, -k) for k in range(MATRIX_COLUMNS)]
+    starts, cursor = [], cohort_math.period_start(params.start, gran)
+    if cursor < params.start:
+        cursor = cohort_math.shift(cursor, gran, 1)
+    while cursor <= params.end:
+        starts.append(cursor)
+        cursor = cohort_math.shift(cursor, gran, 1)
+    starts.reverse()
+    truncated = len(starts) > MATRIX_MAX_ROWS
+    rows = []
+    for start in starts[:MATRIX_MAX_ROWS]:
+        counts = by_row.get(start, {})
+        cells = [{"n": counts.get(c, 0), "bg": heat(counts.get(c, 0))} for c in columns]
+        total = sum(counts.values())
+        rows.append({"label": _matrix_label(start, gran), "cells": cells, "older": total - sum(c["n"] for c in cells), "total": total})
+    return {"missing": False, "columns": [_matrix_label(c, gran) for c in columns], "rows": rows, "truncated": truncated}
+
+
+def _matrix_label(start: date, gran: str) -> str:
+    if gran == "week":
+        iso = start.isocalendar()
+        return f"{iso.year}-W{iso.week:02d}"
+    return f"{MONTHS[start.month - 1]} {start.year}"

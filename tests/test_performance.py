@@ -176,7 +176,7 @@ class PerformaPageTests(ViewerCase):
     def test_the_page_has_both_charts_the_summary_and_the_cohort_like_the_mockup(self):
         soup = self.soup("?bu=bu1&per=minggu&from=2026-09-14&to=2026-10-04")
         self.assertEqual(soup.select_one("h1").get_text(), "Performa")
-        self.assertEqual([h.get_text() for h in soup.select("main h2")], ["Volume per minggu", "Nilai per minggu", "Ringkasan rentang", "Cohort konversi"])
+        self.assertEqual([h.get_text() for h in soup.select("main h2")], ["Volume per minggu", "Nilai per minggu", "Ringkasan rentang", "Cohort konversi", "Matriks cohort"])
         charts = soup.select("svg.pf-chart")
         self.assertEqual(len(charts), 2)
         self.assertIn("Submission, MQL, SQL, dan Deal Won", charts[0]["aria-label"])
@@ -260,6 +260,139 @@ class PerformaPageTests(ViewerCase):
         self.assertEqual((response.status, response.getheader("Location")), (303, "/login"))
         self.login()
         _, body = self.call("GET", "/performa?bu=bu1&per=bulan")
+        for name in ("Co1", "Co2", "Camp A"):
+            self.assertNotIn(name, body)
+
+
+class MatrixTests(unittest.TestCase):
+    def test_counts_pair_the_row_date_with_the_column_date_per_period(self):
+        events = [(date(2026, 9, 23), date(2026, 9, 21)), (date(2026, 9, 22), date(2026, 9, 1)), (date(2026, 9, 24), date(2026, 9, 22)), (date(2026, 10, 2), date(2026, 9, 22))]
+        self.assertEqual(performa.matrix_counts(events, "week"), [["2026-09-21", "2026-08-31", 1], ["2026-09-21", "2026-09-21", 2], ["2026-09-28", "2026-09-21", 1]])
+        self.assertEqual(performa.matrix_counts(events, "month"), [["2026-09-01", "2026-09-01", 3], ["2026-10-01", "2026-09-01", 1]])
+        self.assertEqual(performa.matrix_counts([], "week"), [])
+
+    def test_generator_output_matches_the_leads(self):
+        data = generated("bu1")["matrices"]
+        self.assertEqual(sorted(data), ["month", "week"])  # no per-day matrix
+        week = data["week"]
+        self.assertEqual(week["sub_sql"], [["2026-09-21", "2026-08-31", 1], ["2026-09-21", "2026-09-21", 1]])  # lead 2 came in on 1 Sep, lead 1 on 21 Sep
+        self.assertEqual(week["mql_sql"], [["2026-09-21", "2026-08-31", 1], ["2026-09-21", "2026-09-21", 1]])
+        self.assertEqual(week["sub_mql"], [["2026-08-31", "2026-08-31", 1], ["2026-09-21", "2026-09-07", 1], ["2026-09-21", "2026-09-21", 2]])
+        for pair, stage_key in (("sub_sql", "sql"), ("sub_mql", "mql")):  # every row total equals that period's stage count in the daily series
+            days = generated("bu1")["days"]
+            by_row = {}
+            for row, _, n in week[pair]:
+                by_row[row] = by_row.get(row, 0) + n
+            weekly = {}
+            for text, entry in days.items():
+                d = date.fromisoformat(text)
+                monday = (d - timedelta(days=d.weekday())).isoformat()
+                weekly[monday] = weekly.get(monday, 0) + entry.get(stage_key, 0)
+            self.assertEqual(by_row, {k: v for k, v in weekly.items() if v}, pair)
+
+    def params(self, **query):
+        return performance.parse_params({"per": "minggu", **query}, AS_OF)
+
+    def test_rows_are_the_periods_starting_in_the_range_newest_first(self):
+        m = performance.matrix(snapshot("bu1"), self.params(**{"from": "2026-10-05", "to": "2026-10-20"}))
+        self.assertEqual([r["label"] for r in m["rows"]], ["2026-W43", "2026-W42", "2026-W41"])
+        self.assertEqual(m["columns"][:3], ["2026-W43", "2026-W42", "2026-W41"])
+        self.assertEqual(len(m["columns"]), 10)
+        mid = performance.matrix(snapshot("bu1"), self.params(**{"from": "2026-10-07", "to": "2026-10-20"}))
+        self.assertEqual([r["label"] for r in mid["rows"]], ["2026-W43", "2026-W42"])  # W41 started before the range
+
+    def test_a_row_period_folds_columns_beyond_the_tenth_into_older_and_totals_everything(self):
+        snap = snapshot("bu1")
+        snap["data"]["matrices"]["week"]["sub_sql"] = [["2026-10-12", "2026-10-12", 4], ["2026-10-12", "2026-10-05", 7], ["2026-10-12", "2026-07-06", 3], ["2026-10-12", "2026-01-05", 2]]
+        m = performance.matrix(snap, self.params(**{"from": "2026-10-12", "to": "2026-10-18"}))
+        row = m["rows"][0]
+        self.assertEqual([c["n"] for c in row["cells"]][:3], [4, 7, 0])
+        self.assertEqual((row["older"], row["total"]), (5, 16))  # 3 + 2 fall left of the tenth column
+        self.assertEqual(sum(c["n"] for c in row["cells"]) + row["older"], row["total"])
+        self.assertEqual([c["bg"] for c in row["cells"]][:3], ["#a8cf5f", "#5fbf84", "transparent"])  # 4 is olive, 7 is green, 0 has no colour
+
+    def test_heat_scale_boundaries_and_month_and_row_cap(self):
+        self.assertEqual([performance.heat(n) for n in (0, 1, 2, 3, 4, 5, 6, 40)], ["transparent", "#ec8359", "#f2a54a", "#f6cf57", "#a8cf5f", "#a8cf5f", "#5fbf84", "#5fbf84"])
+        snap = snapshot("bu1")
+        month = performance.matrix(snap, self.params(per="bulan", **{"from": "2026-08-01", "to": "2026-10-31"}))
+        self.assertEqual([r["label"] for r in month["rows"]], ["Okt 2026", "Sep 2026", "Agu 2026"])
+        self.assertEqual(month["columns"][0], "Okt 2026")
+        long = performance.matrix(snap, self.params(**{"from": "2024-01-01", "to": "2026-10-20"}))
+        self.assertEqual((len(long["rows"]), long["truncated"]), (performance.MATRIX_MAX_ROWS, True))
+        self.assertEqual(long["rows"][0]["label"], "2026-W43")
+
+    def test_per_day_has_no_matrix_and_an_old_snapshot_says_so(self):
+        snap = snapshot("bu1")
+        self.assertIsNone(performance.matrix(snap, self.params(per="hari", **{"from": "2026-10-01", "to": "2026-10-10"})))
+        del snap["data"]["matrices"]
+        self.assertEqual(performance.matrix(snap, self.params()), {"missing": True})
+
+    def test_the_first_row_of_the_page_matrix_for_the_real_data(self):
+        snap = snapshot("bu1")
+        m = performance.matrix(snap, self.params(**{"from": "2026-09-21", "to": "2026-09-27"}))
+        row = m["rows"][0]
+        self.assertEqual(row["label"], "2026-W39")
+        self.assertEqual(row["total"], 2)
+        self.assertEqual(row["older"] + sum(c["n"] for c in row["cells"]), 2)
+
+
+class MatrixPageTests(ViewerCase):
+    def setUp(self):
+        super().setUp()
+        self.store.performance["bu1"] = snapshot("bu1")
+        self.login()
+
+    def section(self, query=""):
+        response, body = self.call("GET", "/performa" + query)
+        self.assertEqual(response.status, 200)
+        soup = BeautifulSoup(body, "html.parser")
+        return soup, soup.select_one("section[aria-label='Matriks cohort']")
+
+    def test_the_matrix_has_the_mockup_header_ten_columns_older_and_a_total_column_at_the_far_right(self):
+        _, section = self.section("?bu=bu1&per=minggu&from=2026-09-14&to=2026-10-04")
+        self.assertEqual(section.select_one("h2").get_text(), "Matriks cohort")
+        self.assertEqual([o["value"] for o in section.select("#matriks option")], ["sub_sql", "mql_sql", "sub_mql"])
+        self.assertEqual(section.select_one("thead tr th[colspan]").get_text(), "Minggu submission")
+        heads = [th.get_text() for th in section.select("thead tr:nth-child(2) th")]
+        self.assertEqual(len(heads), 12)
+        self.assertEqual(heads[-2:], ["Lebih lama", "Total baris"])
+        self.assertEqual(heads[0], "2026-W40")  # the range ends in W40, the newest column is on the left
+        self.assertEqual(section.select_one("thead th[rowspan]").get_text(), "Minggu SQL")
+        rows = section.select("tbody tr")
+        self.assertEqual([r.select_one("th").get_text() for r in rows], ["2026-W40", "2026-W39", "2026-W38"])
+        for row in rows:
+            cells = row.select("td")
+            self.assertEqual(len(cells), 12)
+            numbers = [int(c.get_text() or 0) for c in cells[:10]]
+            older = int(cells[10].get_text() or 0)
+            self.assertEqual(sum(numbers) + older, int(cells[11].get_text()))  # the far right is the row total
+        w39 = rows[1].select("td")
+        self.assertEqual(int(w39[11].get_text()), 2)
+        shaded = [c for c in w39[:10] if c.get_text()]
+        self.assertTrue(shaded and all("background:#ec8359" in c["style"] for c in shaded))  # one lead each: the 1-lead colour
+        self.assertEqual(len(section.select(".pf-legend span")) >= 5, True)
+
+    def test_the_choice_changes_the_labels_and_is_kept_by_the_per_links(self):
+        soup, section = self.section("?bu=bu1&per=bulan&from=2026-08-01&to=2026-10-31&matriks=mql_sql")
+        self.assertEqual(section.select_one("thead tr th[colspan]").get_text(), "Bulan MQL")
+        self.assertEqual(section.select_one("thead th[rowspan]").get_text(), "Bulan SQL")
+        self.assertEqual(section.select_one("#matriks option[selected]")["value"], "mql_sql")
+        self.assertIn("matriks=mql_sql", soup.select(".pf-seg a")[0]["href"])
+        _, mql = self.section("?bu=bu1&per=minggu&from=2026-09-14&to=2026-10-04&matriks=sub_mql")
+        self.assertEqual(mql.select_one("thead th[rowspan]").get_text(), "Minggu MQL")
+        self.assertEqual(self.section("?matriks=bogus")[1].select_one("#matriks option[selected]")["value"], "sub_sql")
+
+    def test_per_day_and_an_old_snapshot_show_their_own_note(self):
+        _, section = self.section("?bu=bu1&per=hari&from=2026-09-20&to=2026-09-27")
+        self.assertIn("Matriks tersedia per Minggu atau Bulan", section.get_text())
+        self.assertIsNone(section.select_one("table"))
+        del self.store.performance["bu1"]["data"]["matrices"]
+        _, old = self.section("?bu=bu1&per=minggu&from=2026-09-14&to=2026-10-04")
+        self.assertIn("Matriks belum ada di data ini", old.get_text())
+        self.assertIn("Performa Generate", old.get_text())
+
+    def test_the_matrix_holds_only_counts_never_company_names(self):
+        _, body = self.call("GET", "/performa?bu=bu1&per=minggu&from=2026-09-14&to=2026-10-04")
         for name in ("Co1", "Co2", "Camp A"):
             self.assertNotIn(name, body)
 
