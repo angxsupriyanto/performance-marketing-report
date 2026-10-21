@@ -225,6 +225,16 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual((first["Inbound Date"], first["MQL Date"], first["Proposal Price Quote Date"]), ("2026-09-21", "2026-09-22", "2026-09-24"))
         self.assertEqual((first["ARR + OTF (Tanpa PPN)"], first["Total Contract SQL"]), ("1000000", "9000000"))
 
+    def test_an_empty_or_unreadable_sheet_explains_which_node_and_what_to_check(self):
+        none = self.build_csv([])
+        self.assertFalse(none["ok"])
+        self.assertIn("Read Tracker tidak mengembalikan satu baris pun", none["error"])
+        self.assertIn("ID spreadsheet", none["error"])
+        wrong = self.build_csv([{"Kolom Lain": "x", "Satu Lagi": "y"}])
+        self.assertFalse(wrong["ok"])
+        self.assertIn("mengembalikan 1 baris, tetapi tidak ada baris yang berisi kolom wajib", wrong["error"])
+        self.assertIn("Kolom Lain", wrong["error"])
+
     def test_filter_columns_are_copied_when_the_sheet_has_them_and_never_required(self):
         with_columns = [{**r, "Medium": "cpc", "Category Campaign": "Brand"} for r in sheet_rows(LEADS)]
         out = self.build_csv(with_columns)

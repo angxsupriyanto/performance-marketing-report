@@ -45,7 +45,11 @@ for (const item of items) {
   const values = ALL.map((column) => cell(column, byName[column]));
   if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));
 }
-if (!rows.length) throw new Error('Sheet tidak mengembalikan baris data');
+if (!items.length) throw new Error('Node Read Tracker tidak mengembalikan satu baris pun. Periksa ID spreadsheet, nama tab (NEW Customers List), rentang A:DR, dan credential Google Sheets pada node itu.');
+if (!rows.length) {
+  const sample = [...seen].slice(0, 12).join(', ') || '(tidak ada)';
+  throw new Error(`Node Read Tracker mengembalikan ${items.length} baris, tetapi tidak ada baris yang berisi kolom wajib. Header yang terbaca (maks. 12): ${sample}. Biasanya nama tab atau rentang salah, atau baris judul tidak ada di baris pertama rentang.`);
+}
 
 const missing = COLUMNS.filter((column) => !seen.has(column));
 if (missing.length) {
