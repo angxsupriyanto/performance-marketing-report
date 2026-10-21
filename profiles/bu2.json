@@ -51,5 +51,6 @@
   "hardware_report": false,
   "target_unit": "count",
   "focus_product": "Ecosystem",
+  "focus_parent": "bu1",
   "deal_won_list": true
 }

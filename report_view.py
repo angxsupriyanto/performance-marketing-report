@@ -194,7 +194,16 @@ def eco_section(view: dict) -> str:
     return f'<div style="margin-top: 24px">{intro}{table}</div>'
 
 
-def progress_section(view: dict, tg: dict | None) -> str:
+def company_name(bu: str, names: dict | None) -> str:
+    """Display name of an internal company id such as BU1; falls back to 'Perusahaan 1' until an admin sets one."""
+    key = bu.lower()
+    if names and names.get(key):
+        return names[key]
+    digits = re.fullmatch(r"bu(\d+)", key)
+    return f"Perusahaan {digits.group(1)}" if digits else bu
+
+
+def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> str:
     t = _tg(tg)
     p = view["progress"]
     unit = p["unit"]
@@ -202,7 +211,8 @@ def progress_section(view: dict, tg: dict | None) -> str:
     year = p["year"]
     title = f"Progress target SQL {focus['product']} {year['year']}" if focus else f"Progress target SQL Value {year['year']}"
     if focus:
-        sub = f"Target BU2 adalah jumlah SQL dari campaign {e(focus['product'])} (existing user BU1), dihitung sampai {e(view['label'])}. "
+        parent = f" (existing user {e(company_name(focus['parent'], names))})" if focus.get("parent") else " (existing user)"
+        sub = f"Target {e(company_name(view['bu'], names))} adalah jumlah SQL dari campaign {e(focus['product'])}{parent}, dihitung sampai {e(view['label'])}. "
     else:
         sub = f"SQL Value yang sudah masuk sampai {e(view['label'])} terhadap target semester ini dan target 1 tahun. "
     parts = [f'<section aria-label="{e(title)}" style="margin-top: 24px">{h3(title)}{muted_p(sub + link_target())}']
@@ -253,7 +263,7 @@ def won_section(view: dict) -> str:
     return f'<div style="margin-top: 24px">{head}{table}</div>'
 
 
-def hardware_section(view: dict, tg: dict | None, analysis: dict | None) -> str:
+def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: dict | None = None) -> str:
     t = _tg(tg)
     hw = view["hardware"]
     month = view["month"]
@@ -336,14 +346,14 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None) -> str:
             f'{analysis_body("hardware_" + h["slug"], analysis)}</div></div>'
         )
     return (
-        f'<div style="margin-top: 32px">{h3("Campaign Hardware")}{muted_p(f"{count} produk hardware di {e(view["bu"])}. Produk lain dan tag kosong tidak dihitung.")}'
+        f'<div style="margin-top: 32px">{h3("Campaign Hardware")}{muted_p(f"{count} produk hardware di {e(company_name(view["bu"], names))}. Produk lain dan tag kosong tidak dihitung.")}'
         f'{"".join(panel)}{table}</div>'
         f'<div style="margin-top: 32px">{h3("Funnel per hardware")}'
         f'{muted_p(f"Submission, MQL, SQL, dan Deal Won {e(label)} untuk tiap produk, ditambah progress SQL Value bulan ini terhadap target produk itu.", 8)}{"".join(blocks)}</div>'
     )
 
 
-def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None) -> str:
+def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None) -> str:
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
@@ -363,27 +373,27 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         f'<div class="cards">{cards}</div>',
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
         f'<div style="margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="font-weight: 600; color: {INK}; margin-bottom: 4px">Executive Summary</div>{analysis_body("executive_summary", analysis)}</div>',
-        progress_section(view, tg),
+        progress_section(view, tg, company),
         sql_section(view),
     ]
     if view.get("won_list"):
         sections.append(won_section(view))
     if view.get("hardware"):
-        sections.append(hardware_section(view, tg, analysis))
+        sections.append(hardware_section(view, tg, analysis, company))
     return (
         f'<section aria-label="Report"><h2 style="margin: 0 0 16px; font: 600 16px/1.4 Inter, Arial, sans-serif; color: {INK}">Report</h2>'
         f'<div style="background: #ffffff; border: 1px solid {LINE}; border-radius: 6px; padding: 24px">{"".join(sections)}</div></section>'
     )
 
 
-def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True) -> str:
+def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None) -> str:
     data = json.dumps(view, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
-    title = f"{view['bu']} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
+    title = f"{company_name(view['bu'], names)} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
     main_style = ' style="padding-top: 24px"' if standalone else ""
     return (
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
-        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis)}</main>'
+        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script></body></html>'
     )
 

@@ -22,7 +22,7 @@ done
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 sql_dir="$here/database"
-for f in 002_targets_and_viewer.sql 003_run_idempotency_includes_generator.sql; do
+for f in 002_targets_and_viewer.sql 003_run_idempotency_includes_generator.sql 004_users_and_company_names.sql; do
   [ -f "$sql_dir/$f" ] || { echo "missing $sql_dir/$f" >&2; exit 66; }
 done
 
@@ -44,6 +44,7 @@ echo "== Creating the report_viewer role and the targets table"
 { printf "\\\\set viewer_password '%s'\n" "$viewer"; cat "$sql_dir/002_targets_and_viewer.sql"; } | psql_in -q -d marketing_reports -f -
 
 psql_in -q -d marketing_reports -f - < "$sql_dir/003_run_idempotency_includes_generator.sql"
+psql_in -q -d marketing_reports -f - < "$sql_dir/004_users_and_company_names.sql"
 
 echo "== Checking"
 checks=$(psql_in -At -d marketing_reports -f - < "$sql_dir/verify_install.sql")

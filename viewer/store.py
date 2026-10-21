@@ -9,6 +9,13 @@ import psycopg
 from psycopg.rows import dict_row
 
 
+class UserError(Exception):
+    """A user or name change the rules refuse. The text is safe to show to an admin."""
+
+
+USER_COLUMNS = "username, role, all_companies, companies, active, created_at, last_login_at"
+
+
 class Store:
     def __init__(self, conninfo: str):
         self.conninfo = conninfo
@@ -76,6 +83,76 @@ class Store:
                         "INSERT INTO reports.target_entries (bu, scope, product, period_key, unit, amount) VALUES (%s, %s, %s, %s, %s, %s)",
                         (bu, scope, product, period_key, unit, amount),
                     )
+
+    # ---- users
+    def ensure_bootstrap_admin(self, password_hash: str) -> bool:
+        """Creates the first admin from the old shared-password secret, only while there are no users at all."""
+        with self._connect() as conn:
+            row = conn.execute(
+                """INSERT INTO reports.viewer_users (username, password_hash, role, all_companies)
+                   SELECT 'admin', %s, 'admin', true WHERE NOT EXISTS (SELECT 1 FROM reports.viewer_users)
+                   ON CONFLICT DO NOTHING RETURNING 1""",
+                (password_hash,),
+            ).fetchone()
+        return row is not None
+
+    def get_user(self, username: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(f"SELECT {USER_COLUMNS}, password_hash FROM reports.viewer_users WHERE username = %s", (username,)).fetchone()
+
+    def list_users(self) -> list[dict]:
+        with self._connect() as conn:
+            return conn.execute(f"SELECT {USER_COLUMNS} FROM reports.viewer_users ORDER BY (role = 'admin') DESC, username").fetchall()
+
+    def touch_login(self, username: str) -> None:
+        with self._connect() as conn:
+            conn.execute("UPDATE reports.viewer_users SET last_login_at = now() WHERE username = %s", (username,))
+
+    def create_user(self, username: str, password_hash: str, role: str, all_companies: bool, companies: list[str], active: bool) -> None:
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """INSERT INTO reports.viewer_users (username, password_hash, role, all_companies, companies, active)
+                       VALUES (%s, %s, %s, %s, %s, %s)""",
+                    (username, password_hash, role, all_companies, companies, active),
+                )
+        except psycopg.errors.UniqueViolation:
+            raise UserError("Username ini sudah dipakai. Pilih yang lain.")
+
+    def update_user(self, username: str, password_hash: str | None, role: str, all_companies: bool, companies: list[str], active: bool) -> None:
+        """Keeps at least one active admin: the check runs under a table lock, after the change, and rolls it back."""
+        with psycopg.connect(self.conninfo, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("LOCK TABLE reports.viewer_users IN SHARE ROW EXCLUSIVE MODE")
+                done = conn.execute(
+                    """UPDATE reports.viewer_users SET role = %s, all_companies = %s, companies = %s, active = %s, updated_at = now(),
+                              password_hash = coalesce(%s, password_hash) WHERE username = %s RETURNING 1""",
+                    (role, all_companies, companies, active, password_hash, username),
+                ).fetchone()
+                if done is None:
+                    raise UserError("Pengguna tidak ditemukan.")
+                if conn.execute("SELECT count(*) AS n FROM reports.viewer_users WHERE role = 'admin' AND active").fetchone()["n"] < 1:
+                    raise UserError("Tidak bisa dinonaktifkan atau diturunkan perannya: ini satu-satunya admin aktif.")
+
+    # ---- company names
+    def company_names(self) -> dict[str, str]:
+        with self._connect() as conn:
+            return {r["bu"]: r["display_name"] for r in conn.execute("SELECT bu, display_name FROM reports.company_names").fetchall()}
+
+    def save_company_names(self, names: dict[str, str]) -> None:
+        try:
+            with psycopg.connect(self.conninfo, row_factory=dict_row) as conn:
+                with conn.transaction():
+                    # park the changing rows under unique temporary names so swapping two names does not trip the unique index
+                    conn.execute("UPDATE reports.company_names SET display_name = '~' || bu WHERE bu = ANY(%s)", (list(names),))
+                    for bu, name in names.items():
+                        conn.execute(
+                            """INSERT INTO reports.company_names (bu, display_name) VALUES (%s, %s)
+                               ON CONFLICT (bu) DO UPDATE SET display_name = EXCLUDED.display_name, updated_at = now()""",
+                            (bu, name),
+                        )
+        except psycopg.errors.UniqueViolation:
+            raise UserError("Kedua perusahaan tidak boleh memakai nama yang sama.")
 
     def ping(self) -> bool:
         try:

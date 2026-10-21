@@ -59,6 +59,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-v", "viewer_password=viewer-pw", "-f", str(ROOT / "database/002_targets_and_viewer.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/003_run_idempotency_includes_generator.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/003_run_idempotency_includes_generator.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/004_users_and_company_names.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/004_users_and_company_names.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -232,6 +234,70 @@ class DatabaseTests(unittest.TestCase):
         message = test_n8n.run_code(test_n8n.node(flow, "Compose Message")["parameters"]["jsCode"], [{"run_id": str(saved[0][0]), "inserted": True}],
                                     {"Prepare Insert": {"items": [p["json"] for p in prepared]}})["result"][0]["json"]["text"]
         self.assertIn("SQL Value Rp 8.000.000", message)
+
+
+    # ---- viewer users and company names (004), through the real Store class
+    def admin_db(self):
+        return self.admin("marketing_reports")
+
+    def viewer_store(self):
+        from viewer.store import Store
+        with self.admin_db() as conn:  # these tests share one database, so each starts from empty user and name tables
+            conn.execute("TRUNCATE reports.viewer_users, reports.company_names")
+        return Store(f"{ADMIN} dbname=marketing_reports user=report_viewer password=viewer-pw")
+
+    def test_users_table_enforces_shape_and_the_viewer_role_cannot_delete(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        hash_ = "scrypt$1$1$1$c2FsdA$ZGlnZXN0"
+        self.assertTrue(store.ensure_bootstrap_admin(hash_))
+        self.assertFalse(store.ensure_bootstrap_admin(hash_))  # only while the table is empty
+        admin = store.get_user("admin")
+        self.assertEqual((admin["role"], admin["all_companies"], admin["companies"], admin["active"]), ("admin", True, [], True))
+        store.create_user("andi", hash_, "user", False, ["bu1"], True)
+        with self.assertRaises(Exception) as ctx:
+            store.create_user("andi", hash_, "user", True, [], True)
+        self.assertIn("sudah dipakai", str(ctx.exception))
+        for bad in (("x1", "plain", "user", True, [], True), ("badshape", hash_, "user", False, [], True), ("adminlimited", hash_, "admin", False, ["bu1"], True), ("UPPER", hash_, "user", True, [], True)):
+            with self.assertRaises((pe.CheckViolation, pe.Error)):
+                store.create_user(*bad)
+        with self.viewer() as conn:
+            for sql in ("DELETE FROM reports.viewer_users", "TRUNCATE reports.viewer_users", "DELETE FROM reports.company_names"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(sql)
+        for role in (self.writer, self.reader):
+            with role() as conn, self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("SELECT * FROM reports.viewer_users")
+
+    def test_last_active_admin_rule_and_password_update_in_the_real_store(self):
+        store = self.viewer_store()
+        hash_ = "scrypt$1$1$1$c2FsdA$ZGlnZXN0"
+        store.ensure_bootstrap_admin(hash_)
+        from viewer.store import UserError
+        with self.assertRaises(UserError):
+            store.update_user("admin", None, "admin", True, [], False)
+        self.assertTrue(store.get_user("admin")["active"])  # rolled back
+        store.create_user("bos", hash_, "admin", True, [], True)
+        store.update_user("admin", "scrypt$2$2$2$c2FsdA$bmV3", "admin", True, [], False)
+        self.assertEqual(store.get_user("admin")["password_hash"], "scrypt$2$2$2$c2FsdA$bmV3")
+        with self.assertRaises(UserError):
+            store.update_user("bos", None, "user", True, [], True)  # would leave no admin
+        self.assertEqual(store.get_user("bos")["role"], "admin")
+        with self.assertRaises(UserError):
+            store.update_user("ghost", None, "user", True, [], True)
+        store.touch_login("bos")
+        self.assertIsNotNone(store.get_user("bos")["last_login_at"])
+
+    def test_company_names_upsert_swap_and_unique_ignoring_case(self):
+        from viewer.store import UserError
+        store = self.viewer_store()
+        store.save_company_names({"bu1": "McEasy", "bu2": "LOL"})
+        self.assertEqual(store.company_names(), {"bu1": "McEasy", "bu2": "LOL"})
+        store.save_company_names({"bu1": "LOL", "bu2": "McEasy"})  # a swap must not trip the unique index
+        self.assertEqual(store.company_names(), {"bu1": "LOL", "bu2": "McEasy"})
+        with self.assertRaises(UserError):
+            store.save_company_names({"bu1": "same", "bu2": "SAME"})
+        self.assertEqual(store.company_names(), {"bu1": "LOL", "bu2": "McEasy"})  # nothing half saved
 
 
 if __name__ == "__main__":

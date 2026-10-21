@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Web viewer for stored reports: password login, report list, report page, analysis button, target settings.
+"""Web viewer for stored reports: username login with admin and view-only roles, report list, report page, analysis button, target settings, user and company-name admin.
 
 Reads and writes only the marketing_reports database (role report_viewer) and calls the n8n analysis webhook.
 It never reads the Google Sheet and never calls an AI model itself.
@@ -29,8 +29,8 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import auth, pages, targets  # noqa: E402
-from viewer.store import Store, facts_of  # noqa: E402
+from viewer import access, auth, pages, targets  # noqa: E402
+from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
 PERIOD = re.compile(r"\d{4}-(?:W\d{2}|\d{2})")
@@ -38,6 +38,8 @@ MAX_FORM_BYTES = 64 * 1024
 COOKIE = "vw_session"
 UNITS = {"bu1": "idr", "bu2": "count"}
 NOTICES = {"year": "Target semester dan 1 tahun {label} tersimpan.", "month": "Target bulanan {label} tersimpan.", "same": "Tidak ada perubahan yang perlu disimpan."}
+USERNAME = re.compile(r"[a-z0-9._-]{3,32}")
+DUMMY_HASH = auth.hash_password(secrets.token_urlsafe(18))  # checked when the username is unknown, so timing does not reveal which usernames exist
 ANALYSIS_TIMEOUT_SECONDS = int(os.environ.get("VIEWER_ANALYSIS_TIMEOUT", 420))
 
 
@@ -176,6 +178,8 @@ class Handler(BaseHTTPRequestHandler):
     cfg: Config
     jobs: Jobs
     limiter: auth.LoginLimiter
+    form_lists: dict = {}
+    user: dict = {}
 
     def log_message(self, fmt, *args):  # never log URLs, form fields or bodies
         pass
@@ -191,9 +195,8 @@ class Handler(BaseHTTPRequestHandler):
                 return forwarded[:64]
         return self.client_address[0]
 
-    def session_csrf(self) -> str | None:
-        jar = self.headers.get("Cookie", "")
-        for part in jar.split(";"):
+    def session(self) -> tuple[str, str, str] | None:
+        for part in self.headers.get("Cookie", "").split(";"):
             name, _, value = part.strip().partition("=")
             if name == COOKIE:
                 return auth.read_session(self.cfg.session_secret, value)
@@ -251,7 +254,9 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 raise HttpError(400, "JSON tidak valid")
             return {k: str(v) for k, v in data.items()} if isinstance(data, dict) else {}
-        return {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True).items()}
+        parsed = parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True)
+        self.form_lists = parsed
+        return {k: v[0] for k, v in parsed.items()}
 
     def same_origin(self) -> bool:
         origin = self.headers.get("Origin")
@@ -270,16 +275,24 @@ class Handler(BaseHTTPRequestHandler):
             if method == "GET" and path == "/healthz":
                 status = 200
                 return self.json(200, {"status": "ok", "database": self.cfg.store.ping()})
-            csrf = self.session_csrf()
             query = {k: v[0] for k, v in parse_qs(urlparse(self.path).query).items()}
             if method == "POST" and not self.same_origin():
                 raise HttpError(403, "asal permintaan tidak cocok")
             if path == "/login":
                 status = self.login(method, nonce)
                 return
-            if csrf is None:
+            session = self.session()
+            try:
+                user = self.load_user(session) if session else None
+            except HttpError:
+                if method == "GET" and path == "/" and session:  # keep the mockup's message for a list that cannot load
+                    status = 503
+                    return self.send(503, pages.report_list([], session[0], nonce, None, {}, "db"), nonce=nonce)
+                raise
+            if session is None or user is None:
                 status = 303
-                return self.redirect("/login")
+                return self.redirect("/login", {"Set-Cookie": self.cookie_header("", 0)} if session else None)
+            csrf, self.user = session[0], user
             if method == "POST":
                 form = self.read_form()
                 supplied = self.headers.get("X-CSRF-Token") or form.get("csrf", "")
@@ -289,10 +302,20 @@ class Handler(BaseHTTPRequestHandler):
                     status = 303
                     return self.redirect("/login", {"Set-Cookie": self.cookie_header("", 0)})
                 if path == "/api/analysis":
+                    self.need_admin()
                     status = self.start_analysis(form)
                     return
                 if path in ("/targets/year", "/targets/month"):
+                    self.need_admin()
                     status = self.save_targets(path.rsplit("/", 1)[1], form, csrf, nonce)
+                    return
+                if path == "/users/save":
+                    self.need_admin()
+                    status = self.save_user(form, csrf, nonce)
+                    return
+                if path == "/companies":
+                    self.need_admin()
+                    status = self.save_companies(form, csrf, nonce)
                     return
             elif path == "/":
                 status = self.list_page(csrf, nonce)
@@ -304,7 +327,16 @@ class Handler(BaseHTTPRequestHandler):
                 status = self.analysis_status(query)
                 return
             elif path == "/targets":
+                self.need_admin()
                 status = self.targets_page(query, csrf, nonce)
+                return
+            elif path in ("/users", "/users/new", "/users/edit"):
+                self.need_admin()
+                status = self.users_pages(path, query, csrf, nonce)
+                return
+            elif path == "/companies":
+                self.need_admin()
+                status = self.companies_page(query, csrf, nonce)
                 return
             raise HttpError(404, "halaman tidak ditemukan")
         except HttpError as exc:
@@ -324,32 +356,69 @@ class Handler(BaseHTTPRequestHandler):
             print(f"{method} {path.split('/')[1] if path != '/' else '/'} -> {status} {time.monotonic() - started:.2f}s", flush=True)
 
     # ---- handlers
+    def load_user(self, session: tuple[str, str, str]) -> dict | None:
+        """The signed session names a user; role, access and the active flag always come from the database."""
+        try:
+            user = self.cfg.store.get_user(session[1])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab; muat ulang halaman ini")
+        if user is None or not user["active"] or not hmac.compare_digest(session[2], auth.credential_tag(user["password_hash"])):
+            return None
+        return user
+
+    def need_admin(self) -> None:
+        if not access.is_admin(self.user):
+            raise HttpError(403, "Halaman ini hanya untuk admin.")
+
+    def names(self) -> dict[str, str]:
+        try:
+            return access.names_with_defaults(self.cfg.store.company_names())
+        except Exception:  # noqa: BLE001 - a missing name table must not take the reports down
+            return access.names_with_defaults(None)
+
     def login(self, method: str, nonce: str) -> int:
         who = self.client()
         wait = self.limiter.retry_after(who)
+        locked_text = "Terlalu banyak percobaan. Coba lagi dalam 5 menit."
         if method == "GET":
-            self.send(200, pages.login(nonce, "Terlalu banyak percobaan. Coba lagi dalam 5 menit." if wait else "", bool(wait)), nonce=nonce)
+            self.send(200, pages.login(nonce, locked_text if wait else "", bool(wait)), nonce=nonce)
             return 200
         form = self.read_form()
         if wait:
-            self.send(429, pages.login(nonce, "Terlalu banyak percobaan. Coba lagi dalam 5 menit.", True), nonce=nonce, extra={"Retry-After": str(wait)})
+            self.send(429, pages.login(nonce, locked_text, True), nonce=nonce, extra={"Retry-After": str(wait)})
             return 429
-        if auth.verify_password(form.get("password", "")[:256], self.cfg.password_hash):
+        username = form.get("username", "").strip().lower()[:64]
+        password = form.get("password", "")[:256]
+        try:
+            self.cfg.store.ensure_bootstrap_admin(self.cfg.password_hash)
+            user = self.cfg.store.get_user(username) if USERNAME.fullmatch(username) else None
+        except Exception:  # noqa: BLE001
+            self.send(503, pages.login(nonce, "Database marketing_reports tidak menjawab. Coba lagi sebentar lagi."), nonce=nonce)
+            return 503
+        correct = auth.verify_password(password, user["password_hash"] if user else DUMMY_HASH) and user is not None
+        if correct and user["active"]:
             self.limiter.succeeded(who)
-            cookie, _ = auth.new_session(self.cfg.session_secret)
+            try:
+                self.cfg.store.touch_login(user["username"])
+            except Exception:  # noqa: BLE001 - the last-login time is informational
+                pass
+            cookie, _ = auth.new_session(self.cfg.session_secret, user["username"], auth.credential_tag(user["password_hash"]))
             self.redirect("/", {"Set-Cookie": self.cookie_header(cookie, auth.SESSION_SECONDS)})
             return 303
+        if correct:  # right password for a deactivated account: no lockout, but say why
+            self.send(403, pages.login(nonce, "Akun ini dinonaktifkan. Hubungi admin."), nonce=nonce)
+            return 403
         self.limiter.failed(who)
         locked = bool(self.limiter.retry_after(who))
-        self.send(401, pages.login(nonce, "Terlalu banyak percobaan. Coba lagi dalam 5 menit." if locked else "Password salah. Periksa lalu coba lagi.", locked), nonce=nonce)
+        self.send(401, pages.login(nonce, locked_text if locked else "Username atau password salah. Periksa lalu coba lagi.", locked), nonce=nonce)
         return 401
 
     def list_page(self, csrf: str, nonce: str) -> int:
         try:
-            rows, error = self.cfg.store.list_reports(), ""
+            rows, error = [r for r in self.cfg.store.list_reports() if access.can_see(self.user, r["bu"])], ""
         except Exception:  # noqa: BLE001
             rows, error = [], "db"
-        self.send(503 if error else 200, pages.report_list(rows, csrf, nonce, error), nonce=nonce)
+        self.send(503 if error else 200, pages.report_list(rows, csrf, nonce, self.user, self.names(), error), nonce=nonce)
         return 503 if error else 200
 
     def report_page(self, path: str, csrf: str, nonce: str) -> int:
@@ -357,6 +426,8 @@ class Handler(BaseHTTPRequestHandler):
         if len(parts) != 4 or not BU.fullmatch(parts[2]) or not PERIOD.fullmatch(parts[3]):
             raise HttpError(404, "report tidak ditemukan")
         bu, period = parts[2], parts[3]
+        if not access.can_see(self.user, bu):
+            raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke report perusahaan ini.")
         try:
             report = self.cfg.store.get_report(bu, period)
         except Exception:  # noqa: BLE001
@@ -366,7 +437,7 @@ class Handler(BaseHTTPRequestHandler):
         view = report_view.extract_view(report["html"])
         job = self.jobs.get((bu, period))
         state = pages.analysis_state(report["has_analysis"], job)
-        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf)
+        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu))
         if view is None:
             note = (
                 '<main class="vw-main" style="padding-top:0"><div class="vw-box vw-pad" role="alert"><div class="vw-h2">Report ini dibuat oleh generator versi lama</div>'
@@ -379,14 +450,14 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:  # noqa: BLE001
             rows = None
         analysis = report["analysis"] if isinstance(report.get("analysis"), dict) else None
-        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False)
+        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names())
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
 
     def start_analysis(self, form: dict) -> int:
         bu, period = form.get("bu", ""), form.get("period", "")
         if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
-            raise HttpError(400, "bu atau period tidak valid")
+            raise HttpError(400, "perusahaan atau period tidak valid")
         report = self.cfg.store.get_report(bu, period)
         if report is None:
             raise HttpError(404, "belum ada report numerik; jalankan Report Generate di n8n dahulu")
@@ -400,7 +471,9 @@ class Handler(BaseHTTPRequestHandler):
     def analysis_status(self, query: dict) -> int:
         bu, period = query.get("bu", ""), query.get("period", "")
         if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
-            raise HttpError(400, "bu atau period tidak valid")
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        if not access.can_see(self.user, bu):
+            raise HttpError(403, "Tidak ada akses")
         job = self.jobs.get((bu, period))
         if job is None:
             self.json(200, {"state": "idle"})
@@ -427,21 +500,21 @@ class Handler(BaseHTTPRequestHandler):
         products = list(generate_report.load_profile(bu)["products"]) if UNITS[bu] == "idr" else []
         current = {p: targets.effective_hardware(rows, p, ctx["month"]) for p in products}
         semesters = {"S1": targets.semester_amount(rows, f"{ctx['year']}-S1"), "S2": targets.semester_amount(rows, f"{ctx['year']}-S2")}
-        body = pages.targets_page(bu, UNITS[bu], products, ctx["months"], ctx["month"], current, ctx["year"], ctx["years"], semesters, history, csrf, nonce, notice, failed, errors)
+        body = pages.targets_page(bu, UNITS[bu], products, ctx["months"], ctx["month"], current, ctx["year"], ctx["years"], semesters, history, csrf, nonce, self.user, {b: n for b, n in self.names().items() if b in UNITS}, notice, failed, errors)
         self.send(status, body, nonce=nonce)
         return status
 
     def targets_page(self, query: dict, csrf: str, nonce: str) -> int:
         bu = query.get("bu", "bu1")
         if bu not in UNITS:
-            raise HttpError(404, "BU tidak dikenal")
-        notice = NOTICES.get(query.get("saved", ""), "").format(label=bu.upper())
+            raise HttpError(404, "Perusahaan tidak dikenal")
+        notice = NOTICES.get(query.get("saved", ""), "").format(label=self.names().get(bu, bu))
         return self.render_targets(bu, self.targets_context(bu, query), csrf, nonce, notice)
 
     def save_targets(self, kind: str, form: dict, csrf: str, nonce: str) -> int:
         bu = form.get("bu", "")
         if bu not in UNITS:
-            raise HttpError(400, "BU tidak dikenal")
+            raise HttpError(400, "Perusahaan tidak dikenal")
         unit = UNITS[bu]
         ctx = self.targets_context(bu, {"month": form.get("month", ""), "year": form.get("year", "")})
         errors: dict = {"_form": kind}
@@ -459,7 +532,7 @@ class Handler(BaseHTTPRequestHandler):
                     entries.append(("semester", None, f"{ctx['year']}-{sem}", unit, value))
         else:
             if unit != "idr":
-                raise HttpError(400, "BU ini tidak memakai target bulanan")
+                raise HttpError(400, "Perusahaan ini tidak memakai target bulanan")
             if form.get("month") != ctx["month"]:
                 raise HttpError(400, "bulan tidak valid")
             for i, name in enumerate(generate_report.load_profile(bu)["products"]):
@@ -484,6 +557,125 @@ class Handler(BaseHTTPRequestHandler):
         self.redirect(f"/targets?bu={bu}&year={ctx['year']}&month={ctx['month']}&saved={saved}")
         return 303
 
+    # ---- users and company names (admin)
+    def users_pages(self, path: str, query: dict, csrf: str, nonce: str) -> int:
+        names = self.names()
+        if path == "/users":
+            try:
+                users = self.cfg.store.list_users()
+            except Exception:  # noqa: BLE001
+                raise HttpError(503, "Daftar pengguna tidak bisa dimuat. Database marketing_reports tidak menjawab.")
+            saved = query.get("u", "") if query.get("saved") and USERNAME.fullmatch(query.get("u", "")) else ""
+            self.send(200, pages.users_page(users, names, csrf, nonce, self.user, f"Pengguna {saved} tersimpan." if saved else ""), nonce=nonce)
+            return 200
+        if path == "/users/new":
+            values = {"username": "", "role": "user", "all_companies": False, "companies": [], "active": True}
+            self.send(200, pages.user_form_page("new", values, {}, names, csrf, nonce, self.user), nonce=nonce)
+            return 200
+        username = query.get("u", "")
+        try:
+            row = self.cfg.store.get_user(username) if USERNAME.fullmatch(username) else None
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab; muat ulang halaman ini")
+        if row is None:
+            raise HttpError(404, "pengguna tidak ditemukan")
+        self.send(200, pages.user_form_page("edit", row, {}, names, csrf, nonce, self.user), nonce=nonce)
+        return 200
+
+    def save_user(self, form: dict, csrf: str, nonce: str) -> int:
+        mode = form.get("mode", "")
+        if mode not in ("new", "edit"):
+            raise HttpError(400, "permintaan tidak valid")
+        username = form.get("username", "").strip().lower()
+        role = form.get("role", "")
+        if role not in ("admin", "user"):
+            raise HttpError(400, "peran tidak valid")
+        errors: dict[str, str] = {}
+        known = access.company_ids()
+        picked = [c for c in self.form_lists.get("company", []) if c in known]
+        everyone = role == "admin" or form.get("scope") == "all"
+        if role == "user" and not everyone and not picked:
+            errors["scope"] = "Pilih minimal satu perusahaan, atau pilih Semua perusahaan."
+        if mode == "new" and not USERNAME.fullmatch(username):
+            errors["username"] = "Username harus 3 sampai 32 karakter: huruf kecil, angka, titik, garis bawah, dan strip."
+        password = form.get("password", "")
+        password_hash = None
+        if password or mode == "new":
+            try:
+                auth.check_password_strength(password)
+            except ValueError as exc:
+                errors["password"] = str(exc).capitalize() + "."
+        values = {"username": username, "role": role, "all_companies": everyone, "companies": [] if everyone else picked, "active": form.get("active", "1") != "0"}
+        names = self.names()
+
+        def again(message: str = "", status: int = 422) -> int:
+            self.send(status, pages.user_form_page(mode, values, errors, names, csrf, nonce, self.user, message), nonce=nonce)
+            return status
+
+        if errors:
+            return again()
+        if password:
+            password_hash = auth.hash_password(password)
+        store = self.cfg.store
+        try:
+            if mode == "new":
+                store.create_user(username, password_hash, role, values["all_companies"], values["companies"], values["active"])
+            else:
+                if not USERNAME.fullmatch(username):
+                    raise HttpError(400, "username tidak valid")
+                store.update_user(username, password_hash, role, values["all_companies"], values["companies"], values["active"])
+        except UserError as exc:
+            errors["username" if "Username" in exc.args[0] else "active"] = exc.args[0]
+            return again()
+        except HttpError:
+            raise
+        except Exception:  # noqa: BLE001
+            return again("Pengguna tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", 503)
+        self.redirect(f"/users?saved=1&u={username}")
+        return 303
+
+    def companies_page(self, query: dict, csrf: str, nonce: str) -> int:
+        ids = access.company_ids()
+        names = self.names()
+        notice = "Nama perusahaan tersimpan. Berlaku di semua halaman." if query.get("saved") else ""
+        self.send(200, pages.companies_page(ids, names, {b: access.default_name(b) for b in ids}, {}, csrf, nonce, self.user, notice), nonce=nonce)
+        return 200
+
+    def save_companies(self, form: dict, csrf: str, nonce: str) -> int:
+        ids = access.company_ids()
+        errors: dict[str, str] = {}
+        cleaned: dict[str, str] = {}
+        for bu in ids:
+            raw = form.get(f"name_{bu}", "")
+            try:
+                cleaned[bu] = access.validate_name(raw)
+            except ValueError as exc:
+                errors[bu], errors[f"_v_{bu}"] = str(exc), raw
+        seen: dict[str, str] = {}
+        for bu, name in cleaned.items():
+            if name.lower() in seen:
+                errors[bu], errors[f"_v_{bu}"] = "Kedua perusahaan tidak boleh memakai nama yang sama.", name
+            seen[name.lower()] = bu
+        defaults = {b: access.default_name(b) for b in ids}
+
+        def again(message: str, status: int) -> int:
+            shown = {**self.names(), **{b: errors.get(f"_v_{b}", cleaned.get(b, "")) for b in ids}}
+            self.send(status, pages.companies_page(ids, shown, defaults, errors, csrf, nonce, self.user, "", message), nonce=nonce)
+            return status
+
+        if errors:
+            return again("Periksa isian yang ditandai. Belum ada yang disimpan.", 422)
+        try:
+            self.cfg.store.save_company_names(cleaned)
+        except UserError as exc:
+            for bu in ids[1:]:
+                errors[bu], errors[f"_v_{bu}"] = exc.args[0], cleaned[bu]
+            return again("Nama tidak tersimpan.", 422)
+        except Exception:  # noqa: BLE001
+            return again("Nama tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", 503)
+        self.redirect("/companies?saved=1")
+        return 303
+
     def do_GET(self):
         self.route("GET")
 
@@ -498,6 +690,11 @@ def make_server(cfg: Config, host: str = "0.0.0.0", port: int = 8090) -> Threadi
 
 if __name__ == "__main__":
     config = Config.from_env()
+    try:
+        if config.store.ensure_bootstrap_admin(config.password_hash):
+            print("admin pertama dibuat dari VIEWER_PASSWORD_HASH (username: admin)", flush=True)
+    except Exception as exc:  # noqa: BLE001 - the service starts anyway; login reports the database state
+        print(f"peringatan: tabel pengguna belum bisa dipakai ({type(exc).__name__}); jalankan database/004_users_and_company_names.sql", flush=True)
     server = make_server(config, port=int(os.environ.get("PORT", 8090)))
     print(f"report-viewer listening on :{server.server_address[1]}", flush=True)
     server.serve_forever()

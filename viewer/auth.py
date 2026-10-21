@@ -1,14 +1,16 @@
 """Password check, signed session cookie and login rate limit for the viewer.
 
-One shared password for the internal team (no per-person accounts). The password itself is never stored: only a
-scrypt hash, in a Docker secret file. Sessions are stateless HMAC-signed tokens, so restarting the container
-does not log anyone out, and rotating the session secret logs everyone out.
+Accounts live in the database (reports.viewer_users); only scrypt hashes are stored, never passwords. A session is a
+stateless HMAC-signed token that names the user. It proves who logged in, nothing more: role, access and the active flag
+are read from the database on every request, so deactivating a user or changing their access takes effect at once.
+Restarting the container does not log anyone out, and rotating the session secret logs everyone out.
 """
 from __future__ import annotations
 
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import threading
 import time
@@ -18,6 +20,7 @@ SESSION_SECONDS = 12 * 3600
 MAX_FAILURES = 5
 WINDOW_SECONDS = 5 * 60
 MIN_PASSWORD_CHARS = 12
+USERNAME = re.compile(r"[a-z0-9._-]{3,32}")
 
 
 def _b64(data: bytes) -> str:
@@ -51,11 +54,16 @@ def verify_password(password: str, stored: str) -> bool:
     return hmac.compare_digest(actual, expected)
 
 
-def new_session(secret: bytes, now: float | None = None) -> tuple[str, str]:
+def credential_tag(password_hash: str) -> str:
+    """Short fingerprint of the stored hash. It rides in the session so a password change ends every older session."""
+    return _b64(hashlib.sha256(b"tag:" + password_hash.encode()).digest()[:9])
+
+
+def new_session(secret: bytes, username: str, tag: str, now: float | None = None) -> tuple[str, str]:
     """Returns (cookie value, csrf token). The csrf token is derived from the session, not stored."""
     expires = int((now if now is not None else time.time()) + SESSION_SECONDS)
     nonce = _b64(secrets.token_bytes(16))
-    body = f"{expires}.{nonce}"
+    body = f"{expires}.{nonce}.{_b64(username.encode())}.{tag}"
     signature = _b64(hmac.new(secret, body.encode(), hashlib.sha256).digest())
     return f"{body}.{signature}", csrf_for(secret, f"{body}.{signature}")
 
@@ -64,20 +72,28 @@ def csrf_for(secret: bytes, cookie: str) -> str:
     return _b64(hmac.new(secret, b"csrf:" + cookie.encode(), hashlib.sha256).digest())
 
 
-def read_session(secret: bytes, cookie: str | None, now: float | None = None) -> str | None:
-    """Returns the csrf token of a valid, unexpired session, otherwise None."""
+def read_session(secret: bytes, cookie: str | None, now: float | None = None) -> tuple[str, str, str] | None:
+    """Returns (csrf token, username, credential tag) of a valid, unexpired session, otherwise None."""
     if not cookie:
         return None
     try:
-        expires, nonce, signature = cookie.split(".")
-        expected = _b64(hmac.new(secret, f"{expires}.{nonce}".encode(), hashlib.sha256).digest())
+        expires, nonce, user, tag, signature = cookie.split(".")
+        expected = _b64(hmac.new(secret, f"{expires}.{nonce}.{user}.{tag}".encode(), hashlib.sha256).digest())
         if not hmac.compare_digest(signature.encode(), expected.encode()):
             return None
         if int(expires) < (now if now is not None else time.time()):
             return None
-    except ValueError:
+        username = _unb64(user).decode()
+    except (ValueError, UnicodeDecodeError):
         return None
-    return csrf_for(secret, cookie)
+    return csrf_for(secret, cookie), username, tag
+
+
+def check_password_strength(password: str) -> None:
+    if len(password) < MIN_PASSWORD_CHARS:
+        raise ValueError(f"password minimal {MIN_PASSWORD_CHARS} karakter")
+    if len(password) > 256:
+        raise ValueError("password maksimal 256 karakter")
 
 
 class LoginLimiter:

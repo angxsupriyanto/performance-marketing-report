@@ -145,12 +145,13 @@ Pengujian: `python -m unittest discover -s tests`. Test database membutuhkan ser
 
 ## Viewer web dan target
 
-`viewer/` adalah web internal (password bersama) untuk melihat report dari database, menekan tombol analisis, dan mengatur target. Pasang dengan `deploy/VIEWER.md`; keputusan desainnya:
+`viewer/` adalah web internal untuk melihat report dari database, menekan tombol analisis, dan mengatur target, dengan akun per orang (admin atau pengguna lihat-saja, akses per perusahaan). Pasang dengan `deploy/VIEWER.md`; keputusan desainnya:
 
 - **Target tidak ada di report.** Generator hanya menulis angka aktual dan slot kosong (`Target`, `Progress`, kartu progress). Viewer mengisinya saat report dibuka dari tabel `target_entries`, jadi target bisa diubah kapan saja tanpa membuat report baru.
 - **Tabel target append-only.** Menyimpan target menambah baris; tidak ada UPDATE atau DELETE. Mengosongkan target berarti menyimpan 0. Target bulanan per hardware (BU1, Rupiah) berlaku mulai bulan yang dipilih dan seterusnya sampai ada baris baru. Target semester berlaku per semester; target 1 tahun adalah jumlah dua semester. BU2 hanya memakai target semester dan tahun, dalam jumlah SQL campaign Ecosystem.
 - **Bulan sebuah minggu = bulan yang memuat hari Kamis minggu itu** (juga untuk semester dan tahun), aturan yang sama dengan penomoran minggu ISO. Progress bulan berjalan menjumlahkan minggu-minggu ISO utuh milik bulan itu sampai minggu report, jadi minggu yang melewati pergantian bulan tidak terbelah.
 - **BU1** menampilkan tabel Campaign Hardware (Submission, MQL, SQL, SQL Value, Target, Progress), funnel per hardware dengan bar progress target, dan panel analisis per hardware. **BU2** tidak punya panel hardware; ia menampilkan progress SQL Ecosystem terhadap target semester dan tahun, daftar SQL Ecosystem periode itu (kosong bila tidak ada), dan daftar Deal Won.
+- **Pengguna dan nama perusahaan** ada di database (`reports.viewer_users`, `reports.company_names`). "BU1" dan "BU2" hanya identitas internal; yang tampil adalah nama yang diatur admin (contoh McEasy dan LOL), atau "Perusahaan 1" dan "Perusahaan 2" bila belum diatur.
 - Analisis menerima `targets` (angka progress hasil hitung viewer) di samping `facts`. Model tetap tidak melihat nama perusahaan.
 
 ## Analisis deskriptif: langkah kedua setelah angka benar

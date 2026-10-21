@@ -83,10 +83,19 @@ def page(title: str, body: str, nonce: str, csrf: str | None = None, nav: str = 
     )
 
 
-def menu(csrf: str, current: str = "") -> str:
-    here = ' aria-current="page" style="color:#17283e;font-weight:600"' if current == "targets" else ""
+ROLE_TEXT = {"admin": "Admin", "user": "Pengguna"}
+
+
+def menu(csrf: str, user: dict | None, current: str = "") -> str:
+    def link(key: str, href: str, text: str) -> str:
+        here = ' aria-current="page" style="color:#17283e;font-weight:600"' if current == key else ""
+        return f'<a href="{href}"{here}>{text}</a>'
+
+    links = ""
+    if user is not None and user["role"] == "admin":
+        links = link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("companies", "/companies", "Nama perusahaan")
     return (
-        f'<nav class="vw-menu" aria-label="Menu"><a href="/targets"{here}>Pengaturan target</a>'
+        f'<nav class="vw-menu" aria-label="Menu">{f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>' if user is not None else ""}{links}'
         f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></nav>'
     )
 
@@ -98,13 +107,14 @@ def login(nonce: str, error: str = "", locked: bool = False) -> str:
     body = (
         '<main style="display:flex;justify-content:center;padding:96px 16px 48px"><form method="post" action="/login" style="width:100%;max-width:360px;display:flex;flex-direction:column">'
         '<h1 class="vw-h1">Masuk</h1><p class="vw-lead">Report ini hanya untuk tim internal.</p>'
-        f'<div class="vw-field" style="margin-bottom:16px"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required autofocus{attrs}{disabled}></div>'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="username">Username</label><input id="username" name="username" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required autofocus{attrs}{disabled}></div>'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required{attrs}{disabled}></div>'
         f'{alert}<button class="vw-btn" type="submit"{disabled}>Masuk</button></form></main>'
     )
     return page("Masuk", body, nonce)
 
 
-def report_list(rows: list[dict], csrf: str, nonce: str, error: str = "") -> str:
+def report_list(rows: list[dict], csrf: str, nonce: str, user: dict | None, names: dict, error: str = "") -> str:
     if error:
         content = (
             '<div role="alert" class="vw-box" style="padding:32px;background:#fcecec;border-color:#ac3d3d"><h2 class="vw-h2" style="color:#ac3d3d">Daftar report tidak bisa dimuat</h2>'
@@ -120,24 +130,24 @@ def report_list(rows: list[dict], csrf: str, nonce: str, error: str = "") -> str
     else:
         trs = []
         for r in rows:
-            bu = r["bu"].upper()
+            bu = names.get(r["bu"], r["bu"])
             analysis = (
                 f'<span class="vw-tag ok">Sudah ada</span><br><span style="color:#607188">{escape(dt_text(r["analysis_created_at"]))}</span>'
                 if r["has_analysis"] else '<span class="vw-tag none">Belum ada</span>'
             )
             trs.append(
                 f'<tr><td data-label="Periode"><span style="font-weight:600;color:#17283e">{escape(r["period"])}</span><br><span style="color:#607188">{escape(range_text(r["period_start"], r["period_end"]))}</span></td>'
-                f'<td data-label="BU">{escape(bu)}</td><td data-label="Dibuat">{escape(dt_text(r["generated_at"]))}</td><td data-label="Analisis">{analysis}</td>'
+                f'<td data-label="Perusahaan">{escape(bu)}</td><td data-label="Dibuat">{escape(dt_text(r["generated_at"]))}</td><td data-label="Analisis">{analysis}</td>'
                 f'<td data-label=""><a class="vw-link" style="font-weight:600" aria-label="Buka report {escape(bu)} {escape(r["period"])}" href="/report/{escape(r["bu"])}/{escape(r["period"])}">Buka</a></td></tr>'
             )
         content = (
-            '<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Report yang sudah dibuat</caption><thead><tr><th scope="col">Periode</th><th scope="col">BU</th><th scope="col">Dibuat</th><th scope="col">Analisis</th>'
+            '<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Report yang sudah dibuat</caption><thead><tr><th scope="col">Periode</th><th scope="col">Perusahaan</th><th scope="col">Dibuat</th><th scope="col">Analisis</th>'
             f'<th scope="col"><span class="vw-sr">Aksi</span></th></tr></thead><tbody>{"".join(trs)}</tbody></table></div>'
         )
     body = (
         f'<main class="vw-main"><h1 class="vw-h1">Daftar report</h1><p class="vw-lead">Dibuat dari tab NEW Customers List lewat n8n. Yang terbaru di atas.</p>{content}</main>'
     )
-    return page("Daftar report", body, nonce, csrf, menu(csrf))
+    return page("Daftar report", body, nonce, csrf, menu(csrf, user))
 
 
 ANALYSIS_CSS = """
@@ -187,9 +197,9 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
     return "done" if has_analysis else "none"
 
 
-def report_chrome(report: dict, state: str, job_error: str, csrf: str) -> str:
+def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str) -> str:
     bu, period = report["bu"], report["period"]
-    label = f"{bu.upper()} {period}"
+    label = f"{name} {period}"
     if state == "running":
         head, text, color, label_btn, alt = "Menganalisis", "Mengirim ringkasan angka ke Claude dan menyisipkan hasilnya ke report. Jangan tutup halaman ini.", "#17283e", "Menganalisis", False
     elif state == "failed":
@@ -202,14 +212,15 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str) -> str:
     role = "alert" if state == "failed" else "status"
     return (
         f'<style nonce="{{nonce}}">{BASE_CSS}{ANALYSIS_CSS}</style>'
-        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf)}</header>'
+        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf, user)}</header>'
         '<div class="vw-chrome"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span>'
         f'<span aria-current="page" style="color:#17283e">{escape(label)}</span></nav>'
-        f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(bu.upper())}</h1>'
+        f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(name)}</h1>'
         f'<dl class="vw-dl"><div><dt>Periode</dt><dd>{escape(period)}</dd></div><div><dt>Tanggal</dt><dd style="font-weight:400">{escape(range_text(report["period_start"], report["period_end"]))}</dd></div></dl>'
-        f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" style="margin-bottom:24px">'
+        + (f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" style="margin-bottom:24px">'
         f'<div class="vw-bar"><div style="flex:1 1 360px;min-width:0"><div data-role="title" style="font-weight:600;color:{color}">{escape(head)}</div><div data-role="text">{escape(text)}</div></div>'
-        f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div></div></section></div>'
+        f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div></div></section>' if user["role"] == "admin" else "")
+        + '</div>'
     )
 
 
@@ -245,12 +256,12 @@ def unit_text(unit: str) -> str:
 
 
 def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str, str]], selected_month: str, current: dict, year: str, years: list[str],
-                 semesters: dict, history: list[dict], csrf: str, nonce: str, notice: str = "", failed: str = "", errors: dict | None = None) -> str:
+                 semesters: dict, history: list[dict], csrf: str, nonce: str, user: dict, names: dict, notice: str = "", failed: str = "", errors: dict | None = None) -> str:
     errors = errors or {}
-    label = bu.upper()
+    label = names.get(bu, bu)
     is_idr = unit == "idr"
     placeholder = "Angka dalam Rupiah" if is_idr else "Angka dalam jumlah SQL"
-    bu_options = "".join(f'<option value="{b}"{" selected" if b == bu else ""}>{b.upper()}</option>' for b in ("bu1", "bu2"))
+    bu_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
 
     def amount_text(value) -> str:
         return "" if value is None else f"{int(value):,}".replace(",", ".")
@@ -273,7 +284,7 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
     year_form = (
         f'<section aria-label="Target semester dan 1 tahun" class="vw-box" style="padding:24px;margin-bottom:32px"><h2 class="vw-h2">Target {"SQL Value" if is_idr else "SQL Ecosystem"} semester dan 1 tahun {label}</h2>'
         '<p style="margin:0 0 16px;max-width:680px;color:#607188">'
-        + ("Dipakai untuk dua progress di report: semester berjalan dan akumulasi 1 tahun." if is_idr else "Target BU2 berupa jumlah SQL dari campaign Ecosystem (existing user BU1), bukan Rupiah. Dipakai untuk progress semester berjalan dan akumulasi 1 tahun.")
+        + ("Dipakai untuk dua progress di report: semester berjalan dan akumulasi 1 tahun." if is_idr else f"Target {label} berupa jumlah SQL dari campaign Ecosystem (existing user), bukan Rupiah. Dipakai untuk progress semester berjalan dan akumulasi 1 tahun.")
         + ' Target 1 tahun adalah jumlah dua semester.</p>'
         f'<form method="post" action="/targets/year"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="bu" value="{bu}">'
         '<div style="display:flex;flex-wrap:wrap;gap:16px;align-items:flex-start">'
@@ -304,7 +315,7 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
             + '<div style="margin-top:20px"><button class="vw-btn" type="submit">Simpan target</button></div></form></section>'
         )
     else:
-        month_form = '<p style="margin:0 0 32px;max-width:680px;color:#607188">BU2 tidak memakai target bulanan. Report BU2 hanya menampilkan progress semester dan 1 tahun.</p>'
+        month_form = f'<p style="margin:0 0 32px;max-width:680px;color:#607188">{escape(label)} tidak memakai target bulanan. Report {escape(label)} hanya menampilkan progress semester dan 1 tahun.</p>'
 
     def entry_label(r: dict) -> str:
         if r["scope"] == "semester":
@@ -328,8 +339,8 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
     body = (
         '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Pengaturan target</span></nav>'
         '<h1 class="vw-h1">Pengaturan target</h1>'
-        '<p class="vw-lead" style="max-width:680px">Target SQL Value bulanan per hardware untuk BU1, serta target semester dan 1 tahun per BU. Riwayat target tidak pernah ditimpa; setiap penyimpanan menambah satu baris.</p>'
-        f'<div class="vw-field" style="margin-bottom:24px;max-width:200px"><label for="bu">BU</label><select id="bu" data-reload="bu">{bu_options}</select></div>'
+        '<p class="vw-lead" style="max-width:680px">Target SQL Value bulanan per hardware, serta target semester dan 1 tahun per perusahaan. Riwayat target tidak pernah ditimpa; setiap penyimpanan menambah satu baris.</p>'
+        f'<div class="vw-field" style="margin-bottom:24px;max-width:200px"><label for="bu">Perusahaan</label><select id="bu" data-reload="bu">{bu_options}</select></div>'
         f'{year_form}{month_form}<section aria-label="Riwayat target"><h2 class="vw-h2">Riwayat target {label}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
     )
     script = (
@@ -338,4 +349,102 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
         'var m=document.getElementById("mulai");if(m)u.searchParams.set("month",m.value);var y=document.getElementById("tahun");if(y)u.searchParams.set("year",y.value);'
         'location.href=u.toString();});});</script>'
     )
-    return page("Pengaturan target", body, nonce, csrf, menu(csrf, "targets"), script)
+    return page("Pengaturan target", body, nonce, csrf, menu(csrf, user, "targets"), script)
+
+
+def access_text(user: dict, names: dict) -> str:
+    if user["all_companies"]:
+        return "Semua perusahaan"
+    return ", ".join(names.get(b, b) for b in user["companies"])
+
+
+def users_page(users: list[dict], names: dict, csrf: str, nonce: str, me: dict, notice: str = "") -> str:
+    rows = "".join(
+        f'<tr><td data-label="Username" style="font-weight:600;color:#17283e">{escape(u["username"])}</td><td data-label="Peran">{ROLE_TEXT[u["role"]]}</td>'
+        f'<td data-label="Akses perusahaan">{escape(access_text(u, names))}</td>'
+        f'<td data-label="Status"><span class="vw-tag {"ok" if u["active"] else "none"}">{"Aktif" if u["active"] else "Nonaktif"}</span></td>'
+        f'<td data-label="Terakhir masuk">{escape(dt_text(u["last_login_at"])) if u["last_login_at"] else "Belum pernah masuk"}</td>'
+        f'<td data-label=""><a class="vw-link" style="font-weight:600" aria-label="Ubah {escape(u["username"])}" href="/users/edit?u={escape(u["username"])}">Ubah</a></td></tr>'
+        for u in users
+    )
+    flash = f'<p role="status" class="vw-ok" style="margin:0 0 16px">{escape(notice)}</p>' if notice else ""
+    body = (
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Pengguna</span></nav>'
+        '<h1 class="vw-h1">Pengguna</h1>'
+        '<p class="vw-lead" style="max-width:680px">Atur siapa yang bisa masuk dan perusahaan mana yang boleh dilihat. Pengguna biasa hanya bisa melihat report. Membuat analisis, mengatur target, dan mengatur pengguna hanya untuk admin.</p>'
+        f'<div style="margin-bottom:16px"><a class="vw-btn" href="/users/new" style="display:inline-flex;align-items:center;text-decoration:none">Tambah pengguna</a></div>{flash}'
+        '<h2 class="vw-h2" style="margin-bottom:12px">Daftar pengguna</h2>'
+        f'<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Daftar pengguna</caption><thead><tr><th scope="col">Username</th><th scope="col">Peran</th><th scope="col">Akses perusahaan</th><th scope="col">Status</th><th scope="col">Terakhir masuk</th><th scope="col"><span class="vw-sr">Aksi</span></th></tr></thead><tbody>{rows}</tbody></table></div>'
+        '<p style="margin:12px 0 0;color:#607188">Selalu harus ada minimal satu admin aktif. Pengguna tidak dihapus; nonaktifkan agar tidak bisa masuk dan riwayatnya tetap ada.</p></main>'
+    )
+    return page("Pengguna", body, nonce, csrf, menu(csrf, me, "users"))
+
+
+def user_form_page(mode: str, values: dict, errors: dict, names: dict, csrf: str, nonce: str, me: dict, failed: str = "") -> str:
+    new = mode == "new"
+    title = "Tambah pengguna" if new else f"Ubah pengguna {values['username']}"
+    lead = "Pengguna baru bisa masuk setelah disimpan, memakai username dan password yang Anda isi di sini." if new else "Ubah peran, akses, status, atau atur password baru. Kosongkan password jika tidak ingin mengubahnya."
+
+    def err(name: str) -> str:
+        return f'<span role="alert" style="color:#ac3d3d;margin-top:4px">{escape(errors[name])}</span>' if name in errors else ""
+
+    def bad(name: str) -> str:
+        return ' aria-invalid="true"' if name in errors else ""
+
+    checks = "".join(
+        f'<label style="display:flex;align-items:center;gap:8px;min-height:44px"><input type="checkbox" name="company" value="{escape(b)}"{" checked" if b in values["companies"] else ""}> {escape(n)}</label>'
+        for b, n in names.items()
+    )
+    username = (
+        f'<input id="username" type="text" value="{escape(values["username"])}" readonly><input type="hidden" name="username" value="{escape(values["username"])}">' if not new else
+        f'<input id="username" name="username" type="text" value="{escape(values["username"])}" autocomplete="off" autocapitalize="none" spellcheck="false" required{bad("username")}>'
+    )
+    role = values["role"]
+    all_c = values["all_companies"]
+    sel = lambda cond: " selected" if cond else ""
+    body = (
+        f'<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><a class="vw-link" href="/users">Pengguna</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">{escape(title)}</span></nav>'
+        f'<h1 class="vw-h1">{escape(title)}</h1><p class="vw-lead" style="max-width:680px">{escape(lead)}</p>'
+        f'<form method="post" action="/users/save" class="vw-box vw-pad" style="max-width:560px"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="mode" value="{mode}">'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="username">Username</label>{username}<span style="color:#607188;margin-top:4px">3 sampai 32 karakter: huruf kecil, angka, titik, garis bawah, dan strip. Tidak bisa diubah setelah dibuat.</span>{err("username")}</div>'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="password">{"Password" if new else "Password baru (opsional)"}</label><input id="password" name="password" type="password" autocomplete="new-password"{" required" if new else ""}{bad("password")}>'
+        f'<span style="color:#607188;margin-top:4px">Password minimal 12 karakter. Pengguna tidak bisa mengubahnya sendiri.</span>{err("password")}</div>'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="role">Peran</label><select id="role" name="role"><option value="user"{sel(role == "user")}>Pengguna (hanya melihat report)</option><option value="admin"{sel(role == "admin")}>Admin (akses penuh)</option></select></div>'
+        '<fieldset id="access" style="border:0;padding:0;margin:0 0 16px"><legend style="font-weight:500;color:#17283e;margin-bottom:6px;padding:0">Akses perusahaan</legend>'
+        f'<label style="display:flex;align-items:center;gap:8px;min-height:44px"><input type="radio" name="scope" value="all"{" checked" if all_c else ""}> Semua perusahaan <span style="color:#607188">(termasuk perusahaan yang ditambahkan nanti)</span></label>'
+        f'<label style="display:flex;align-items:center;gap:8px;min-height:44px"><input type="radio" name="scope" value="pick"{"" if all_c else " checked"}> Pilih perusahaan</label>'
+        f'<div id="pick" style="padding-left:28px">{checks}</div>{err("scope")}'
+        '<p style="margin:8px 0 0;color:#607188">Pengguna hanya melihat report dan analisis perusahaan yang dipilih. Tombol analisis dan pengaturan target tidak tampil untuknya.</p></fieldset>'
+        '<p id="adminNote" style="margin:0 0 16px;color:#607188" hidden>Admin selalu punya akses ke semua perusahaan, termasuk membuat analisis, mengatur target, dan mengatur pengguna.</p>'
+        f'<div class="vw-field" style="margin-bottom:16px"><label for="active">Status</label><select id="active" name="active"><option value="1"{sel(values["active"])}>Aktif</option><option value="0"{sel(not values["active"])}>Nonaktif (tidak bisa masuk)</option></select>{err("active")}</div>'
+        + (f'<p role="alert" class="vw-alert">{escape(failed)}</p>' if failed else "")
+        + '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button class="vw-btn" type="submit">Simpan</button><a class="vw-link" href="/users" style="font-weight:600">Batal</a></div></form></main>'
+    )
+    script = (
+        f'<script nonce="{nonce}">(function(){{var r=document.getElementById("role"),a=document.getElementById("access"),n=document.getElementById("adminNote");'
+        'function sync(){var admin=r.value==="admin";a.hidden=admin;n.hidden=!admin;}r.addEventListener("change",sync);sync();})();</script>'
+    )
+    return page(title, body, nonce, csrf, menu(csrf, me, "users"), script)
+
+
+def companies_page(ids: list[str], names: dict, defaults: dict, errors: dict, csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "") -> str:
+    fields = ""
+    for i, bu in enumerate(ids):
+        err = errors.get(bu, "")
+        fields += (
+            f'<div class="vw-box vw-pad" style="margin-bottom:16px"><div style="color:#607188">Identitas</div><div style="font-weight:600;color:#17283e;margin-bottom:12px">{escape(defaults[bu])}</div>'
+            f'<div class="vw-field" style="max-width:360px"><label for="n-{i}">Nama tampil</label><input id="n-{i}" name="name_{escape(bu)}" type="text" maxlength="32" value="{escape(errors.get("_v_" + bu, names.get(bu, "")))}" required{" aria-invalid=\"true\"" if err else ""}>'
+            f'{f"<span role=\"alert\" style=\"color:#ac3d3d;margin-top:4px\">{escape(err)}</span>" if err else ""}</div></div>'
+        )
+    shown = [names.get(b, "") for b in ids]
+    body = (
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Nama perusahaan</span></nav>'
+        '<h1 class="vw-h1">Nama perusahaan</h1>'
+        '<p class="vw-lead" style="max-width:680px">Nama yang tampil di daftar report, halaman report, pengaturan target, dan pengaturan pengguna. Identitas internal tetap sama, jadi data, tautan, dan akses pengguna yang sudah ada tetap berlaku.</p>'
+        f'<form method="post" action="/companies"><input type="hidden" name="csrf" value="{escape(csrf)}">{fields}'
+        '<p style="margin:0 0 16px;color:#607188">1 sampai 32 karakter: huruf, angka, spasi, titik, dan strip.</p>'
+        + (f'<p role="status" class="vw-ok" style="margin:0 0 16px">{escape(notice)}</p>' if notice else "")
+        + (f'<p role="alert" class="vw-alert">{escape(failed)}</p>' if failed else "")
+        + '<button class="vw-btn" type="submit">Simpan nama perusahaan</button></form></main>'
+    )
+    return page("Nama perusahaan", body, nonce, csrf, menu(csrf, me, "companies"))

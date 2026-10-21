@@ -79,7 +79,7 @@ class MockupConformanceTests(unittest.TestCase):
         self.assertIn("Kosong sampai analisis dibuat.", text)
         self.assertIn("Target 2026 belum diatur. Atur di halaman Pengaturan target untuk melihat progress.", text)
         self.assertIn("Target September 2026 belum diatur. Atur target di halaman Pengaturan target untuk melihat progress.", text)
-        self.assertIn("Lima produk hardware di BU1. Produk lain dan tag kosong tidak dihitung.", text)
+        self.assertIn("Lima produk hardware di Perusahaan 1. Produk lain dan tag kosong tidak dihitung.", text)
         self.assertIn("jumlah kelimanya", text)
         self.assertEqual([a["href"] for a in soup.select("a")], ["/targets", "/targets"])
         self.assertIn("Target Dashcam belum diatur.", text)

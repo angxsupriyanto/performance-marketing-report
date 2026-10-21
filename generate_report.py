@@ -512,7 +512,7 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
         rows = sorted((r for r in weeks["now"]["SQL"] if product(r) == focus_name), key=lambda r: (-stage_value(r, "SQL"), r.get("Company", "")))
         total = sum((stage_value(r, "SQL") for r in rows), 0)
         facts["focus_period"] = {"product": focus_name, "sql": len(rows), "sql_value": total}
-        view["focus"] = {"product": focus_name, "count": len(rows), "value": whole(total), "rows": [
+        view["focus"] = {"product": focus_name, "parent": PROFILE.get("focus_parent", ""), "count": len(rows), "value": whole(total), "rows": [
             {"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "date": parse_date(r[STAGES["SQL"]], STAGES["SQL"]).isoformat(), "value": whole(stage_value(r, "SQL"))} for r in rows]}
     if PROFILE.get("deal_won_list"):
         rows = sorted(weeks["now"]["Deal Won"], key=lambda r: (-stage_value(r, "Deal Won"), r.get("Company", "")))

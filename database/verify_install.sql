@@ -50,5 +50,13 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
   UNION ALL SELECT 16, 'report_writer and report_reader cannot change targets',
          NOT (has_table_privilege('report_writer', to_regclass('reports.target_entries'), 'INSERT') OR has_table_privilege('report_writer', to_regclass('reports.target_entries'), 'UPDATE')
               OR has_table_privilege('report_reader', to_regclass('reports.target_entries'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.target_entries'), 'UPDATE'))
+  UNION ALL SELECT 17, 'tables viewer_users and company_names exist; report_viewer can read and write them but not delete',
+         (SELECT count(*) = 2 FROM information_schema.tables WHERE table_schema = 'reports' AND table_name IN ('viewer_users', 'company_names'))
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.viewer_users'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.viewer_users'), 'INSERT')
+                      AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.viewer_users'), 'UPDATE') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.company_names'), 'UPDATE')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.viewer_users'), 'DELETE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.viewer_users'), 'TRUNCATE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.company_names'), 'DELETE')), false)
+  UNION ALL SELECT 18, 'report_writer and report_reader cannot read viewer_users (password hashes)',
+         NOT (has_table_privilege('report_writer', to_regclass('reports.viewer_users'), 'SELECT') OR has_table_privilege('report_reader', to_regclass('reports.viewer_users'), 'SELECT'))
 ) checks
 ORDER BY n;

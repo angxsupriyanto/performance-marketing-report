@@ -19,6 +19,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "tests"))
 from test_table_mode import LEADS, run, write_table  # noqa: E402
 from viewer import app, auth, targets  # noqa: E402
+from viewer.store import UserError  # noqa: E402
 
 PASSWORD = "correct horse battery"
 SECRET = b"s" * 40
@@ -44,6 +45,8 @@ class FakeStore:
         self.legacy = False
         self.fail_writes = False
         self.down = False
+        self.users = {}
+        self.names = {}
 
     def _check(self):
         if self.down:
@@ -89,6 +92,56 @@ class FakeStore:
     def ping(self):
         return not self.down
 
+    # ---- users and company names, same rules as the real Store
+    def ensure_bootstrap_admin(self, password_hash):
+        self._check()
+        if self.users:
+            return False
+        self.users["admin"] = {"username": "admin", "password_hash": password_hash, "role": "admin", "all_companies": True, "companies": [], "active": True,
+                               "created_at": datetime.now(UTC), "last_login_at": None}
+        return True
+
+    def get_user(self, username):
+        self._check()
+        row = self.users.get(username)
+        return dict(row) if row else None
+
+    def list_users(self):
+        self._check()
+        return sorted((dict(u) for u in self.users.values()), key=lambda u: (u["role"] != "admin", u["username"]))
+
+    def touch_login(self, username):
+        self.users[username]["last_login_at"] = datetime(2026, 10, 21, 9, 5, tzinfo=UTC)
+
+    def create_user(self, username, password_hash, role, all_companies, companies, active):
+        self._check()
+        if username in self.users:
+            raise UserError("Username ini sudah dipakai. Pilih yang lain.")
+        self.users[username] = {"username": username, "password_hash": password_hash, "role": role, "all_companies": all_companies, "companies": companies,
+                                "active": active, "created_at": datetime.now(UTC), "last_login_at": None}
+
+    def update_user(self, username, password_hash, role, all_companies, companies, active):
+        self._check()
+        if username not in self.users:
+            raise UserError("Pengguna tidak ditemukan.")
+        before = dict(self.users[username])
+        self.users[username].update(role=role, all_companies=all_companies, companies=companies, active=active)
+        if password_hash:
+            self.users[username]["password_hash"] = password_hash
+        if not any(u["role"] == "admin" and u["active"] for u in self.users.values()):
+            self.users[username] = before
+            raise UserError("Tidak bisa dinonaktifkan atau diturunkan perannya: ini satu-satunya admin aktif.")
+
+    def company_names(self):
+        self._check()
+        return dict(self.names)
+
+    def save_company_names(self, names):
+        self._check()
+        if len({n.lower() for n in names.values()}) < len(names):
+            raise UserError("Kedua perusahaan tidak boleh memakai nama yang sama.")
+        self.names.update(names)
+
 
 class FakeN8n(BaseHTTPRequestHandler):
     calls = []
@@ -110,7 +163,9 @@ class FakeN8n(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-class ViewerTests(unittest.TestCase):
+class ViewerCase(unittest.TestCase):
+    """Server, fake store and helpers shared by the viewer test files; holds no tests itself."""
+
     @classmethod
     def setUpClass(cls):
         cls.n8n = HTTPServer(("127.0.0.1", 0), FakeN8n)
@@ -147,16 +202,19 @@ class ViewerTests(unittest.TestCase):
         conn.close()
         return response, data
 
-    def login(self, password=PASSWORD, ip="10.0.0.1"):
-        response, data = self.call("POST", "/login", {"password": password}, cookie=False, ip=ip)
+    def login(self, password=PASSWORD, ip="10.0.0.1", username="admin"):
+        self.cookie = ""
+        response, data = self.call("POST", "/login", {"username": username, "password": password}, cookie=False, ip=ip)
         cookie = response.getheader("Set-Cookie")
         if cookie:
             self.cookie = re.match(r"vw_session=([^;]*)", cookie).group(1)
         return response, data
 
     def csrf(self):
-        return auth.read_session(SECRET, self.cookie)
+        return auth.read_session(SECRET, self.cookie)[0]
 
+
+class ViewerTests(ViewerCase):
     # ---- login and sessions
     def test_everything_but_health_and_login_needs_a_session(self):
         for path in ("/", "/report/bu1/2026-W39", "/targets", "/api/analysis/status?bu=bu1&period=2026-W39"):
@@ -170,7 +228,7 @@ class ViewerTests(unittest.TestCase):
     def test_wrong_password_is_refused_and_five_failures_lock_even_the_right_password(self):
         response, body = self.login("wrong password!!")
         self.assertEqual(response.status, 401)
-        self.assertIn("Password salah", body)
+        self.assertIn("Username atau password salah", body)
         self.assertIsNone(response.getheader("Set-Cookie"))
         for _ in range(4):
             response, body = self.login("wrong password!!")
@@ -204,10 +262,10 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.cookie = self.cookie[:-3] + "AAA"
         self.assertEqual(self.call("GET", "/")[0].status, 303)
-        old, _ = auth.new_session(SECRET, now=time.time() - auth.SESSION_SECONDS - 5)
+        old, _ = auth.new_session(SECRET, "admin", auth.credential_tag(self.hash), now=time.time() - auth.SESSION_SECONDS - 5)
         self.cookie = old
         self.assertEqual(self.call("GET", "/")[0].status, 303)
-        other, _ = auth.new_session(b"x" * 40)
+        other, _ = auth.new_session(b"x" * 40, "admin", auth.credential_tag(self.hash))
         self.cookie = other
         self.assertEqual(self.call("GET", "/")[0].status, 303)
 
@@ -218,7 +276,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(self.call("POST", "/api/analysis", body, {"X-CSRF-Token": "nope"})[0].status, 403)
         self.assertEqual(self.call("POST", "/api/analysis", body, {"X-CSRF-Token": self.csrf(), "Origin": "https://evil.example"})[0].status, 403)
         self.assertEqual(FakeN8n.calls, [])
-        self.assertEqual(self.call("POST", "/login", {"password": PASSWORD}, {"Origin": "https://evil.example"}, cookie=False)[0].status, 403)
+        self.assertEqual(self.call("POST", "/login", {"username": "admin", "password": PASSWORD}, {"Origin": "https://evil.example"}, cookie=False)[0].status, 403)
 
     # ---- list and report
     def test_list_shows_both_reports_and_analysis_state(self):
@@ -227,7 +285,7 @@ class ViewerTests(unittest.TestCase):
         _, body = self.call("GET", "/")
         soup = BeautifulSoup(body, "html.parser")
         rows = soup.select("tbody tr")
-        self.assertEqual([r.select("td")[1].get_text() for r in rows], ["BU1", "BU2"])
+        self.assertEqual([r.select("td")[1].get_text() for r in rows], ["Perusahaan 1", "Perusahaan 2"])
         self.assertIn("Sudah ada", rows[0].get_text())
         self.assertIn("23.30 WIB", rows[0].get_text())
         self.assertIn("Belum ada", rows[1].get_text())
@@ -244,7 +302,7 @@ class ViewerTests(unittest.TestCase):
         response, body = self.call("GET", "/report/bu1/2026-W39")
         self.assertEqual(response.status, 200)
         soup = BeautifulSoup(body, "html.parser")
-        self.assertEqual(soup.select_one("h1.vw-h1").get_text(), "Report BU1")
+        self.assertEqual(soup.select_one("h1.vw-h1").get_text(), "Report Perusahaan 1")
         self.assertIsNotNone(soup.select_one("#vw-analysis[data-state=none] button"))
         self.assertIn("Belum ada analisis", body)
         self.assertEqual([h.get_text() for h in soup.select("h2")], ["Report"])
@@ -276,7 +334,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn("generator versi lama", body)
         self.assertNotIn("laporan lama", body)
-        self.assertIn("Report BU1", body)
+        self.assertIn("Report Perusahaan 1", body)
 
     def test_target_load_failure_keeps_the_report_and_shows_the_mockup_message(self):
         self.login()
@@ -407,10 +465,10 @@ class ViewerTests(unittest.TestCase):
         self.login()
         soup = BeautifulSoup(self.call("GET", "/targets?bu=bu1")[1], "html.parser")
         self.assertEqual([l.get_text() for l in soup.select('form[action="/targets/month"] label')][1:], [f"Target {n} (Rp)" for n in ("Dashcam", "GPS Tracker", "Fuel", "MDVR", "OBD")])
-        self.assertIn("Belum ada target tersimpan untuk BU1", soup.get_text())
+        self.assertIn("Belum ada target tersimpan untuk Perusahaan 1", soup.get_text())
         bu2 = BeautifulSoup(self.call("GET", "/targets?bu=bu2")[1], "html.parser")
         self.assertIsNone(bu2.select_one('form[action="/targets/month"]'))
-        self.assertIn("BU2 tidak memakai target bulanan", bu2.get_text())
+        self.assertIn("Perusahaan 2 tidak memakai target bulanan", bu2.get_text())
         labels = [l.get_text() for l in bu2.select('form[action="/targets/year"] label')]
         self.assertEqual(labels[1:], ["Target Semester 1, Januari sampai Juni (jumlah SQL Ecosystem)", "Target Semester 2, Juli sampai Desember (jumlah SQL Ecosystem)"])
         self.assertEqual(self.call("GET", "/targets?bu=bu9")[0].status, 404)
@@ -427,7 +485,7 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual([e["amount"] for e in self.store.entries], [Decimal(150000000), Decimal(175000000)])
         soup = BeautifulSoup(self.call("GET", "/targets?bu=bu1&month=2026-12&saved=month")[1], "html.parser")
         self.assertEqual(soup.select_one("#hw-0")["value"], "175.000.000")  # carried forward to later months
-        self.assertIn("Target bulanan BU1 tersimpan.", soup.get_text())
+        self.assertIn("Target bulanan Perusahaan 1 tersimpan.", soup.get_text())
         self.assertEqual(len(soup.select(".vw-table tbody tr")), 2)
         self.call("POST", "/targets/month", {**form, "month": "2026-11", "hw_0": "0"})
         self.assertEqual(self.store.entries[-1]["amount"], 0)
