@@ -201,7 +201,8 @@ class DatabaseTests(unittest.TestCase):
         with self.writer() as conn:
             conn.execute(sql("insert_analysis.sql"), {"p1": str(run_id), "p2": "t", "p3": "m", "p4": "v", "p5": "{}", "p6": "<p>final</p>"})
         self.assertIsNotNone(store.latest_analysis_time("bu2", "2026-W43"))
-        self.assertEqual(store.get_report("bu2", "2026-W43")["html"], "<p>final</p>")
+        shown = store.get_report("bu2", "2026-W43")
+        self.assertEqual((shown["html"], shown["analysis"]), ("<p>viewer run</p>", {}))  # the viewer draws analysis itself; numeric_html carries the view
         before = len(store.target_history("bu1"))
         with self.assertRaises(psycopg.errors.CheckViolation):
             store.add_targets("bu1", [("hardware_month", "Fuel", "2026-10", "idr", 5), ("hardware_month", "Fuel", "2026-13", "idr", 6)])

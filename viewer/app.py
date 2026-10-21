@@ -27,6 +27,7 @@ from urllib.parse import parse_qs, urlparse
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
+import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
 from viewer import auth, pages, targets  # noqa: E402
 from viewer.store import Store, facts_of  # noqa: E402
@@ -348,16 +349,28 @@ class Handler(BaseHTTPRequestHandler):
         bu, period = parts[2], parts[3]
         try:
             report = self.cfg.store.get_report(bu, period)
-            rows = self.cfg.store.latest_targets(bu) if report else []
         except Exception:  # noqa: BLE001
             raise HttpError(503, "database marketing_reports tidak menjawab; muat ulang halaman ini")
         if report is None:
             raise HttpError(404, "report tidak ditemukan")
-        filled = targets.fill_targets(report["html"], rows)
+        view = report_view.extract_view(report["html"])
         job = self.jobs.get((bu, period))
         state = pages.analysis_state(report["has_analysis"], job)
         chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf)
-        self.send(200, pages.inject_chrome(filled, chrome, nonce, csrf), nonce=nonce)
+        if view is None:
+            note = (
+                '<main class="vw-main" style="padding-top:0"><div class="vw-box vw-pad" role="alert"><div class="vw-h2">Report ini dibuat oleh generator versi lama</div>'
+                '<p style="margin:0">Isinya tidak mengikuti tampilan baru. Jalankan Report Generate lagi untuk periode ini, lalu muat ulang halaman.</p></div></main>'
+            )
+            self.send(200, pages.inject_chrome(f"<!doctype html><html><head><title>{html.escape(period)}</title></head><body>{note}</body></html>", chrome, nonce, csrf), nonce=nonce)
+            return 200
+        try:
+            rows = self.cfg.store.latest_targets(bu)
+        except Exception:  # noqa: BLE001
+            rows = None
+        analysis = report["analysis"] if isinstance(report.get("analysis"), dict) else None
+        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False)
+        self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
 
     def start_analysis(self, form: dict) -> int:

@@ -31,7 +31,7 @@ GENERATOR_TIMEOUT_SECONDS = int(os.environ.get("REPORT_GENERATOR_TIMEOUT", 180))
 def _code_fingerprint() -> str:
     """Short hash of the files that decide a report's content. A report built by different code is a different run."""
     digest = hashlib.sha256()
-    for path in [ROOT / "generate_report.py", ROOT / "apply_analysis.py", ROOT / "dashboard_template.html", *sorted((ROOT / "profiles").glob("*.json"))]:
+    for path in [ROOT / "generate_report.py", ROOT / "apply_analysis.py", ROOT / "report_view.py", *sorted((ROOT / "profiles").glob("*.json"))]:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()[:8]
 

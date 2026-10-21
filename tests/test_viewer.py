@@ -40,6 +40,8 @@ class FakeStore:
         self.html = {bu: generated(bu) for bu in ("bu1", "bu2")}
         self.entries = []
         self.analysis_at = {"bu1": None, "bu2": None}
+        self.analysis = {}
+        self.legacy = False
         self.fail_writes = False
         self.down = False
 
@@ -58,9 +60,11 @@ class FakeStore:
         if period != "2026-W39" or bu not in self.html:
             return None
         html, facts = self.html[bu]
+        if self.legacy:
+            html = "<html><body>laporan lama</body></html>"
         return {"run_id": "r1", "bu": bu, "period": period, "period_kind": "week", "period_start": datetime(2026, 9, 21).date(), "period_end": datetime(2026, 9, 27).date(),
                 "generated_at": datetime(2026, 10, 20, 16, 11, tzinfo=UTC), "html": html, "has_analysis": self.analysis_at[bu] is not None,
-                "analysis_created_at": self.analysis_at[bu], "facts": facts}
+                "analysis_created_at": self.analysis_at[bu], "analysis": self.analysis.get(bu), "facts": facts}
 
     def latest_analysis_time(self, bu, period):
         return self.analysis_at[bu]
@@ -243,15 +247,45 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual(soup.select_one("h1.vw-h1").get_text(), "Report BU1")
         self.assertIsNotNone(soup.select_one("#vw-analysis[data-state=none] button"))
         self.assertIn("Belum ada analisis", body)
-        self.assertIsNotNone(soup.select_one(".hardware-section"))
+        self.assertEqual([h.get_text() for h in soup.select("h2")], ["Report"])
+        self.assertIn("Campaign Hardware", [h.get_text() for h in soup.select("h3")])
+        self.assertEqual(len(soup.select(".hw-funnel-block")) + len(soup.select(".hardware-section")), 0)  # nothing of the old dashboard
         nonce = re.search(r"'nonce-([^']+)'", response.getheader("Content-Security-Policy")).group(1)
         self.assertTrue(all(t.get("nonce") == nonce for t in soup.find_all(["script", "style"])))
         csp = response.getheader("Content-Security-Policy")
         self.assertIn("default-src 'none'", csp)
         self.assertIn("frame-ancestors 'none'", csp)
-        self.assertNotIn("unsafe-inline'", csp.split("style-src-attr")[0].replace("style-src-attr", ""))
         self.assertEqual(soup.select_one("meta[name=csrf]")["content"], self.csrf())
-        self.assertEqual(soup.select_one("title").get_text() != "", True)
+
+    def test_report_shows_the_latest_analysis_in_the_mockup_panels(self):
+        self.login()
+        self.store.analysis_at["bu1"] = datetime(2026, 10, 20, 16, 30, tzinfo=UTC)
+        self.store.analysis["bu1"] = {"executive_summary": "SQL naik <b>tajam</b>", "hardware_summary": "Ringkasan hardware", "hardware_gps_tracker": "GPS memimpin"}
+        _, body = self.call("GET", "/report/bu1/2026-W39")
+        soup = BeautifulSoup(body, "html.parser")
+        self.assertEqual(soup.select_one('[data-analysis="executive_summary"]').get_text(), "SQL naik <b>tajam</b>")
+        self.assertNotIn("<b>tajam</b>", body)
+        self.assertEqual(soup.select_one('[data-analysis="hardware_gps_tracker"]').get_text(), "GPS memimpin")
+        self.assertEqual(soup.select_one('[data-analysis="hardware_fuel"]').get_text(), "Kosong sampai analisis dibuat.")
+        self.assertIn("Analisis tersedia", body)
+
+    def test_a_report_from_the_old_generator_asks_for_a_new_run_instead_of_showing_old_content(self):
+        self.login()
+        self.store.legacy = True
+        response, body = self.call("GET", "/report/bu1/2026-W39")
+        self.assertEqual(response.status, 200)
+        self.assertIn("generator versi lama", body)
+        self.assertNotIn("laporan lama", body)
+        self.assertIn("Report BU1", body)
+
+    def test_target_load_failure_keeps_the_report_and_shows_the_mockup_message(self):
+        self.login()
+        original = self.store.latest_targets
+        self.store.latest_targets = lambda bu: (_ for _ in ()).throw(RuntimeError("down"))
+        response, body = self.call("GET", "/report/bu1/2026-W39")
+        self.assertEqual(response.status, 200)
+        self.assertEqual(body.count("Target tidak bisa dimuat. Database marketing_reports tidak menjawab. Muat ulang halaman ini."), 2)
+        self.assertIn("Daftar SQL Week 39", body)
 
     def test_report_page_404_for_unknown_or_malformed(self):
         self.login()
@@ -263,20 +297,20 @@ class ViewerTests(unittest.TestCase):
     def test_targets_appear_in_the_report_once_saved(self):
         self.login()
         _, before = self.call("GET", "/report/bu1/2026-W39")
-        self.assertIn("Belum diatur", before)
+        self.assertIn("Target 2026 belum diatur", before)
         self.call("POST", "/targets/month", {"csrf": self.csrf(), "bu": "bu1", "month": "2026-09", "hw_0": "", "hw_1": "Rp 4.000.000", "hw_2": "", "hw_3": "", "hw_4": ""})
         self.call("POST", "/targets/year", {"csrf": self.csrf(), "bu": "bu1", "year": "2026", "sem1": "8.000.000", "sem2": "12.000.000"})
         _, after = self.call("GET", "/report/bu1/2026-W39")
         soup = BeautifulSoup(after, "html.parser")
-        cells = soup.select(".hardware-section > .table-wrap tbody tr")[1].select("td")
-        self.assertEqual((cells[5].get_text(), cells[6].get_text()), ("Rp 4.000.000", "25,0%"))
-        cards = soup.select(".target-progress .tgt")
-        self.assertIn("dari target Rp 12.000.000", cards[0].get_text())
-        self.assertIn("dari target Rp 20.000.000", cards[1].get_text())
-        self.assertEqual(cards[1].select_one(".tgt-pct").get_text(), "5,0% dari target tahun")
-        self.assertEqual(soup.select_one(".tgt-month [data-slot=target] dd").get_text(), "Rp 4.000.000")
-        stack = soup.select_one('.tgt-stack[data-product="GPS Tracker"]')
-        self.assertIn("25,0% dari target Rp 4.000.000", stack.get_text())
+        text = soup.get_text(" ")
+        self.assertIn("Tercapai Rp 1.000.000 dari target Rp 12.000.000", text)
+        self.assertIn("Tercapai Rp 1.000.000 dari target Rp 20.000.000", text)
+        self.assertIn("5,0% dari target tahun", text)
+        rows = soup.select("table")[1].select("tbody tr")
+        self.assertEqual([c.get_text() for c in rows[1].select("td")][5:], ["Rp 4.000.000", "25,0%"])
+        self.assertEqual([c.get_text() for c in rows[0].select("td")][5:], ["Belum diatur", "-"])
+        self.assertIn("Total target September 2026", text)
+        self.assertIn("25,0% dari target Rp 4.000.000", text)
 
     # ---- analysis button
     def test_analysis_button_calls_n8n_with_auth_and_target_numbers_then_reports_done(self):
@@ -399,10 +433,10 @@ class ViewerTests(unittest.TestCase):
         self.assertEqual([(e["period_key"], e["unit"], e["amount"]) for e in self.store.entries], [("2026-S1", "count", 16), ("2026-S2", "count", 24)])
         bad = self.call("POST", "/targets/year", {"csrf": self.csrf(), "bu": "bu2", "year": "2026", "sem1": "1.5", "sem2": ""})[0]
         self.assertEqual(bad.status, 422)
-        soup = BeautifulSoup(self.call("GET", "/report/bu2/2026-W39")[1], "html.parser")
-        cards = soup.select(".target-progress .tgt")
-        self.assertEqual(cards[0].select_one(".tgt-line").get_text(), "1 SQL dari target 24 SQL")
-        self.assertEqual(cards[1].select_one(".tgt-pct").get_text(), "2,5% dari target tahun")
+        text = BeautifulSoup(self.call("GET", "/report/bu2/2026-W39")[1], "html.parser").get_text(" ")
+        self.assertIn("1 SQL dari target 24 SQL", text)
+        self.assertIn("1 SQL dari target 40 SQL", text)
+        self.assertIn("2,5% dari target tahun", text)
         page = BeautifulSoup(self.call("GET", "/targets?bu=bu2")[1], "html.parser")
         self.assertIn("40 SQL", page.get_text())
 

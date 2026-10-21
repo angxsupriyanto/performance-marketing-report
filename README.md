@@ -8,7 +8,7 @@ Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis 
 
 | File | Fungsi |
 |---|---|
-| `dashboard_template.html` | Tampilan kosong dengan layout dan panel analisis kosong. Bisa dibuka langsung sebagai preview desain. |
+| `report_view.py` | Tampilan report, persis mengikuti mockup yang disetujui: hanya bagian dan tabel yang ada di mockup. Dipakai generator (report numerik) dan viewer (menambahkan target dan analisis). |
 | `profiles/bu1.json`, `profiles/bu2.json` | Profil BU: nama, produk hardware, kolom tanggal SQL, kolom nilai, kolom wajib. |
 | `skill/SKILL.md` | Draf skill Claude yang memanggil generator ini (menggantikan skill lama berbasis pandas). |
 | `generate_report.py` | Membaca dan memvalidasi empat CSV, menghitung angka, lalu menghasilkan HTML. |

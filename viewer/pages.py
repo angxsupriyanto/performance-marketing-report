@@ -22,7 +22,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
 .vw-menu a,.vw-link{display:inline-flex;align-items:center;min-height:44px}
 .vw-menu button{background:none;border:0;padding:0;color:#2159a9;font:inherit;cursor:pointer;min-height:44px}
 .vw-menu button:hover{color:#17283e}
-.vw-main{width:100%;max-width:960px;margin:0 auto;padding:24px 24px 64px}
+.vw-main{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 64px}
 .vw-h1{margin:0 0 8px;font:600 22px/1.3 Inter,Arial,sans-serif;color:#17283e}
 .vw-h2{margin:0 0 4px;font:600 16px/1.4 Inter,Arial,sans-serif;color:#17283e}
 .vw-lead{margin:0 0 24px}
@@ -50,7 +50,7 @@ a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{ou
 .vw-tag.ok{background:#e6f5ed;color:#087450}.vw-tag.none{border:1px solid #6f8199;color:#394d65}
 .vw-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
 @media (max-width:680px){
-  .vw-top{padding:0 16px}.vw-main{padding:16px 16px 48px}
+  .vw-top{padding:0 16px}.vw-main{padding:16px 16px 48px}.vw-chrome{padding:16px 16px 0}
   .vw-table thead{position:absolute;left:-9999px}
   .vw-table tr{display:block;padding:8px 16px;border-top:1px solid #dfe7f0}
   .vw-table tbody tr:first-child{border-top:0}
@@ -142,7 +142,7 @@ def report_list(rows: list[dict], csrf: str, nonce: str, error: str = "") -> str
 
 ANALYSIS_CSS = """
 .vw-wrapper{background:#f4f7fb}
-.vw-chrome{width:100%;max-width:960px;margin:0 auto;padding:24px 24px 0}
+.vw-chrome{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 0}
 .vw-chrome *{box-sizing:border-box}
 .vw-chrome a{color:#2159a9}
 """

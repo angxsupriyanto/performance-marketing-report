@@ -41,8 +41,8 @@ class Store:
     def get_report(self, bu: str, period: str) -> dict | None:
         with self._connect() as conn:
             return conn.execute(
-                """SELECT l.run_id, l.bu, l.period, l.period_kind, l.period_start, l.period_end, l.generated_at, l.html,
-                          l.has_analysis, l.analysis_created_at, r.facts
+                """SELECT l.run_id, l.bu, l.period, l.period_kind, l.period_start, l.period_end, l.generated_at, l.numeric_html AS html,
+                          l.has_analysis, l.analysis_created_at, l.analysis, r.facts
                    FROM reports.latest_reports l JOIN reports.report_runs r USING (run_id)
                    WHERE l.bu = %s AND l.period = %s""",
                 (bu, period),

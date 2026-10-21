@@ -8,9 +8,6 @@ from __future__ import annotations
 import re
 from decimal import Decimal, InvalidOperation
 
-from bs4 import BeautifulSoup
-
-import generate_report as gen
 
 MONTH_KEY = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
 MAX_DIGITS = 15
@@ -56,78 +53,15 @@ def percent(actual, target) -> float | None:
     return float(Decimal(actual) * 100 / Decimal(target)) if target else None
 
 
-def _fmt_value(value, unit: str) -> str:
-    return gen.money(value) if unit == "idr" else f"{gen.fmt(gen.whole(value))} SQL"
-
-
-def _pct_text(value: float | None) -> str:
-    return gen.pct(value) if value is not None else "—"
-
-
-def _width(value: float | None) -> str:
-    return f"width:{max(0.0, min(100.0, value or 0.0)):.1f}%"
-
-
-def fill_targets(html: str, rows: list[dict]) -> str:
-    soup = BeautifulSoup(html, "html.parser")
-    for card in soup.select(".target-progress .tgt"):
-        unit, actual = card["data-unit"], Decimal(card["data-actual"])
-        key = card["data-key"]
-        target = year_amount(rows, key) if card["data-scope"] == "year" else semester_amount(rows, key)
-        if target is None:
-            continue
-        value = percent(actual, target)
-        card.select_one(".tgt-line").string = f"{_fmt_value(actual, unit)} dari target {_fmt_value(target, unit)}"
-        card.select_one(".fill")["style"] = _width(value)
-        card.select_one(".tgt-pct").string = f"{_pct_text(value)} dari target {'tahun' if card['data-scope'] == 'year' else 'semester'}"
-    panel = soup.select_one(".tgt-month")
-    if panel is not None:
-        month_key = panel["data-month-key"]
-        products = [c["data-product"] for c in soup.select("tbody td.tgt-cell[data-slot=target][data-product]")]
-        targets = {p: effective_hardware(rows, p, month_key) for p in products}
-        total_target = sum((t for t in targets.values() if t is not None), Decimal(0))
-        mtd = Decimal(panel["data-mtd"])
-        if total_target > 0:
-            panel.select_one(".tgt-line").string = "Satu target per hardware. Total target adalah jumlah target semua produk yang sudah diatur."
-            panel.select_one("[data-slot=target] dd").string = gen.money(total_target)
-            panel.select_one("[data-slot=remain] dd").string = gen.money(max(total_target - mtd, Decimal(0)))
-            value = percent(mtd, total_target)
-            panel.select_one(".fill")["style"] = _width(value)
-            panel.select_one(".tgt-pct").string = f"{_pct_text(value)} dari target {gen.money(total_target)}"
-        for cell in soup.select("tbody td.tgt-cell[data-product]"):
-            target = targets.get(cell["data-product"])
-            if target is None:
-                continue
-            if cell["data-slot"] == "target":
-                cell.string = gen.money(target)
-            else:
-                cell.string = _pct_text(percent(Decimal(cell["data-mtd"]), target))
-        for cell in soup.select("tfoot td.tgt-cell"):
-            if total_target > 0:
-                cell.string = gen.money(total_target) if cell["data-slot"] == "target" else _pct_text(percent(mtd, total_target))
-        for stack in soup.select(".tgt-stack[data-product]"):
-            target = targets.get(stack["data-product"])
-            if target is None:
-                continue
-            before, week = Decimal(stack["data-before"]), Decimal(stack["data-week"])
-            before_w = max(0.0, min(100.0, percent(before, target)))
-            week_w = max(0.0, min(100.0 - before_w, percent(week, target)))
-            done = before + week
-            for old in stack.select(".stack, .legend2"):
-                old.decompose()
-            text = stack.select_one(".tgt-text")
-            bar = soup.new_tag("div", attrs={"class": "stack", "aria-hidden": "true"})
-            bar.append(soup.new_tag("div", attrs={"class": "before", "style": f"width:{before_w:.1f}%"}))
-            bar.append(soup.new_tag("div", attrs={"class": "week", "style": f"width:{week_w:.1f}%"}))
-            legend = soup.new_tag("div", attrs={"class": "legend2"})
-            for label in (f"Sebelum minggu ini {gen.money(before)}", f"Minggu ini {gen.money(week)}", f"Sisa target {gen.money(max(target - done, Decimal(0)))}"):
-                span = soup.new_tag("span")
-                span.string = label
-                legend.append(span)
-            text.insert_before(bar)
-            text.insert_before(legend)
-            text.string = f"{_pct_text(percent(done, target))} dari target {gen.money(target)}"
-    return str(soup)
+def build_tg(view: dict, rows: list[dict] | None) -> dict:
+    """What report_view needs to draw targets. rows=None means the database could not be read."""
+    if rows is None:
+        return {"error": True, "semester": None, "year": None, "hardware": {}}
+    progress = view["progress"]
+    hardware = {}
+    if view.get("hardware"):
+        hardware = {h["name"]: effective_hardware(rows, h["name"], view["month"]["key"]) for h in view["hardware"]}
+    return {"error": False, "semester": semester_amount(rows, progress["semester"]["key"]), "year": year_amount(rows, progress["year"]["key"]), "hardware": hardware}
 
 
 def context_for_analysis(facts: dict, rows: list[dict]) -> dict:

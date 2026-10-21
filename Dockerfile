@@ -6,7 +6,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY generate_report.py apply_analysis.py dashboard_template.html ./
+COPY generate_report.py apply_analysis.py report_view.py ./
 COPY profiles ./profiles
 COPY service ./service
 COPY viewer ./viewer

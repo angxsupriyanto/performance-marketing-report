@@ -124,16 +124,12 @@ class TableModeTests(unittest.TestCase):
         self.assertEqual(audit["metrics"]["prev"]["SQL Value"], 700000)
         html = out.read_text()
         soup = BeautifulSoup(html, "html.parser")
-        self.assertIsNone(soup.select_one(".hardware-section"))
-        self.assertEqual(soup.select_one(".focus-list h2").get_text(), "Daftar SQL Ecosystem · Week 39")
-        self.assertEqual([td.get_text() for td in soup.select(".focus-list tbody td")], ["Co3", "Mfg", "2026-09-25", "Rp 5.000.000"])
-        self.assertEqual(soup.select_one(".won-list h2").get_text(), "Daftar Deal Won · Week 39")
-        self.assertEqual(soup.select(".won-list tbody td")[3].get_text(), "Rp 2.500.000")
-        cards = soup.select(".target-progress .tgt")
-        self.assertEqual([c["data-unit"] for c in cards], ["count", "count"])
-        self.assertEqual(cards[0]["data-actual"], "1")
+        self.assertNotIn("Campaign Hardware", html)
+        self.assertIn("Daftar SQL Ecosystem Week 39", html)
+        self.assertEqual([td.get_text() for td in soup.select("table")[0].select("tbody td")], ["Co3", "Mfg", "2026-09-25", "Rp 5.000.000"])
+        self.assertEqual(soup.select("table")[-1].select("tbody td")[3].get_text(), "Rp 2.500.000")
         self.assertNotIn("Proposal Price Quote Date", html)
-        self.assertIn("Total Contract SQL", soup.select_one(".footer").get_text())
+        self.assertIn("Total Contract SQL", soup.get_text())
 
     def test_bu2_decimal_values_are_summed_exactly(self):
         leads = [dict(r) for r in LEADS]

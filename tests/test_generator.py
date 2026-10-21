@@ -69,10 +69,13 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1350000)
             self.assertEqual(audit["same_week"]["SQL"], 0)
             soup = BeautifulSoup(out.read_text(), "html.parser")
-            self.assertEqual(len(soup.select(".sql-list tbody tr")), 1)
-            self.assertIn("Backlog", soup.select_one(".sql-list tbody").get_text())
+            sql_table = [t for t in soup.select("table") if "Daftar SQL Week 39" in t.select_one("caption").get_text()][0]
+            self.assertEqual(len(sql_table.select("tbody tr")), 1)
+            self.assertIn("Backlog", sql_table.select_one("tbody").get_text())
             self.assertNotIn("<script>alert(1)</script>", out.read_text())
-            self.assertTrue(all(not x.get_text(strip=True) for x in soup.select(".executive-prose,.analysis-body,.hardware-analysis-summary p")))
+            panels = soup.select("[data-analysis]")
+            self.assertEqual(sorted(p["data-analysis"] for p in panels), sorted(["executive_summary", "hardware_summary"] + ["hardware_" + n for n in ("dashcam", "gps_tracker", "fuel", "mdvr", "obd")]))
+            self.assertTrue(all(p.get_text() == "Kosong sampai analisis dibuat." for p in panels))
 
             monthly = root / "monthly.html"
             cmd[cmd.index("--week") + 1] = "2026-09"
@@ -85,7 +88,7 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1350000)
             self.assertEqual(audit["metrics"]["now"]["Deal Won"], 1)
             html = monthly.read_text()
-            self.assertIn("Sep 2026 (1–30 Sep 2026) vs Aug 2026", html)
+            self.assertIn("Sep 2026 (1 sampai 30 Sep 2026) vs Agu 2026 (1 sampai 31 Agu 2026)", html)
             self.assertNotIn("Week —", html)
             self.assertNotIn("W—", html)
             self.assertNotIn("minggu", html)

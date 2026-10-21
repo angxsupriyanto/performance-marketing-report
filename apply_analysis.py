@@ -1,38 +1,18 @@
 #!/usr/bin/env python3
-"""Optional second pass: insert reviewed prose after numeric report verification."""
+"""Optional second pass: insert reviewed prose into a numeric report. Numbers are never touched."""
 import argparse
 import json
-import re
 from pathlib import Path
 from bs4 import BeautifulSoup
 
-STATIC_SELECTORS = {
-    "executive_summary": ".executive-prose",
-    "funnel_analysis": ".funnel .analysis-body",
-    "pipeline_insight": ".timing-section .analysis-body",
-    "stage_submission": ".breakdown-section .stage-table:nth-child(1) .analysis-body",
-    "stage_mql": ".breakdown-section .stage-table:nth-child(2) .analysis-body",
-    "stage_sql": ".breakdown-section .stage-table:nth-child(3) .analysis-body",
-    "stage_deal_won": ".breakdown-section .stage-table:nth-child(4) .analysis-body",
-    "cross_stage_insight": ".cross-stage .analysis-body",
-    "hardware_summary": ".hardware-analysis-summary p",
-}
+import report_view
 
-
-def slug(name):
-    return re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
+MAX_TEXT_CHARS = 4000
 
 
 def selectors_for(soup):
-    """Slots come from the report itself, so each BU keeps its own product list and hardware sections."""
-    selectors = {key: sel for key, sel in STATIC_SELECTORS.items() if soup.select_one(sel) is not None}
-    for block in soup.select(".hw-funnel-block"):
-        name = block["data-hardware"]
-        selectors["hardware_" + slug(name)] = f'.hw-funnel-block[data-hardware="{name}"] .analysis-body'
-    return selectors
-
-
-MAX_TEXT_CHARS = 4000
+    """Slots come from the report itself (`data-analysis` elements), so each BU keeps its own panels."""
+    return {el["data-analysis"]: f'[data-analysis="{el["data-analysis"]}"]' for el in soup.select("[data-analysis]")}
 
 
 def analysis_keys(report_html: str) -> list[str]:
@@ -40,7 +20,7 @@ def analysis_keys(report_html: str) -> list[str]:
 
 
 def apply_analysis(report_html: str, data: dict) -> str:
-    """Insert reviewed prose into a numeric report. Raises ValueError on any mismatch; numbers are never touched."""
+    """Insert reviewed prose into a numeric report. Raises ValueError on any mismatch."""
     if not isinstance(data, dict):
         raise ValueError("analisis harus berupa objek JSON")
     soup = BeautifulSoup(report_html, "html.parser")
@@ -50,14 +30,17 @@ def apply_analysis(report_html: str, data: dict) -> str:
         raise ValueError("Kunci JSON tidak dikenal untuk laporan ini: " + ", ".join(sorted(unknown)))
     for key, selector in selectors.items():
         target = soup.select_one(selector)
-        if target is None:
-            raise ValueError("Template tidak cocok: " + selector)
         value = data.get(key, "")
         if not isinstance(value, str):
             raise ValueError(key + " harus berupa teks")
         if len(value) > MAX_TEXT_CHARS:
             raise ValueError(f"{key} melebihi {MAX_TEXT_CHARS} karakter")
-        target.string = value.strip()  # escaped by BeautifulSoup; no HTML is executed
+        value = value.strip()
+        target.string = value or report_view.EMPTY_ANALYSIS  # escaped by BeautifulSoup; no HTML is executed
+        if value:
+            target.attrs.pop("style", None)
+        else:
+            target["style"] = f"color: {report_view.MUTED}"
     return str(soup)
 
 
