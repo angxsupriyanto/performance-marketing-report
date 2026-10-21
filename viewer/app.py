@@ -83,11 +83,18 @@ class Config:
             store=Store.from_env(lambda path: read_secret(path, min_length=1)),
             n8n_url=os.environ.get("N8N_ANALYSIS_URL", ""),
             n8n_header=os.environ.get("N8N_WEBHOOK_HEADER_NAME", "Authorization"),
-            n8n_prefix=os.environ.get("N8N_WEBHOOK_HEADER_PREFIX", "Bearer "),
+            n8n_prefix=normalize_prefix(os.environ.get("N8N_WEBHOOK_HEADER_PREFIX", "Bearer ")),
             n8n_token=read_secret(n8n_token_file, min_length=1) if n8n_token_file else "",
             secure_cookie=os.environ.get("VIEWER_COOKIE_SECURE", "true").lower() != "false",
             trust_proxy=os.environ.get("VIEWER_TRUST_PROXY_HEADERS", "false").lower() == "true",
         )
+
+
+def normalize_prefix(prefix: str) -> str:
+    """A scheme such as "Bearer" must be followed by exactly one space. YAML and shells often strip that trailing space,
+    which sends "Bearer<token>" and makes n8n answer 403 even though the token is right. An empty prefix stays empty."""
+    prefix = prefix.strip()
+    return prefix + " " if prefix else ""
 
 
 class Jobs:

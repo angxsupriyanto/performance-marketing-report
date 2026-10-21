@@ -489,6 +489,14 @@ class AuthUnitTests(unittest.TestCase):
         self.assertEqual(limiter.retry_after("b"), 0)
 
 
+class PrefixTests(unittest.TestCase):
+    def test_the_space_after_the_scheme_is_restored_when_yaml_or_a_shell_strips_it(self):
+        for raw in ("Bearer", "Bearer ", " Bearer  ", "Bearer\t"):
+            self.assertEqual(app.normalize_prefix(raw), "Bearer ", repr(raw))
+        self.assertEqual(app.normalize_prefix(""), "")
+        self.assertEqual(app.normalize_prefix("   "), "")
+
+
 class HashCliTests(unittest.TestCase):
     def test_output_file_is_plain_ascii_and_verifies(self):
         from unittest import mock
