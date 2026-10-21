@@ -228,31 +228,10 @@ def analysis_flow() -> Flow:
     return flow
 
 
-def view_flow() -> Flow:
-    flow = Flow("Report View v1")
-    header_auth_webhook(flow, "Webhook View", "report", "GET", (0, 0), response_mode="responseNode", authentication="basicAuth")
-    code_node(flow, "Validate Request", "validate_request.js", (240, 0))
-    flow.add("Load Report", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("select_latest_report.sql"), "options": {"queryReplacement": "={{ [$json.bu, $json.period] }}"}}, (480, 0), alwaysOutputData=True)
-    code_node(flow, "Render", "render_report.js", (720, 0))
-    flow.add("Respond", "n8n-nodes-base.respondToWebhook", 1.1, {
-        "respondWith": "text", "responseBody": "={{ $json.html }}",
-        "options": {"responseCode": "={{ $json.status }}", "responseHeaders": {"entries": [
-            {"name": "Content-Type", "value": "text/html; charset=utf-8"},
-            {"name": "Cache-Control", "value": "no-store"},
-            {"name": "X-Content-Type-Options", "value": "nosniff"},
-            {"name": "Content-Security-Policy", "value": "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"},
-        ]}},
-    }, (960, 0))
-    for a, b in (("Webhook View", "Validate Request"), ("Validate Request", "Load Report"), ("Load Report", "Render"), ("Render", "Respond")):
-        flow.connect(a, b)
-    return flow
-
-
 FLOWS = {
     "Report_Generate_v1.json": generate_flow,
     "Performa_Generate_v1.json": performa_flow,
     "Report_Analysis_Button_v1.json": analysis_flow,
-    "Report_View_v1.json": view_flow,
 }
 
 

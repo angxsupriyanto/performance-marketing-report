@@ -29,6 +29,9 @@ def named(query: str) -> str:
     return re.sub(r"\$(\d+)", r"%(p\1)s", query)
 
 
+LATEST_REPORT = "SELECT html, has_analysis FROM reports.latest_reports WHERE bu = %(p1)s AND period = %(p2)s"  # what the viewer reads for one report
+
+
 def sql(name: str) -> str:
     return named((ROOT / "n8n" / "sql" / name).read_text(encoding="utf-8"))
 
@@ -102,7 +105,7 @@ class DatabaseTests(unittest.TestCase):
             same = conn.execute(sql("insert_run.sql"), old).fetchall()
             upgraded = conn.execute(sql("insert_run.sql"), new).fetchall()
             again = conn.execute(sql("insert_run.sql"), new).fetchall()
-            shown = conn.execute(sql("select_latest_report.sql"), {"p1": "bu2", "p2": "2026-W45"}).fetchall()
+            shown = conn.execute(LATEST_REPORT, {"p1": "bu2", "p2": "2026-W45"}).fetchall()
         self.assertEqual((first[0][1], same[0][1], same[0][0]), (True, False, first[0][0]))
         self.assertEqual((upgraded[0][1], upgraded[0][0] != first[0][0], again[0][1], again[0][0]), (True, True, False, upgraded[0][0]))
         self.assertEqual(shown, [("<p>new generator</p>", False)])
@@ -137,14 +140,14 @@ class DatabaseTests(unittest.TestCase):
         with self.writer() as conn:
             conn.execute(sql("insert_run.sql"), self.run_params(period="2026-09", kind="month", sha=SHA_A, html="<p>run1</p>"))
             run2 = conn.execute(sql("insert_run.sql"), self.run_params(period="2026-09", kind="month", sha=SHA_B, html="<p>run2</p>")).fetchone()[0]
-            plain = conn.execute(sql("select_latest_report.sql"), {"p1": "bu2", "p2": "2026-09"}).fetchall()
+            plain = conn.execute(LATEST_REPORT, {"p1": "bu2", "p2": "2026-09"}).fetchall()
             self.assertEqual(plain, [("<p>run2</p>", False)])
             latest = conn.execute(sql("select_latest_run.sql"), {"p1": "bu2", "p2": "2026-09"}).fetchall()
             self.assertEqual((latest[0][0], latest[0][4]), (run2, ["executive_summary"]))
             for text in ("first", "second"):
                 saved = conn.execute(sql("insert_analysis.sql"), {"p1": str(run2), "p2": "tester", "p3": "model-x", "p4": "analysis_v1", "p5": json.dumps({"executive_summary": text}), "p6": f"<p>final {text}</p>"}).fetchall()
                 self.assertEqual(saved[0][1], run2)
-            shown = conn.execute(sql("select_latest_report.sql"), {"p1": "bu2", "p2": "2026-09"}).fetchall()
+            shown = conn.execute(LATEST_REPORT, {"p1": "bu2", "p2": "2026-09"}).fetchall()
         self.assertEqual(shown, [("<p>final second</p>", True)])
         with self.assertRaises(psycopg.errors.ForeignKeyViolation):
             with self.writer() as conn:
