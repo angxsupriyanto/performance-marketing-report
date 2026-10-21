@@ -58,5 +58,10 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
                                OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.company_names'), 'DELETE')), false)
   UNION ALL SELECT 18, 'report_writer and report_reader cannot read viewer_users (password hashes)',
          NOT (has_table_privilege('report_writer', to_regclass('reports.viewer_users'), 'SELECT') OR has_table_privilege('report_reader', to_regclass('reports.viewer_users'), 'SELECT'))
+  UNION ALL SELECT 19, 'analysis_edits exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.analysis_edits') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

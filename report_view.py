@@ -139,11 +139,44 @@ def analysis_body(key: str, analysis: dict | None) -> str:
     return f'<div data-analysis="{e(key)}" style="color: {MUTED}">{EMPTY_ANALYSIS}</div>'
 
 
+def _link_button(act: str, key: str, label: str) -> str:
+    return (f'<button type="button" data-act="{act}" data-key="{e(key)}" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; '
+            f'color: {BLUE}; font: 600 14px Inter, Arial, sans-serif; cursor: pointer">{e(label)}</button>')
+
+
+def analysis_panel(title: str, key: str, analysis: dict | None, outer_style: str, outer_class: str = "") -> str:
+    """One analysis panel. Plain (stored report, n8n output) unless the viewer passes `_panels`, which adds the status chip,
+    the provenance line and, for admins, the edit controls of the approved mockup."""
+    cls = f' class="{outer_class}"' if outer_class else ""
+    panels = (analysis or {}).get("_panels")
+    if panels is None or key not in panels:
+        return f'<div{cls} style="{outer_style}"><div style="font-weight: 600; color: {INK}; margin-bottom: 4px">{e(title)}</div>{analysis_body(key, analysis)}</div>'
+    info = panels[key]
+    chip = ""
+    if info["state"] == "ai":
+        chip = f'<span style="display: inline-block; padding: 2px 8px; border: 1px solid #6f8199; border-radius: 4px; color: #394d65; font-weight: 500; font-size: 12.5px">{e(info["chip"])}</span>'
+    elif info["state"] == "edited":
+        chip = f'<span style="display: inline-block; padding: 2px 8px; border-radius: 4px; background: #edf4ff; color: {BLUE}; font-weight: 600; font-size: 12.5px">Edited</span>'
+    head = (f'<div style="display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; margin-bottom: 4px">'
+            f'<div style="font-weight: 600; color: {INK}">{e(title)}</div>{chip}</div>')
+    meta = f'<div data-role="meta" style="margin-top: 8px; color: {MUTED}; font-size: 12.5px">{e(info["meta"])}</div>' if info["meta"] else ""
+    editor = controls = ""
+    if (analysis or {}).get("_can_edit"):
+        editor = (
+            f'<div data-editor="{e(key)}" hidden><label for="edit-{e(key)}" style="position: absolute; left: -9999px">Teks {e(title)}</label>'
+            f'<textarea id="edit-{e(key)}" rows="6" maxlength="4000" style="width: 100%; box-sizing: border-box; padding: 10px 12px; border: 1px solid #6f8199; border-radius: 6px; background: #ffffff; color: {INK}; font: 14px/1.5 Inter, Arial, sans-serif; resize: vertical">{e(info["draft"])}</textarea>'
+            f'<p data-role="error" role="alert" hidden style="margin: 8px 0 0; padding: 10px 12px; border-radius: 6px; background: #fcecec; color: #ac3d3d"></p>'
+            f'<div style="display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; margin-top: 8px">'
+            f'<button type="button" data-act="save" data-key="{e(key)}" style="height: 44px; padding: 0 20px; border: 0; border-radius: 6px; background: {BLUE}; color: #ffffff; font: 600 14px Inter, Arial, sans-serif; cursor: pointer">Simpan edit</button>'
+            f'{_link_button("cancel", key, "Batal")}</div></div>'
+        )
+        restore = _link_button("restore", key, info["restore_label"]) if info["restore_label"] else ""
+        controls = f'<div data-role="controls" style="display: flex; flex-wrap: wrap; gap: 0 20px">{_link_button("edit", key, info["edit_label"])}{restore}</div>'
+    return f'<div{cls} data-panel="{e(key)}" style="{outer_style}">{head}{analysis_body(key, analysis)}{editor}{meta}{controls}</div>'
+
+
 def analysis_box(title: str, key: str, analysis: dict | None, top: int = 16) -> str:
-    return (
-        f'<div style="margin-top: {top}px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px">'
-        f'<div style="font-weight: 600; color: {INK}; margin-bottom: 4px">{e(title)}</div>{analysis_body(key, analysis)}</div>'
-    )
+    return analysis_panel(title, key, analysis, f"margin-top: {top}px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px")
 
 
 # ---- targets: `tg` is None (not set) or a dict built by the viewer
@@ -342,8 +375,7 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
             f'<div class="split" style="padding: 20px 0; border-top: 1px solid {LINE}"><div class="split-main">'
             f'<h4 style="margin: 0 0 12px; font: 600 14px/1.4 Inter, Arial, sans-serif; color: {INK}">{e(h["name"])}</h4><div class="bars">{bars}</div>'
             f'<div style="margin-top: 20px"><div style="font-weight: 600; color: {INK}; margin-bottom: 8px">SQL Value {e(month["label"])} terhadap target</div>{stack}</div></div>'
-            f'<div class="split-side" style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="font-weight: 600; color: {INK}; margin-bottom: 4px">Analysis {e(h["name"])}</div>'
-            f'{analysis_body("hardware_" + h["slug"], analysis)}</div></div>'
+            f'{analysis_panel("Analysis " + h["name"], "hardware_" + h["slug"], analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px", "split-side")}</div>'
         )
     return (
         f'<div style="margin-top: 32px">{h3("Campaign Hardware")}{muted_p(f"{count} produk hardware di {e(company_name(view["bu"], names))}. Produk lain dan tag kosong tidak dihitung.")}'
@@ -372,7 +404,7 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         f'<div style="color: {MUTED}">{e(view["label"])} ({e(view["range"])}) vs {e(pl)} ({e(view["prev_range"])})</div></div>',
         f'<div class="cards">{cards}</div>',
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
-        f'<div style="margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="font-weight: 600; color: {INK}; margin-bottom: 4px">Executive Summary</div>{analysis_body("executive_summary", analysis)}</div>',
+        analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
         progress_section(view, tg, company),
         sql_section(view),
     ]

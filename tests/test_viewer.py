@@ -47,6 +47,8 @@ class FakeStore:
         self.down = False
         self.users = {}
         self.names = {}
+        self.edits = []
+        self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
 
     def _check(self):
         if self.down:
@@ -67,7 +69,7 @@ class FakeStore:
             html = "<html><body>laporan lama</body></html>"
         return {"run_id": "r1", "bu": bu, "period": period, "period_kind": "week", "period_start": datetime(2026, 9, 21).date(), "period_end": datetime(2026, 9, 27).date(),
                 "generated_at": datetime(2026, 10, 20, 16, 11, tzinfo=UTC), "html": html, "has_analysis": self.analysis_at[bu] is not None,
-                "analysis_created_at": self.analysis_at[bu], "analysis": self.analysis.get(bu), "facts": facts}
+                "analysis_created_at": self.analysis_at[bu], "analysis": self.analysis.get(bu), "model": self.model[bu], "facts": facts}
 
     def latest_analysis_time(self, bu, period):
         return self.analysis_at[bu]
@@ -91,6 +93,19 @@ class FakeStore:
 
     def ping(self):
         return not self.down
+
+    def latest_edits(self, run_id):
+        self._check()
+        newest = {}
+        for e in self.edits:
+            if e["run_id"] == run_id:
+                newest[e["panel_key"]] = e
+        return list(newest.values())
+
+    def add_edit(self, run_id, panel_key, body, edited_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.edits.append({"run_id": run_id, "panel_key": panel_key, "body": body, "edited_by": edited_by, "created_at": datetime.now(UTC)})
 
     # ---- users and company names, same rules as the real Store
     def ensure_bootstrap_admin(self, password_hash):

@@ -13,6 +13,7 @@ FONT = '<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="pr
 
 BASE_CSS = """
 *{box-sizing:border-box}
+[hidden]{display:none!important}
 body{margin:0;background:#f4f7fb;color:#394d65;font:14px/1.5 Inter,Arial,sans-serif}
 a{color:#2159a9}a:hover{color:#17283e}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #2159a9;outline-offset:2px}
@@ -163,8 +164,13 @@ ANALYSIS_JS = """
   var csrf=document.querySelector('meta[name=csrf]').content;
   var bu=box.dataset.bu,period=box.dataset.period,timer=null;
   var title=box.querySelector('[data-role=title]'),text=box.querySelector('[data-role=text]'),btn=box.querySelector('button');
+  var confirmBox=document.getElementById('vw-confirm');
   function show(kind,head,body,color){title.textContent=head;title.style.color=color||'#17283e';text.textContent=body;
     box.setAttribute('role',kind==='error'?'alert':'status');}
+  function post(url,payload){
+    return fetch(url,{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify(payload)})
+      .then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});});
+  }
   function poll(){
     fetch('/api/analysis/status?bu='+encodeURIComponent(bu)+'&period='+encodeURIComponent(period),{credentials:'same-origin'})
       .then(function(r){return r.json();}).then(function(s){
@@ -174,17 +180,42 @@ ANALYSIS_JS = """
         show('error','Analisis gagal',s.error||'Analisis tidak selesai. Report numerik tidak berubah.','#ac3d3d');
       }).catch(function(){timer=setTimeout(poll,8000);});
   }
-  btn.addEventListener('click',function(){
+  function start(){
+    if(confirmBox)confirmBox.hidden=true;
     btn.disabled=true;btn.textContent='Menganalisis';
     show('status','Menganalisis','Mengirim ringkasan angka ke Claude dan menyisipkan hasilnya ke report. Jangan tutup halaman ini.');
-    fetch('/api/analysis',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':csrf},body:JSON.stringify({bu:bu,period:period})})
-      .then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});})
-      .then(function(res){
+    post('/api/analysis',{bu:bu,period:period}).then(function(res){
         if(!res.ok){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal',res.body.error||'Permintaan ditolak.','#ac3d3d');return;}
         poll();
       }).catch(function(){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal','Tidak bisa menghubungi server. Coba lagi.','#ac3d3d');});
+  }
+  if(btn){
+    btn.addEventListener('click',function(){
+      if(confirmBox&&Number(box.dataset.edited)>0){confirmBox.hidden=false;confirmBox.querySelector('button').focus();return;}
+      start();
+    });
+    if(confirmBox){
+      confirmBox.querySelector('[data-act=continue]').addEventListener('click',start);
+      confirmBox.querySelector('[data-act=abort]').addEventListener('click',function(){confirmBox.hidden=true;btn.focus();});
+    }
+    if(box.dataset.state==='running'){btn.disabled=true;btn.textContent='Menganalisis';poll();}
+  }
+  function parts(el){var panel=el.closest('[data-panel]');return {panel:panel,key:el.dataset.key,
+    editor:panel.querySelector('[data-editor]'),text:panel.querySelector('[data-analysis]'),meta:panel.querySelector('[data-role=meta]'),controls:panel.querySelector('[data-role=controls]')};}
+  function editing(p,on){p.editor.hidden=!on;[p.text,p.meta,p.controls].forEach(function(x){if(x)x.hidden=on;});}
+  document.addEventListener('click',function(ev){
+    var el=ev.target.closest('[data-act][data-key]');if(!el||!el.closest('[data-panel]'))return;
+    var act=el.dataset.act,p=parts(el),area=p.editor?p.editor.querySelector('textarea'):null,err=p.editor?p.editor.querySelector('[data-role=error]'):null;
+    if(act==='edit'){editing(p,true);area.focus();return;}
+    if(act==='cancel'){area.value=area.defaultValue;err.hidden=true;editing(p,false);return;}
+    var payload=act==='save'?{bu:bu,period:period,key:p.key,text:area.value}:{bu:bu,period:period,key:p.key,restore:'1'};
+    el.disabled=true;
+    post('/api/analysis/edit',payload).then(function(res){
+      if(res.ok){location.reload();return;}
+      el.disabled=false;
+      if(err&&act==='save'){err.textContent=res.body.error||'Tidak tersimpan.';err.hidden=false;}else{window.alert(res.body.error||'Tidak tersimpan.');}
+    }).catch(function(){el.disabled=false;var m='Tidak bisa menghubungi server. Coba lagi.';if(err&&act==='save'){err.textContent=m;err.hidden=false;}else{window.alert(m);}});
   });
-  if(box.dataset.state==='running'){btn.disabled=true;btn.textContent='Menganalisis';poll();}
 })();
 """
 
@@ -197,7 +228,7 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
     return "done" if has_analysis else "none"
 
 
-def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str) -> str:
+def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0) -> str:
     bu, period = report["bu"], report["period"]
     label = f"{name} {period}"
     if state == "running":
@@ -217,9 +248,17 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dic
         f'<span aria-current="page" style="color:#17283e">{escape(label)}</span></nav>'
         f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(name)}</h1>'
         f'<dl class="vw-dl"><div><dt>Periode</dt><dd>{escape(period)}</dd></div><div><dt>Tanggal</dt><dd style="font-weight:400">{escape(range_text(report["period_start"], report["period_end"]))}</dd></div></dl>'
-        + (f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" style="margin-bottom:24px">'
+        + (f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" data-edited="{edited}" style="margin-bottom:24px">'
         f'<div class="vw-bar"><div style="flex:1 1 360px;min-width:0"><div data-role="title" style="font-weight:600;color:{color}">{escape(head)}</div><div data-role="text">{escape(text)}</div></div>'
-        f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div></div></section>' if user["role"] == "admin" else "")
+        + (f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div>' if user["role"] == "admin"
+           else '<div style="color:#607188">Hanya admin yang bisa membuat atau membuat ulang analisis.</div>')
+        + '</div>'
+        + ('<div id="vw-confirm" role="alert" hidden class="vw-box vw-pad" style="margin-top:16px;border-color:#6f8199"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Ada panel yang sudah diedit</div>'
+           '<div style="margin-bottom:12px">Membuat ulang analisis menggantikan teks yang tampil dengan versi AI baru, termasuk panel yang sudah diedit. Versi hasil edit tetap tersimpan di riwayat.</div>'
+           '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" data-act="continue" class="vw-btn">Lanjutkan buat ulang</button>'
+           '<button type="button" data-act="abort" style="display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer">Batal</button></div></div>'
+           if user["role"] == "admin" else "")
+        + '</section>')
         + '</div>'
     )
 

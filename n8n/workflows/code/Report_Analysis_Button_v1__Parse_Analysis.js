@@ -29,4 +29,7 @@ for (const [key, value] of Object.entries(analysis)) {
   if (value.length > MAX_TEXT_CHARS) throw new Error(`${key} melebihi ${MAX_TEXT_CHARS} karakter`);
   clean[key] = value.trim();
 }
-return [{ json: { analysis: clean } }];
+// The model that actually answered. A router combo (e.g. pesankopi-report) reports the model it picked in `model`;
+// only when the response carries none do we fall back to the name that was requested.
+const answered = typeof response.model === 'string' ? response.model.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 120) : '';
+return [{ json: { analysis: clean, model: answered } }];

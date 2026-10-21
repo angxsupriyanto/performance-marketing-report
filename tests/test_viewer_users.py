@@ -100,7 +100,11 @@ class RoleTests(UserCase):
         self.as_user("andi")
         _, page = self.call("GET", "/report/bu1/2026-W39")
         soup = BeautifulSoup(page, "html.parser")
-        self.assertIsNone(soup.select_one("#vw-analysis"))
+        box = soup.select_one("#vw-analysis")
+        self.assertIsNone(box.select_one("button"))
+        self.assertIn("Hanya admin yang bisa membuat atau membuat ulang analisis.", box.get_text())
+        self.assertIsNone(soup.select_one("#vw-confirm"))
+        self.assertEqual(soup.select("[data-act]"), [])  # no edit controls for a viewer
         self.assertEqual([a.get_text() for a in soup.select(".vw-menu a")], [])
         self.assertIn("andi (Pengguna)", soup.select_one(".vw-menu").get_text())
         for path in ("/targets", "/users", "/users/new", "/users/edit?u=admin", "/companies"):

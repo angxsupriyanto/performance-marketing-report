@@ -49,7 +49,7 @@ class Store:
         with self._connect() as conn:
             return conn.execute(
                 """SELECT l.run_id, l.bu, l.period, l.period_kind, l.period_start, l.period_end, l.generated_at, l.numeric_html AS html,
-                          l.has_analysis, l.analysis_created_at, l.analysis, r.facts
+                          l.has_analysis, l.analysis_created_at, l.analysis, l.model, r.facts
                    FROM reports.latest_reports l JOIN reports.report_runs r USING (run_id)
                    WHERE l.bu = %s AND l.period = %s""",
                 (bu, period),
@@ -83,6 +83,20 @@ class Store:
                         "INSERT INTO reports.target_entries (bu, scope, product, period_key, unit, amount) VALUES (%s, %s, %s, %s, %s, %s)",
                         (bu, scope, product, period_key, unit, amount),
                     )
+
+    # ---- manual edits of analysis panels
+    def latest_edits(self, run_id) -> list[dict]:
+        """Newest edit row per panel of one run. body None means the AI version was restored."""
+        with self._connect() as conn:
+            return conn.execute(
+                """SELECT DISTINCT ON (panel_key) panel_key, body, edited_by, created_at FROM reports.analysis_edits
+                   WHERE run_id = %s ORDER BY panel_key, created_at DESC, edit_id""",
+                (run_id,),
+            ).fetchall()
+
+    def add_edit(self, run_id, panel_key: str, body: str | None, edited_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.analysis_edits (run_id, panel_key, body, edited_by) VALUES (%s, %s, %s, %s)", (run_id, panel_key, body, edited_by))
 
     # ---- users
     def ensure_bootstrap_admin(self, password_hash: str) -> bool:

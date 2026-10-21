@@ -428,6 +428,23 @@ class CodeNodeTests(unittest.TestCase):
         self.assertIn("terpotong", bad("{}", stop="max_tokens")["error"])
         self.assertFalse(bad('["a"]')["ok"])
 
+    def test_the_model_that_actually_answered_is_recorded_not_the_combo_name(self):
+        text = '{"executive_summary": "ok"}'
+        reply = lambda **kw: {"choices": [{"message": {"content": text}, "finish_reason": "stop"}], **kw}
+        self.assertEqual(self.parse(reply(model="gemini-2.5-pro"))["result"][0]["json"]["model"], "gemini-2.5-pro")
+        self.assertEqual(self.parse(reply(model="  weird\nname "))["result"][0]["json"]["model"], "weirdname")
+        self.assertEqual(len(self.parse(reply(model="m" * 300))["result"][0]["json"]["model"]), 120)
+        self.assertEqual(self.parse(reply())["result"][0]["json"]["model"], "")  # none reported: Prepare Save falls back to the requested name
+        self.assertEqual(self.parse(reply(model=5))["result"][0]["json"]["model"], "")
+        prep = node(load("Report_Analysis_Button_v1.json"), "Prepare Save")["parameters"]["jsCode"]
+        nodes = lambda model: {"Prepare Analysis Request": {"items": [{"run_id": "r1", "model": "pesankopi-report", "prompt_version": "v1"}]},
+                               "Validate Request": {"items": [{"bu": "bu1", "period": "2026-W39", "requested_by": "viewer"}]},
+                               "Parse Analysis": {"items": [{"analysis": {"executive_summary": "ok"}, "model": model}]}}
+        for answered, stored in (("gemini-2.5-pro", "gemini-2.5-pro"), ("", "pesankopi-report")):
+            out = run_code(prep, [{"html": "<p>x</p>"}], nodes(answered))
+            self.assertTrue(out["ok"], out)
+            self.assertEqual(out["result"][0]["json"]["params"][2], stored)
+
 
 if __name__ == "__main__":
     unittest.main()

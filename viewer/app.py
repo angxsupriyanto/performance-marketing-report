@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, auth, pages, targets  # noqa: E402
+from viewer import access, analysis_edits, auth, pages, targets  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -305,6 +305,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.start_analysis(form)
                     return
+                if path == "/api/analysis/edit":
+                    self.need_admin()
+                    status = self.save_edit(form)
+                    return
                 if path in ("/targets/year", "/targets/month"):
                     self.need_admin()
                     status = self.save_targets(path.rsplit("/", 1)[1], form, csrf, nonce)
@@ -437,7 +441,15 @@ class Handler(BaseHTTPRequestHandler):
         view = report_view.extract_view(report["html"])
         job = self.jobs.get((bu, period))
         state = pages.analysis_state(report["has_analysis"], job)
-        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu))
+        edited = 0
+        analysis = None
+        if view is not None:
+            try:
+                edits, edits_ok = self.cfg.store.latest_edits(report["run_id"]), True
+            except Exception:  # noqa: BLE001 - without the edit table the AI text still shows, read-only
+                edits, edits_ok = [], False
+            analysis, edited = analysis_edits.effective(report, edits, report_view.analysis_keys(view), access.is_admin(self.user) and edits_ok, pages.dt_text)
+        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited)
         if view is None:
             note = (
                 '<main class="vw-main" style="padding-top:0"><div class="vw-box vw-pad" role="alert"><div class="vw-h2">Report ini dibuat oleh generator versi lama</div>'
@@ -449,7 +461,6 @@ class Handler(BaseHTTPRequestHandler):
             rows = self.cfg.store.latest_targets(bu)
         except Exception:  # noqa: BLE001
             rows = None
-        analysis = report["analysis"] if isinstance(report.get("analysis"), dict) else None
         document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names())
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
@@ -467,6 +478,33 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202
+
+    def save_edit(self, form: dict) -> int:
+        bu, period, key = form.get("bu", ""), form.get("period", ""), form.get("key", "")
+        if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        view = report_view.extract_view(report["html"]) if report else None
+        if view is None:
+            raise HttpError(404, "report tidak ditemukan")
+        if key not in report_view.analysis_keys(view):
+            raise HttpError(400, "panel tidak dikenal")
+        if form.get("restore") == "1":
+            body = None
+        else:
+            try:
+                body = analysis_edits.clean_text(form.get("text", ""))
+            except ValueError as exc:
+                raise HttpError(400, str(exc))
+        try:
+            self.cfg.store.add_edit(report["run_id"], key, body, self.user["username"])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Edit tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        self.json(200, {"ok": True})
+        return 200
 
     def analysis_status(self, query: dict) -> int:
         bu, period = query.get("bu", ""), query.get("period", "")

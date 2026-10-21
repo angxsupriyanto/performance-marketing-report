@@ -61,6 +61,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/003_run_idempotency_includes_generator.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/004_users_and_company_names.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/004_users_and_company_names.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/005_analysis_edits.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/005_analysis_edits.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -298,6 +300,32 @@ class DatabaseTests(unittest.TestCase):
         with self.assertRaises(UserError):
             store.save_company_names({"bu1": "same", "bu2": "SAME"})
         self.assertEqual(store.company_names(), {"bu1": "LOL", "bu2": "McEasy"})  # nothing half saved
+
+    def test_analysis_edits_are_append_only_for_the_viewer_and_tied_to_a_run(self):
+        import psycopg.errors as pe
+        from viewer.store import Store
+        with self.writer() as conn:
+            run_id = conn.execute(sql("insert_run.sql"), self.run_params(period="2026-W47", sha=SHA_A)).fetchall()[0][0]
+        store = self.viewer_store()
+        store.add_edit(run_id, "executive_summary", "versi satu", "admin")
+        store.add_edit(run_id, "executive_summary", "versi dua", "admin")
+        store.add_edit(run_id, "hardware_dashcam", None, "admin")  # restore marker
+        newest = {e["panel_key"]: e for e in store.latest_edits(run_id)}
+        self.assertEqual((newest["executive_summary"]["body"], newest["hardware_dashcam"]["body"]), ("versi dua", None))
+        with self.admin_db() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.analysis_edits").fetchone()[0], 3)  # every version kept
+        with self.viewer() as conn:
+            for statement in ("UPDATE reports.analysis_edits SET body = 'x'", "DELETE FROM reports.analysis_edits", "TRUNCATE reports.analysis_edits"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in ((run_id, "Bad Key", "x", "admin"), (run_id, "executive_summary", "", "admin"), (run_id, "executive_summary", "x" * 4001, "admin"), (run_id, "executive_summary", "x", ""),
+                    ("00000000-0000-0000-0000-000000000000", "executive_summary", "x", "admin")):
+            with self.assertRaises((pe.CheckViolation, pe.ForeignKeyViolation)):
+                store.add_edit(*bad)
+        with self.writer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.analysis_edits").fetchone()[0], 3)  # writer reads them
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.analysis_edits (run_id, panel_key, body, edited_by) VALUES (%s, 'a', 'b', 'c')", (run_id,))
 
 
 if __name__ == "__main__":
