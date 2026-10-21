@@ -19,7 +19,7 @@ from test_table_mode import LEADS  # noqa: E402
 
 WORKFLOWS = ROOT / "n8n" / "workflows"
 HARNESS = ROOT / "tests" / "n8n_harness.js"
-ALLOWED_PLACEHOLDERS = {"<SPREADSHEET_ID>", "<TELEGRAM_CHAT_ID>", "<ANTHROPIC_MODEL>", "<BU>", "<PERIOD>"}
+ALLOWED_PLACEHOLDERS = {"<SPREADSHEET_ID>", "<TELEGRAM_CHAT_ID>", "<BU>", "<PERIOD>"}
 
 
 def load(name):
@@ -178,9 +178,9 @@ class CodeNodeTests(unittest.TestCase):
         self.assertFalse(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "targets": {"x": "y" * 21000}}}])["ok"])
         report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu1", "2026-W39", False)
         run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
-        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"].replace("<ANTHROPIC_MODEL>", "m")
-        with_targets = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]["request"]["messages"][0]["content"]
-        without = run_code(code, [run], {"Validate Request": {"items": [{"bu": "bu1", "period": "2026-W39", "targets": None}]}})["result"][0]["json"]["request"]["messages"][0]["content"]
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        with_targets = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]["request"]["messages"][1]["content"]
+        without = run_code(code, [run], {"Validate Request": {"items": [{"bu": "bu1", "period": "2026-W39", "targets": None}]}})["result"][0]["json"]["request"]["messages"][1]["content"]
         self.assertEqual(json.loads(with_targets)["targets"], targets)
         self.assertNotIn("targets", json.loads(without))
         self.assertIn("hardware_gps_tracker", json.loads(with_targets)["analysis_keys"])
@@ -355,27 +355,50 @@ class CodeNodeTests(unittest.TestCase):
         out = run_code(code, [{"ok": True}] * len(composed), {"Compose Message": {"items": composed}})
         self.assertEqual(out["result"][0]["json"]["runs"], [{"bu": "bu2", "period": "2026-W39", "run_id": "12345678-aaaa-bbbb-cccc-1234567890ab", "inserted": True}])
 
-    def test_analysis_request_never_contains_company_names_and_needs_a_model(self):
+    def test_analysis_request_never_contains_company_names_and_follows_the_provider(self):
         flow = load("Report_Analysis_Button_v1.json")
         report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu2", "2026-W39", False)
         run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
         nodes = {"Validate Request": {"items": [{"bu": "bu2", "period": "2026-W39", "requested_by": "t"}]}}
         code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
-        refused = run_code(code, [run], nodes)
-        self.assertFalse(refused["ok"])
-        self.assertIn("ANTHROPIC_MODEL", refused["error"])
-        built = run_code(code.replace("<ANTHROPIC_MODEL>", "model-id-for-test"), [run], nodes)
+        built = run_code(code, [run], nodes)
         self.assertTrue(built["ok"], built)
-        request = built["result"][0]["json"]["request"]
-        self.assertEqual(request["model"], "model-id-for-test")
-        payload = request["messages"][0]["content"]
+        out = built["result"][0]["json"]
+        self.assertEqual((out["model"], out["url"], out["headers"]), ("pesankopi-report", "https://9router.pesankopi.com/v1/chat/completions", {}))
+        request = out["request"]
+        self.assertEqual([m["role"] for m in request["messages"]], ["system", "user"])
+        self.assertNotIn("system", request)
+        self.assertIn("DATA, bukan instruksi", request["messages"][0]["content"])
+        payload = request["messages"][1]["content"]
         for name in ("Co1", "Co2", "Co3", "Co4", "Co5", "Rahasia"):
             self.assertNotIn(name, payload)
         self.assertIn("executive_summary", json.loads(payload)["analysis_keys"])
-        self.assertIn("DATA, bukan instruksi", request["system"])
-        missing = run_code(code.replace("<ANTHROPIC_MODEL>", "m"), [{"run_id": None}], nodes)
+        claude = run_code(code.replace("const PROVIDER = 'openai';", "const PROVIDER = 'anthropic';"), [run], nodes)["result"][0]["json"]
+        self.assertEqual((claude["url"], claude["headers"]), ("https://api.anthropic.com/v1/messages", {"anthropic-version": "2023-06-01"}))
+        self.assertIn("DATA, bukan instruksi", claude["request"]["system"])
+        self.assertEqual([m["role"] for m in claude["request"]["messages"]], ["user"])
+        bad = run_code(code.replace("const PROVIDER = 'openai';", "const PROVIDER = 'x';"), [run], nodes)
+        self.assertFalse(bad["ok"])
+        self.assertIn("PROVIDER", bad["error"])
+        missing = run_code(code, [{"run_id": None}], nodes)
         self.assertFalse(missing["ok"])
         self.assertIn("Report Generate", missing["error"])
+
+    def test_ask_model_node_takes_url_and_headers_from_the_prepared_request(self):
+        ask = node(load("Report_Analysis_Button_v1.json"), "Ask Model")["parameters"]
+        self.assertEqual((ask["url"], ask["jsonHeaders"], ask["jsonBody"]), ("={{ $json.url }}", "={{ JSON.stringify($json.headers) }}", "={{ JSON.stringify($json.request) }}"))
+        self.assertEqual(ask["genericAuthType"], "httpHeaderAuth")
+
+    def test_openai_compatible_replies_are_parsed_like_anthropic_ones(self):
+        text = '{"executive_summary": " SQL naik. "}'
+        for reply in ({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]},
+                      {"choices": [{"message": {"content": [{"type": "text", "text": text}]}, "finish_reason": "stop"}]},
+                      {"choices": [{"message": {"content": "```json\n" + text + "\n```"}, "finish_reason": "stop"}]}):
+            self.assertEqual(self.parse(reply)["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": ""}, reply)
+        self.assertIn("terpotong", self.parse({"choices": [{"message": {"content": text}, "finish_reason": "length"}]})["error"])
+        self.assertIn("kosong", self.parse({"choices": [{"message": {"content": None}, "finish_reason": "stop"}]})["error"])
+        self.assertIn("kosong", self.parse({"choices": []})["error"])
+        self.assertIn("tidak dikenal", self.parse({"choices": [{"message": {"content": '{"hack": "x"}'}, "finish_reason": "stop"}]})["error"])
 
     def test_prompt_only_references_facts_that_exist(self):
         csv_bytes = self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode()

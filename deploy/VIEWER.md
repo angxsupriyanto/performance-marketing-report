@@ -42,7 +42,7 @@ Yang **tidak** dicakup: password bersama bisa bocor dari orang ke orang. Bila it
 3. **Container.** Salin `deploy/docker-compose.report-viewer.example.yml` menjadi `docker-compose.report-viewer.local.yml` (diabaikan Git), ubah nama network, `VIEWER_DB_HOST`, dan `N8N_ANALYSIS_URL` sesuai stack Anda, lalu:
    `docker compose -p report-viewer -f deploy/docker-compose.report-viewer.local.yml up -d --build`
    Proyek terpisah, jadi stack n8n tidak dibuat ulang. Jangan publikasikan port.
-4. **n8n.** Impor ulang `Report_Analysis_Button_v1.json` (sekarang menerima `targets` dari viewer), aktifkan workflow itu supaya URL produksi `/webhook/report-analysis` berlaku, dan isi `<ANTHROPIC_MODEL>` seperti sebelumnya.
+4. **n8n.** Impor ulang `Report_Analysis_Button_v1.json` (sekarang menerima `targets` dari viewer), aktifkan workflow itu supaya URL produksi `/webhook/report-analysis` berlaku, dan pasang credential Header Auth untuk node *Ask Model* (`Authorization` = `Bearer <API key 9router>`). Model dan alamat router sudah terisi di node *Prepare Analysis Request* (`pesankopi-report`).
 5. **Cloudflare Tunnel.** Di Zero Trust, pada tunnel yang sudah melayani n8n: *Public hostname* `officehour.pesankopi.com` → *Service* `HTTP` `report-viewer:8090`. Container `cloudflared` harus berada di network Docker yang sama dengan `report-viewer`. Selesai; tidak ada port yang dibuka di server.
 
 ## Memeriksa

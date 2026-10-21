@@ -1,8 +1,17 @@
 // Accepts only a JSON object of plain-text strings whose keys the report actually has.
 const MAX_TEXT_CHARS = 4000;
 const response = $input.first().json;
-if (response.stop_reason === 'max_tokens') throw new Error('Jawaban model terpotong (max_tokens); naikkan MAX_TOKENS atau ringkas permintaan');
-const text = (response.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
+let text;
+if (Array.isArray(response.choices)) { // OpenAI-compatible
+  const choice = response.choices[0] || {};
+  if (choice.finish_reason === 'length') throw new Error('Jawaban model terpotong (max_tokens); naikkan MAX_TOKENS atau ringkas permintaan');
+  const content = choice.message && choice.message.content;
+  text = (Array.isArray(content) ? content.map((part) => (typeof part === 'string' ? part : part.text || '')).join('') : content || '').trim();
+  if (!text) throw new Error('Jawaban model kosong; periksa nama model atau combo di router');
+} else { // Anthropic Messages
+  if (response.stop_reason === 'max_tokens') throw new Error('Jawaban model terpotong (max_tokens); naikkan MAX_TOKENS atau ringkas permintaan');
+  text = (response.content || []).filter((part) => part.type === 'text').map((part) => part.text).join('').trim();
+}
 const start = text.indexOf('{');
 const end = text.lastIndexOf('}');
 if (start < 0 || end <= start) throw new Error('Jawaban model bukan objek JSON');

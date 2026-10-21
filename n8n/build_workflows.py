@@ -166,10 +166,10 @@ def analysis_flow() -> Flow:
     code_node(flow, "Validate Request", "validate_request.js", (480, 80))
     flow.add("Load Latest Run", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("select_latest_run.sql"), "options": {"queryReplacement": "={{ [$json.bu, $json.period] }}"}}, (480, 0), alwaysOutputData=True)
     code_node(flow, "Prepare Analysis Request", "prepare_analysis_request.js", (720, 0), SYSTEM_PROMPT=json.dumps(prompt, ensure_ascii=False), PROMPT_VERSION=json.dumps(PROMPT_FILE.removesuffix(".md")))
-    flow.add("Ask Claude", "n8n-nodes-base.httpRequest", 4.2, {
-        "method": "POST", "url": "https://api.anthropic.com/v1/messages",
+    flow.add("Ask Model", "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST", "url": "={{ $json.url }}",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
-        "sendHeaders": True, "headerParameters": {"parameters": [{"name": "anthropic-version", "value": "2023-06-01"}]},
+        "sendHeaders": True, "specifyHeaders": "json", "jsonHeaders": "={{ JSON.stringify($json.headers) }}",
         "sendBody": True, "contentType": "json", "specifyBody": "json", "jsonBody": "={{ JSON.stringify($json.request) }}",
         "options": {"timeout": 300000},
     }, (960, 0))
@@ -187,7 +187,7 @@ def analysis_flow() -> Flow:
     code_node(flow, "Result", "result_analysis.js", (2400, 0))
     flow.connect("Manual Trigger", "Manual Parameters")
     flow.connect("Manual Parameters", "Validate Request")
-    for a, b in (("Webhook Analysis", "Validate Request"), ("Validate Request", "Load Latest Run"), ("Load Latest Run", "Prepare Analysis Request"), ("Prepare Analysis Request", "Ask Claude"), ("Ask Claude", "Parse Analysis"), ("Parse Analysis", "Apply Analysis"), ("Apply Analysis", "Prepare Save"), ("Prepare Save", "Save Analysis"), ("Save Analysis", "Notify"), ("Notify", "Result")):
+    for a, b in (("Webhook Analysis", "Validate Request"), ("Validate Request", "Load Latest Run"), ("Load Latest Run", "Prepare Analysis Request"), ("Prepare Analysis Request", "Ask Model"), ("Ask Model", "Parse Analysis"), ("Parse Analysis", "Apply Analysis"), ("Apply Analysis", "Prepare Save"), ("Prepare Save", "Save Analysis"), ("Save Analysis", "Notify"), ("Notify", "Result")):
         flow.connect(a, b)
     return flow
 
