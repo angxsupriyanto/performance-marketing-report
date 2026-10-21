@@ -132,13 +132,16 @@ def call_n8n(cfg: Config, bu: str, period: str, context: dict) -> str:
             response.read()
         return ""
     except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", "replace")
         detail = ""
         try:
-            data = json.loads(exc.read().decode("utf-8", "replace"))
+            data = json.loads(raw)
             detail = str(data.get("message") or data.get("error") or "")[:240]
         except (ValueError, AttributeError):
             pass
-        return f"n8n menjawab {exc.code}" + (f": {detail}" if detail else "") + "."
+        if not detail:  # not JSON (a proxy page, plain text): show the start of it so the cause is visible
+            detail = " ".join(raw.split())[:160]
+        return f"n8n menjawab {exc.code}" + (f": {detail}" if detail else " dengan jawaban kosong") + "."
     except (urllib.error.URLError, TimeoutError, OSError):
         return "n8n tidak menjawab dalam batas waktu."
 

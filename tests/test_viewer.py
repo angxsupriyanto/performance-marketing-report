@@ -357,6 +357,27 @@ class ViewerTests(unittest.TestCase):
         again = self.call("POST", "/api/analysis", {"bu": "bu2", "period": "2026-W39"}, {"X-CSRF-Token": self.csrf()})[0]
         self.assertEqual(again.status, 202)
 
+    def test_a_non_json_error_body_from_n8n_is_shown_not_hidden(self):
+        class Plain(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_POST(self):
+                self.rfile.read(int(self.headers["Content-Length"]))
+                payload = b"<html>Forbidden by gateway</html>"
+                self.send_response(403)
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+
+        plain = HTTPServer(("127.0.0.1", 0), Plain)
+        threading.Thread(target=plain.serve_forever, daemon=True).start()
+        self.addCleanup(plain.shutdown)
+        cfg = app.Config(password_hash=self.hash, session_secret=SECRET, store=self.store, n8n_url=f"http://127.0.0.1:{plain.server_port}/x",
+                         n8n_header="Authorization", n8n_prefix="Bearer ", n8n_token="t" * 24, secure_cookie=True, trust_proxy=True)
+        error = app.call_n8n(cfg, "bu1", "2026-W39", {})
+        self.assertEqual(error, "n8n menjawab 403: <html>Forbidden by gateway</html>.")
+
     def test_a_running_analysis_blocks_a_second_start_and_unsaved_results_count_as_failure(self):
         self.login()
         release = threading.Event()
