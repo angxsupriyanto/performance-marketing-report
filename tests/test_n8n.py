@@ -225,6 +225,12 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual((first["Inbound Date"], first["MQL Date"], first["Proposal Price Quote Date"]), ("2026-09-21", "2026-09-22", "2026-09-24"))
         self.assertEqual((first["ARR + OTF (Tanpa PPN)"], first["Total Contract SQL"]), ("1000000", "9000000"))
 
+    def test_a_skipped_read_tracker_is_named_as_the_cause(self):
+        skipped = self.build_csv([{"trigger": "manual", "plans": [{"bu": "bu1", "period": "2026-W39"}]}])  # what a disabled node passes through
+        self.assertFalse(skipped["ok"])
+        self.assertIn("keluaran node Normalize Plan, bukan baris sheet", skipped["error"])
+        self.assertIn("Read Tracker sedang dinonaktifkan", skipped["error"])
+
     def test_an_empty_or_unreadable_sheet_explains_which_node_and_what_to_check(self):
         none = self.build_csv([])
         self.assertFalse(none["ok"])

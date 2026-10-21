@@ -45,6 +45,9 @@ for (const item of items) {
   const values = ALL.map((column) => cell(column, byName[column]));
   if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));
 }
+if (items.length && items[0].json && items[0].json.plans !== undefined) {
+  throw new Error('Build CSV menerima keluaran node Normalize Plan, bukan baris sheet. Node Read Tracker sedang dinonaktifkan (disabled, tampil abu-abu atau dicoret) atau sambungannya terputus. Aktifkan node itu dan pastikan urutannya Normalize Plan, Read Tracker, Build CSV.');
+}
 if (!items.length) throw new Error('Node Read Tracker tidak mengembalikan satu baris pun. Periksa ID spreadsheet, nama tab (NEW Customers List), rentang A:DR, dan credential Google Sheets pada node itu.');
 if (!rows.length) {
   const sample = [...seen].slice(0, 12).join(', ') || '(tidak ada)';
