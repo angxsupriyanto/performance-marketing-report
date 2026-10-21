@@ -64,5 +64,5 @@ if (missing.length) {
 }
 
 const csv = [ALL.map(quote).join(','), ...rows].join('\n') + '\n';
-const plans = $('Normalize Plan').first().json.plans;
+const plans = ref('Normalize Plan').first().json.plans;
 return plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));

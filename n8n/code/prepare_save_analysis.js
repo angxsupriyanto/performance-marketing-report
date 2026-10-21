@@ -1,8 +1,8 @@
-const prepared = $('Prepare Analysis Request').first().json;
-const request = $('Validate Request').first().json;
+const prepared = ref('Prepare Analysis Request').first().json;
+const request = ref('Validate Request').first().json;
 const applied = $input.first().json;
 if (typeof applied.html !== 'string' || !applied.html) throw new Error('Layanan laporan tidak mengembalikan HTML');
-const parsed = $('Parse Analysis').first().json;
+const parsed = ref('Parse Analysis').first().json;
 const analysis = parsed.analysis;
 const model = parsed.model || prepared.model;
 return [{

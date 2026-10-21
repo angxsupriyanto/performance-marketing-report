@@ -225,6 +225,36 @@ class CodeNodeTests(unittest.TestCase):
         self.assertEqual((first["Inbound Date"], first["MQL Date"], first["Proposal Price Quote Date"]), ("2026-09-21", "2026-09-22", "2026-09-24"))
         self.assertEqual((first["ARR + OTF (Tanpa PPN)"], first["Total Contract SQL"]), ("1000000", "9000000"))
 
+    def test_a_missing_or_renamed_node_is_named_instead_of_n8ns_bare_message(self):
+        helper = (ROOT / "n8n" / "code" / "_ref.js").read_text(encoding="utf-8")
+        gone = {"Normalize Plan": {"missing": True}}
+        out = run_code(helper + "\nreturn ref('Normalize Plan').first();", [], gone)
+        self.assertFalse(out["ok"])
+        self.assertIn('Node "Normalize Plan" tidak ditemukan', out["error"])
+        self.assertIn("Referenced node doesn't exist", out["error"])  # n8n's own text stays visible
+        self.assertIn('"Normalize Plan1"', out["error"])  # the usual cause: a number added on import
+        for access in ("all()", "last()", "item"):
+            self.assertFalse(run_code(helper + f"\nreturn ref('Normalize Plan').{access};", [], gone)["ok"], access)
+        present = run_code(helper + "\nreturn ref('Normalize Plan').first().json.plans;", [], {"Normalize Plan": {"items": [{"plans": [1]}]}})
+        self.assertEqual(present["result"], [1])
+        built = self.build_csv(sheet_rows(LEADS))
+        self.assertTrue(built["ok"], built)
+        code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
+        missing = run_code(code, sheet_rows(LEADS), {"Normalize Plan": {"missing": True}})
+        self.assertFalse(missing["ok"])
+        self.assertIn('Node "Normalize Plan" tidak ditemukan', missing["error"])
+
+    def test_every_node_lookup_goes_through_the_helper(self):
+        for path in (ROOT / "n8n" / "code").glob("*.js"):
+            if path.name in ("_ref.js", "normalize_plan.js", "normalize_performa_plan.js"):
+                continue  # the two Normalize nodes only ask whether the webhook ran, and say so themselves
+            self.assertNotIn("$('", path.read_text(encoding="utf-8"), path.name)
+        for name in ("Report_Generate_v1.json", "Performa_Generate_v1.json", "Report_Analysis_Button_v1.json"):
+            for n in load(name)["nodes"]:
+                code = n["parameters"].get("jsCode", "")
+                if "ref('" in code:
+                    self.assertTrue(code.startswith("// Reads another node of this workflow"), (name, n["name"]))
+
     def test_a_skipped_read_tracker_is_named_as_the_cause(self):
         skipped = self.build_csv([{"trigger": "manual", "plans": [{"bu": "bu1", "period": "2026-W39"}]}])  # what a disabled node passes through
         self.assertFalse(skipped["ok"])

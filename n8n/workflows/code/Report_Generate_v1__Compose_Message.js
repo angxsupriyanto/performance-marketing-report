@@ -1,9 +1,28 @@
+// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own
+// message ("Referenced node doesn't exist") does not name it. Importing a workflow into one that already has nodes of the same name
+// makes n8n add a number to the new names (for example "Build CSV1"); rename them back.
+const ref = (name) => {
+  const guard = (action) => {
+    try {
+      return action($(name));
+    } catch (e) {
+      throw new Error(`Node "${name}" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis "${name}". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. "${name}1"): ganti kembali nama node itu.`);
+    }
+  };
+  return {
+    all: () => guard((n) => n.all()),
+    first: () => guard((n) => n.first()),
+    last: () => guard((n) => n.last()),
+    get item() { return guard((n) => n.item); },
+  };
+};
+
 // Chat summary after a report is saved. Totals are aggregates. The two lists name companies with their amounts;
 // set INCLUDE_COMPANY_NAMES to false to send totals only. Long lists are split across messages (Telegram allows
 // 4096 characters), never cut.
 const INCLUDE_COMPANY_NAMES = true;
 const MAX_CHARS = 3800;
-const prepared = $('Prepare Insert').all();
+const prepared = ref('Prepare Insert').all();
 const money = (n) => 'Rp ' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 const clean = (text) => String(text).replace(/\s+/g, ' ').trim().slice(0, 60);
 

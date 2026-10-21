@@ -12,7 +12,7 @@ const MAX_TOKENS = 6000;
 
 const provider = PROVIDERS[PROVIDER];
 if (!provider) throw new Error(`PROVIDER harus salah satu dari: ${Object.keys(PROVIDERS).join(', ')}`);
-const request = $('Validate Request').first().json;
+const request = ref('Validate Request').first().json;
 const run = $input.first().json;
 if (!run.run_id) throw new Error(`Belum ada laporan numerik untuk ${request.bu} ${request.period}; jalankan Report Generate terlebih dahulu`);
 

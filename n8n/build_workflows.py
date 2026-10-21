@@ -66,6 +66,8 @@ def optional_columns(required: list[str]) -> list[str]:
 
 def code(name: str, **replacements: str) -> str:
     source = (HERE / "code" / name).read_text(encoding="utf-8")
+    if "ref('" in source:  # the shared helper that names a missing node
+        source = (HERE / "code" / "_ref.js").read_text(encoding="utf-8") + "\n" + source
     for key, value in replacements.items():
         assert f"__{key}__" in source, (name, key)
         source = source.replace(f"__{key}__", value)

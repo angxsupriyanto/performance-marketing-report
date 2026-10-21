@@ -5,6 +5,7 @@ const spec = JSON.parse(fs.readFileSync(0, 'utf8'));
 const items = (spec.items || []).map((json) => ({ json }));
 const nodes = spec.nodes || {};
 const lookup = (name) => {
+  if (nodes[name] && nodes[name].missing) throw new Error("Referenced node doesn't exist");
   const node = nodes[name] || { items: [], executed: false };
   const list = (node.items || []).map((json) => ({ json }));
   return { all: () => list, first: () => list[0], last: () => list[list.length - 1], item: list[0], isExecuted: !!node.executed };

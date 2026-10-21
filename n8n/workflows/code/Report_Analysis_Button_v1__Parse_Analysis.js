@@ -1,3 +1,22 @@
+// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own
+// message ("Referenced node doesn't exist") does not name it. Importing a workflow into one that already has nodes of the same name
+// makes n8n add a number to the new names (for example "Build CSV1"); rename them back.
+const ref = (name) => {
+  const guard = (action) => {
+    try {
+      return action($(name));
+    } catch (e) {
+      throw new Error(`Node "${name}" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis "${name}". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. "${name}1"): ganti kembali nama node itu.`);
+    }
+  };
+  return {
+    all: () => guard((n) => n.all()),
+    first: () => guard((n) => n.first()),
+    last: () => guard((n) => n.last()),
+    get item() { return guard((n) => n.item); },
+  };
+};
+
 // Accepts only a JSON object of plain-text strings whose keys the report actually has.
 const MAX_TEXT_CHARS = 4000;
 const response = $input.first().json;
@@ -20,7 +39,7 @@ let analysis;
 try { analysis = JSON.parse(text.slice(start, end + 1)); } catch (e) { throw new Error('Jawaban model bukan JSON yang valid'); }
 if (analysis === null || typeof analysis !== 'object' || Array.isArray(analysis)) throw new Error('Jawaban model harus berupa objek JSON');
 
-const allowed = new Set($('Load Latest Run').first().json.analysis_keys);
+const allowed = new Set(ref('Load Latest Run').first().json.analysis_keys);
 const clean = {};
 for (const key of allowed) clean[key] = '';
 for (const [key, value] of Object.entries(analysis)) {

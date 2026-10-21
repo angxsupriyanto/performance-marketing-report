@@ -1,7 +1,7 @@
 // One entry per report, even when the chat summary was split into several messages.
 const seen = new Set();
 const runs = [];
-for (const item of $('Compose Message').all()) {
+for (const item of ref('Compose Message').all()) {
   const r = item.json;
   if (seen.has(r.run_id)) continue;
   seen.add(r.run_id);

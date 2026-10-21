@@ -3,7 +3,7 @@
 // 4096 characters), never cut.
 const INCLUDE_COMPANY_NAMES = true;
 const MAX_CHARS = 3800;
-const prepared = $('Prepare Insert').all();
+const prepared = ref('Prepare Insert').all();
 const money = (n) => 'Rp ' + Math.round(n).toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.');
 const clean = (text) => String(text).replace(/\s+/g, ' ').trim().slice(0, 60);
 

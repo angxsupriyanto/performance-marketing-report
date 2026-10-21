@@ -1,7 +1,7 @@
 // Runs once per failed item. Short, aggregate-only text: it reads only named fields of the error and caps the length, so no
 // request body (the CSV) can leak into it.
 let plan;
-try { plan = $('Build CSV').item.json; } catch (e) { plan = $('Build CSV').first().json; }
+try { plan = ref('Build CSV').item.json; } catch (e) { plan = ref('Build CSV').first().json; }
 const err = $json.error !== undefined ? $json.error : $json;
 const parts = [];
 const add = (value) => {
