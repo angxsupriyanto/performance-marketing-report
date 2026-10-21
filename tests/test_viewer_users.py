@@ -118,7 +118,7 @@ class RoleTests(UserCase):
     def test_the_admin_menu_has_the_admin_pages(self):
         self.login()
         soup = BeautifulSoup(self.call("GET", "/")[1], "html.parser")
-        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/users", "/targets", "/companies"])
+        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/users", "/targets", "/budget", "/companies"])
         self.assertIn("admin (Admin)", soup.select_one(".vw-menu").get_text())
 
 
