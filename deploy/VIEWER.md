@@ -45,6 +45,15 @@ Yang **tidak** dicakup: password bersama bisa bocor dari orang ke orang. Bila it
 4. **n8n.** Impor ulang `Report_Analysis_Button_v1.json` (sekarang menerima `targets` dari viewer), aktifkan workflow itu supaya URL produksi `/webhook/report-analysis` berlaku, dan pasang credential Header Auth untuk node *Ask Model* (`Authorization` = `Bearer <API key 9router>`). Model dan alamat router sudah terisi di node *Prepare Analysis Request* (`pesankopi-report`).
 5. **Cloudflare Tunnel.** Di Zero Trust, pada tunnel yang sudah melayani n8n: *Public hostname* `officehour.pesankopi.com` → *Service* `HTTP` `report-viewer:8090`. Container `cloudflared` harus berada di network Docker yang sama dengan `report-viewer`. Selesai; tidak ada port yang dibuka di server.
 
+## Setelah memperbarui generator (report lama tidak berubah)
+
+Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator). Dulu versi kode tidak ikut kunci, jadi setelah generator diperbarui, menjalankan Report Generate pada sheet yang sama tidak menambah apa pun dan HTML lama tetap tampil. Sekarang versi kode (hash isi `generate_report.py`, template, dan profil) ikut kunci. Urutan memperbarui:
+
+1. `git pull`, lalu bangun ulang `report-service` (versi kode baru terbaca di `/healthz` sebagai `generator_version`).
+2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`).
+3. Di n8n, perbarui node *Save Run* di `Report_Generate_v1` dengan isi `n8n/sql/insert_run.sql` terbaru (atau impor ulang workflow). **Kedua langkah 2 dan 3 harus dilakukan bersama:** setelah 003 diterapkan, SQL lama gagal karena tidak ada constraint yang cocok.
+4. Jalankan Report Generate lagi untuk periode yang dibutuhkan. Run baru muncul sebagai report terbaru; run lama dan analisisnya tetap tersimpan. Analisis dibuat per run, jadi tekan *Buat analisis* lagi pada report baru.
+
 ## Memeriksa
 
 1. `https://officehour.pesankopi.com/healthz` menjawab `{"status":"ok","database":true}`.

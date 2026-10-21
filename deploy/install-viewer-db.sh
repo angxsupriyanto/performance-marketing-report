@@ -1,5 +1,5 @@
 #!/bin/sh
-# Adds the targets table and the report_viewer role to an EXISTING marketing_reports database (after
+# Adds the targets table, the report_viewer role and the generator version in the run key to an EXISTING marketing_reports database (after
 # install-reports-db.sh). Safe to run again: the role keeps its password, tables are kept.
 #
 #   deploy/install-viewer-db.sh --container <postgres container> --admin-user <superuser> [--password-dir DIR]
@@ -22,7 +22,9 @@ done
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 sql_dir="$here/database"
-[ -f "$sql_dir/002_targets_and_viewer.sql" ] || { echo "missing $sql_dir/002_targets_and_viewer.sql" >&2; exit 66; }
+for f in 002_targets_and_viewer.sql 003_run_idempotency_includes_generator.sql; do
+  [ -f "$sql_dir/$f" ] || { echo "missing $sql_dir/$f" >&2; exit 66; }
+done
 
 pgenv=""; [ -n "${PGPASSWORD:-}" ] && pgenv="-e PGPASSWORD"
 # shellcheck disable=SC2086
@@ -40,6 +42,8 @@ viewer=$(tr -d '\r\n' < "$file")
 
 echo "== Creating the report_viewer role and the targets table"
 { printf "\\\\set viewer_password '%s'\n" "$viewer"; cat "$sql_dir/002_targets_and_viewer.sql"; } | psql_in -q -d marketing_reports -f -
+
+psql_in -q -d marketing_reports -f - < "$sql_dir/003_run_idempotency_includes_generator.sql"
 
 echo "== Checking"
 checks=$(psql_in -At -d marketing_reports -f - < "$sql_dir/verify_install.sql")

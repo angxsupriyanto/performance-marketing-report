@@ -5,11 +5,11 @@ WITH ins AS (
   VALUES
     ($1, $2, $3, $4::date, $5::date, $6, $7,
      $8::int, $9::int, $10::int, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)
-  ON CONFLICT (bu, period, source_sha256) DO NOTHING
+  ON CONFLICT (bu, period, source_sha256, generator_version) DO NOTHING
   RETURNING run_id
 )
 SELECT run_id, true AS inserted FROM ins
 UNION ALL
 SELECT run_id, false AS inserted
 FROM reports.report_runs
-WHERE bu = $1 AND period = $2 AND source_sha256 = $6 AND NOT EXISTS (SELECT 1 FROM ins)
+WHERE bu = $1 AND period = $2 AND source_sha256 = $6 AND generator_version = $7 AND NOT EXISTS (SELECT 1 FROM ins)

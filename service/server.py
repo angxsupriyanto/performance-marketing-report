@@ -28,7 +28,15 @@ from service.secretfile import read_secret  # noqa: E402
 
 MAX_BODY_BYTES = int(os.environ.get("REPORT_MAX_BODY_BYTES", 32 * 1024 * 1024))
 GENERATOR_TIMEOUT_SECONDS = int(os.environ.get("REPORT_GENERATOR_TIMEOUT", 180))
-GENERATOR_VERSION = os.environ.get("REPORT_GENERATOR_VERSION", "dev")
+def _code_fingerprint() -> str:
+    """Short hash of the files that decide a report's content. A report built by different code is a different run."""
+    digest = hashlib.sha256()
+    for path in [ROOT / "generate_report.py", ROOT / "apply_analysis.py", ROOT / "dashboard_template.html", *sorted((ROOT / "profiles").glob("*.json"))]:
+        digest.update(path.name.encode() + b"\0" + path.read_bytes())
+    return digest.hexdigest()[:8]
+
+
+GENERATOR_VERSION = f"{os.environ.get('REPORT_GENERATOR_VERSION', 'dev')}+{_code_fingerprint()}"
 PROFILE_NAME = re.compile(r"[a-z0-9_]{1,32}")
 PERIOD = re.compile(r"\d{4}-(?:W\d{2}|\d{2})")
 CONCURRENCY = threading.BoundedSemaphore(int(os.environ.get("REPORT_MAX_CONCURRENCY", 2)))

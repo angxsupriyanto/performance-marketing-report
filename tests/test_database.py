@@ -57,6 +57,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("postgres", "-v", "writer_password=writer-pw", "-v", "reader_password=reader-pw", "-f", str(ROOT / "database/000_create_database_and_roles.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/001_reports_schema.sql"))
         cls.psql("marketing_reports", "-v", "viewer_password=viewer-pw", "-f", str(ROOT / "database/002_targets_and_viewer.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/003_run_idempotency_includes_generator.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/003_run_idempotency_includes_generator.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -83,6 +85,19 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual((len(first), first[0][1]), (1, True))
         self.assertEqual((len(again), again[0][1], again[0][0]), (1, False, first[0][0]))
         self.assertEqual((changed[0][1], count), (True, 2))
+
+    def test_new_generator_code_adds_a_run_for_the_same_input_and_the_viewer_shows_it(self):
+        old = self.run_params(period="2026-W45", sha=SHA_A, html="<p>old generator</p>")
+        new = dict(old, p7="test+newcode", p15="<p>new generator</p>")
+        with self.writer() as conn:
+            first = conn.execute(sql("insert_run.sql"), old).fetchall()
+            same = conn.execute(sql("insert_run.sql"), old).fetchall()
+            upgraded = conn.execute(sql("insert_run.sql"), new).fetchall()
+            again = conn.execute(sql("insert_run.sql"), new).fetchall()
+            shown = conn.execute(sql("select_latest_report.sql"), {"p1": "bu2", "p2": "2026-W45"}).fetchall()
+        self.assertEqual((first[0][1], same[0][1], same[0][0]), (True, False, first[0][0]))
+        self.assertEqual((upgraded[0][1], upgraded[0][0] != first[0][0], again[0][1], again[0][0]), (True, True, False, upgraded[0][0]))
+        self.assertEqual(shown, [("<p>new generator</p>", False)])
 
     def test_constraints_reject_inconsistent_rows(self):
         with self.writer() as conn:

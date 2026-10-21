@@ -182,7 +182,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "WITH ins AS (\n  INSERT INTO reports.report_runs\n    (bu, period, period_kind, period_start, period_end, source_sha256, generator_version,\n     rows_total, rows_in_bu, rows_without_bu, metrics, audit, facts, analysis_keys, numeric_html)\n  VALUES\n    ($1, $2, $3, $4::date, $5::date, $6, $7,\n     $8::int, $9::int, $10::int, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)\n  ON CONFLICT (bu, period, source_sha256) DO NOTHING\n  RETURNING run_id\n)\nSELECT run_id, true AS inserted FROM ins\nUNION ALL\nSELECT run_id, false AS inserted\nFROM reports.report_runs\nWHERE bu = $1 AND period = $2 AND source_sha256 = $6 AND NOT EXISTS (SELECT 1 FROM ins)\n",
+        "query": "WITH ins AS (\n  INSERT INTO reports.report_runs\n    (bu, period, period_kind, period_start, period_end, source_sha256, generator_version,\n     rows_total, rows_in_bu, rows_without_bu, metrics, audit, facts, analysis_keys, numeric_html)\n  VALUES\n    ($1, $2, $3, $4::date, $5::date, $6, $7,\n     $8::int, $9::int, $10::int, $11::jsonb, $12::jsonb, $13::jsonb, $14::jsonb, $15)\n  ON CONFLICT (bu, period, source_sha256, generator_version) DO NOTHING\n  RETURNING run_id\n)\nSELECT run_id, true AS inserted FROM ins\nUNION ALL\nSELECT run_id, false AS inserted\nFROM reports.report_runs\nWHERE bu = $1 AND period = $2 AND source_sha256 = $6 AND generator_version = $7 AND NOT EXISTS (SELECT 1 FROM ins)\n",
         "options": {
           "queryReplacement": "={{ $json.params }}"
         }
