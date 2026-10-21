@@ -441,7 +441,80 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
     )
 
 
-def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None) -> str:
+def _rp(value, empty: str = "Belum diisi") -> str:
+    return empty if value is None else idr(value)
+
+
+def _left(value, empty: str = "Belum diisi") -> str:
+    if value is None:
+        return empty
+    return idr(value) if value >= 0 else f"Melebihi {idr(-value)}"
+
+
+def _pct(value) -> str:
+    return "-" if value is None else pct_text(value)
+
+
+def budget_card(label: str, value: str, compare: str) -> str:
+    return (f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="color: {MUTED}">{e(label)}</div>'
+            f'<div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div><div style="color: {MUTED}">{e(compare)}</div></div>')
+
+
+def budget_section(b: dict, label: str) -> str:
+    """The budget block at the very top of a report. `b` comes from viewer.budget.report_budget; state is belum, gagal or ok."""
+    title = f'Budget dan spend {b["month_label"]}'
+    admin_link = (f'<p style="margin: 0 0 8px"><a href="/budget?bu={e(b["bu"])}&month={e(b["month"])}" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur budget</a></p>'
+                  if b.get("admin") else "")
+    head = f'<h3 style="margin: 0 0 4px; font: 600 16px/1.4 Inter, Arial, sans-serif; color: {INK}">{e(title)}</h3>'
+    if b["state"] == "gagal":
+        return (f'<section aria-label="{e(title)}" style="margin-bottom: 24px">{head}<p role="alert" style="margin: 0; padding: 10px 12px; border-radius: 6px; background: #fcecec; color: #ac3d3d">'
+                'Budget tidak bisa dimuat. Database marketing_reports tidak menjawab. Muat ulang halaman ini.</p></section>')
+    if b["state"] == "belum":
+        hint = "Atur di halaman Budget untuk melihat pemakaian." if b.get("admin") else "Hubungi admin untuk mengatur budget."
+        return f'<section aria-label="{e(title)}" style="margin-bottom: 24px">{head}<p style="margin: 0; color: {MUTED}">Budget {e(b["month_label"])} belum diatur. {e(hint)}</p>{admin_link}</section>'
+    weekly = b["kind"] == "week"
+    prev, pl = b["prev"], b["prev_label"]
+    cards = [budget_card("Total budget", _rp(b["total"]), f"{pl}: {_rp(prev['total'], 'Belum ada data')}")]
+    if weekly:
+        cards.append(budget_card(f"Spend {label}", _rp(b["week"]), f"{b['prev_week_label']}: {_rp(b['prev_week'], 'Belum diisi')}"))
+    cards += [budget_card(f"Spend {b['month_label']}", _rp(b["spent"]), f"{pl}: {_rp(prev['spent'], 'Belum ada data')}"),
+              budget_card("Sisa budget", _left(b["left"]), f"{pl}: {_left(prev['left'], 'Belum ada data')}")]
+    used = b["used"]
+    bar = (
+        f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px; margin-bottom: 16px"><div style="display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 16px; margin-bottom: 8px">'
+        f'<span style="color: {MUTED}">Pemakaian budget</span><span style="font: 600 18px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(_pct(used))}</span></div>'
+        f'<div role="progressbar" aria-label="Pemakaian budget {e(b["month_label"])}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{0 if used is None else min(100, round(used))}" '
+        f'aria-valuetext="{e(_pct(used))} dari total budget terpakai" style="height: 12px; border-radius: 6px; background: {LINE}; overflow: hidden">'
+        f'<div style="width: {width(used)}; height: 100%; background: {BLUE if used is None or used <= 100 else "#ac3d3d"}"></div></div>'
+        f'<div style="color: {MUTED}; margin-top: 8px">{e(pl)}: {e(_pct(prev["used"]) if prev["used"] is not None else "Belum ada data")}</div></div>'
+    )
+    heads = [th("Campaign"), th("Budget", True)] + ([th(f"Spend {label}", True)] if weekly else []) + [th(f"Spend {b['month_label']}", True), th("Sisa", True), th("Pemakaian", True)]
+
+    def line(name, budget, week, spent, left, pct, bold=False):
+        cells = [td("Campaign", name), td("Budget", _rp(budget, "-"), True)] + ([td(f"Spend {label}", _rp(week, "-"), True)] if weekly else []) + \
+                [td(f"Spend {b['month_label']}", _rp(spent, "-"), True), td("Sisa", _left(left, "-"), True), td("Pemakaian", _pct(pct), True)]
+        return f"<tr>{''.join(cells)}</tr>"
+
+    body = "".join(line(r["name"], r["budget"], r["week"], r["spent"], r["left"], r["used"]) for r in b["rows"])
+    span = len(heads)
+    rest = b.get("rest")
+    if rest:
+        body += (f'<tr>{td("Campaign", f"{dotted(rest["count"])} campaign lainnya")}{td("Budget", _rp(rest["budget"], "-"), True)}'
+                 + (f'{td(f"Spend {label}", _rp(rest["week"], "-"), True)}' if weekly else "")
+                 + f'{td(f"Spend {b["month_label"]}", _rp(rest["spent"], "-"), True)}<td data-label="Sisa" class="num">-</td><td data-label="Pemakaian" class="num">-</td></tr>')
+    if b.get("unallocated"):
+        body += f'<tr>{td("Campaign", "Belum dialokasikan ke campaign")}{td("Budget", idr(b["unallocated"]), True)}<td colspan="{span - 2}" data-label="" style="color: {MUTED}"></td></tr>'
+    if not body:
+        body = f'<tr><td colspan="{span}" data-label="" style="color: {MUTED}">Belum ada campaign dengan budget atau spend di {e(b["month_label"])}.</td></tr>'
+    foot = line("TOTAL", b["total"], b.get("week"), b["spent"], b["left"], b["used"])
+    table = box_table(f"Budget dan spend per campaign {b['month_label']}", heads, body, foot)
+    note = (f'<p style="margin: 0 0 12px; color: {MUTED}; font-size: 12.5px">{e(b["month_label"])} bulan berjalan, belum penuh. Pembanding {e(pl)} adalah bulan penuh.</p>' if weekly else "")
+    as_of = (f'<p style="margin: 0 0 12px; color: {MUTED}; font-size: 12.5px">Spend bulanan diisi sampai {e(b["as_of"].strftime("%d-%m-%Y"))}.</p>' if b.get("as_of") else "")
+    return (f'<section aria-label="{e(title)}" style="margin-bottom: 24px">{head}{note}{as_of}{admin_link}'
+            f'<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px">{"".join(cards)}</div>{bar}{table}</section>')
+
+
+def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None) -> str:
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
@@ -458,6 +531,7 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
     sections = [
         f'<div style="margin-bottom: 20px"><div style="font: 600 18px/1.3 Inter, Arial, sans-serif; color: {INK}">Performance Marketing Report</div>'
         f'<div style="color: {MUTED}">{e(view["label"])} ({e(view["range"])}) vs {e(pl)} ({e(view["prev_range"])})</div></div>',
+        *([budget_section(budget, view["label"])] if budget is not None else []),
         f'<div class="cards">{cards}</div>',
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
         analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
@@ -474,14 +548,14 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
     )
 
 
-def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None) -> str:
+def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None) -> str:
     data = json.dumps(view, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     title = f"{company_name(view['bu'], names)} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
     main_style = ' style="padding-top: 24px"' if standalone else ""
     return (
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
-        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names)}</main>'
+        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
 

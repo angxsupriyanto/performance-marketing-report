@@ -63,5 +63,10 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'INSERT')
                       AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'DELETE')
                                OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_edits'), 'TRUNCATE')), false)
+  UNION ALL SELECT 20, 'budget_snapshots exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.budget_snapshots') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

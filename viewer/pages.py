@@ -1,6 +1,7 @@
 """HTML for the viewer's own pages: login, report list, target settings, and the bar placed above a report."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from html import escape
 
@@ -94,7 +95,8 @@ def menu(csrf: str, user: dict | None, current: str = "") -> str:
 
     links = ""
     if user is not None and user["role"] == "admin":
-        links = link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("companies", "/companies", "Nama perusahaan")
+        links = (link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("budget", "/budget", "Budget")
+                 + link("companies", "/companies", "Nama perusahaan"))
     return (
         f'<nav class="vw-menu" aria-label="Menu">{f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>' if user is not None else ""}{links}'
         f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></nav>'
@@ -487,3 +489,154 @@ def companies_page(ids: list[str], names: dict, defaults: dict, errors: dict, cs
         + '<button class="vw-btn" type="submit">Simpan nama perusahaan</button></form></main>'
     )
     return page("Nama perusahaan", body, nonce, csrf, menu(csrf, me, "companies"))
+
+
+def _digits(value) -> str:
+    return "" if value in (None, "") else f"{int(value):,}".replace(",", ".")
+
+
+def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str, str]], rows: list[dict], weeks: list[tuple], total_text: str, as_of_text: str,
+                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "") -> str:
+    """rows: one dict per campaign {name, budget, month, weeks{key: text}} holding the texts to show in the inputs."""
+    from viewer.budget import month_label
+
+    label = names.get(bu, bu)
+    company_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
+    month_choices = "".join(f'<option value="{k}"{" selected" if k == month else ""}>{escape(t)}</option>' for k, t in month_options)
+
+    def invalid(key: str) -> str:
+        return ' aria-invalid="true"' if key in errors else ""
+
+    def money_input(field: str, text: str, aria: str, extra: str = "") -> str:
+        return (f'<input id="{escape(field)}" name="{escape(field)}" type="text" inputmode="numeric" placeholder="Rp" aria-label="{escape(aria)}" '
+                f'value="{escape(text)}" style="width:100%;height:44px;padding:0 12px;border:1px solid {"#ac3d3d" if field in errors else "#6f8199"};border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif"{invalid(field)}{extra}>')
+
+    def week_head(key, monday, sunday):
+        span = f"{monday.day} {MONTHS[monday.month - 1]}\u2013{sunday.day} {MONTHS[sunday.month - 1]}" if monday.month != sunday.month else f"{monday.day}\u2013{sunday.day} {MONTHS[sunday.month - 1]}"
+        return f'<th scope="col" class="num">{key.split("-")[1]}<br><span style="font-weight:400">{span}</span></th>'
+
+    def name_cell(r, i, hidden=True):
+        keep = f'<input type="hidden" name="n_{i}" value="{escape(r["name"])}">' if hidden else ""
+        return f'<td data-label="Campaign" data-name>{escape(r["name"])}{keep}</td>'
+
+    budget_rows = "".join(
+        f'<tr data-row>{name_cell(r, i)}<td data-label="Budget {escape(r["name"])}" class="num cell">{money_input(f"b_{i}", r["budget"], f"Budget {r["name"]}")}</td></tr>' for i, r in enumerate(rows)
+    ) or ""
+    week_rows = "".join(
+        f'<tr data-row>{name_cell(r, i, False)}' + "".join(
+            f'<td data-label="Spend {key.split("-")[1]} {escape(r["name"])}" class="num cell">{money_input(f"w_{i}_{key}", r["weeks"].get(key, ""), f"Spend {key.split(chr(45))[1]} {r["name"]}", " disabled" if monday > today else "")}</td>'
+            for key, monday, _ in weeks) + "</tr>" for i, r in enumerate(rows)
+    )
+    month_rows = "".join(
+        f'<tr data-row>{name_cell(r, i, False)}<td data-label="Spend {escape(month_label(month))} {escape(r["name"])}" class="num cell">{money_input(f"m_{i}", r["month"], f"Spend {month_label(month)} {r["name"]}")}</td></tr>' for i, r in enumerate(rows)
+    )
+
+    def template(body: str) -> str:
+        return body.replace("__I__", "{I}")
+
+    # templates for a campaign added in the browser; the name is set from JS with textContent, never as markup
+    t_budget = f'<tr data-row><td data-label="Campaign" data-name><input type="hidden" name="n___I__"></td><td data-label="Budget" class="num cell">{money_input("b___I__", "", "Budget campaign baru")}</td></tr>'
+    t_weeks = '<tr data-row><td data-label="Campaign" data-name></td>' + "".join(
+        f'<td data-label="Spend {key.split("-")[1]}" class="num cell">{money_input(f"w___I___{key}", "", f"Spend {key.split(chr(45))[1]} campaign baru", " disabled" if monday > today else "")}</td>' for key, monday, _ in weeks) + "</tr>"
+    t_month = f'<tr data-row><td data-label="Campaign" data-name></td><td data-label="Spend" class="num cell">{money_input("m___I__", "", "Spend bulanan campaign baru")}</td></tr>'
+
+    empty_note = '<tr data-empty><td colspan="9" data-label="" style="color:#607188">Belum ada campaign. Campaign muncul otomatis setelah report dibuat dari data yang memuat nama campaign, atau tambahkan sendiri di bawah.</td></tr>' if not rows else ""
+    table_css = ".bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
+    week_ths = "".join(week_head(*w) for w in weeks)
+    sections = (
+        f'<style nonce="{nonce}">{table_css}</style>'
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Budget</span></nav>'
+        '<h1 class="vw-h1">Budget</h1>'
+        '<p class="vw-lead" style="max-width:680px">Budget total dan budget per campaign untuk satu bulan, serta spend per campaign. Spend mingguan dan spend bulanan diisi terpisah dan tidak dijumlahkan satu sama lain. Daftar campaign diambil dari kolom Campaign di Campaign Tracker.</p>'
+        f'<form method="post" action="/budget" id="budget-form" class="vw-box" style="padding:24px;margin-bottom:32px"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="base" value="{escape(base_id)}">'
+        '<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px">'
+        f'<div class="vw-field" style="flex:0 1 200px"><label for="bu">Perusahaan</label><select id="bu" name="bu" data-reload>{company_options}</select></div>'
+        f'<div class="vw-field" style="flex:0 1 220px"><label for="month">Bulan</label><select id="month" name="month" data-reload>{month_choices}</select></div>'
+        f'<div class="vw-field" style="flex:0 1 240px"><label for="total">Total budget (Rp)</label><input id="total" name="total" type="text" inputmode="numeric" placeholder="Angka dalam Rupiah" value="{escape(total_text)}"{invalid("total")}></div></div>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin-bottom:12px"><div><h2 class="vw-h2">Budget per campaign</h2>'
+        '<p style="margin:0;color:#607188">Budget bulan yang dipilih. Campaign baru muncul otomatis setelah ada lead dengan campaign itu.</p></div>'
+        '<div class="vw-field" style="flex:0 1 260px"><label for="cari">Cari campaign</label><input id="cari" type="text" placeholder="Ketik nama campaign" autocomplete="off"></div></div>'
+        f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-budget"><caption class="vw-sr">Budget per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Budget (Rp)</th></tr></thead>'
+        f'<tbody>{budget_rows}{empty_note.replace("colspan=\"9\"", "colspan=\"2\"")}</tbody><tfoot><tr><td data-label="Campaign">Jumlah per campaign</td><td data-label="Budget (Rp)" class="num" data-sum="b">Rp 0</td></tr></tfoot></table></div>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 16px;margin-top:16px"><div class="vw-field" style="flex:1 1 280px;max-width:420px"><label for="baru">Tambah campaign yang belum punya lead</label>'
+        '<input id="baru" type="text" maxlength="100" placeholder="Nama campaign persis seperti di Tracker" autocomplete="off"></div>'
+        '<button type="button" id="tambah" class="vw-btn alt">Tambah campaign</button></div><p id="tambah-msg" role="alert" class="vw-alert" hidden style="margin:12px 0 0"></p>'
+        '<h2 class="vw-h2" style="margin-top:32px">Spend per minggu</h2>'
+        '<p style="margin:0 0 12px;color:#607188">Isi spend tiap minggu penuh, Senin sampai Minggu, termasuk minggu yang melewati pergantian bulan: W44 adalah 26 Okt sampai 1 Nov dan W45 lanjut dari 2 Nov. Angka ini dipakai kolom Spend Week di report. Minggu yang belum berjalan belum bisa diisi.</p>'
+        f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-weeks" style="min-width:860px"><caption class="vw-sr">Spend per campaign per minggu</caption><thead><tr><th scope="col">Campaign</th>{week_ths}</tr></thead>'
+        f'<tbody>{week_rows}{empty_note.replace("colspan=\"9\"", f"colspan=\"{len(weeks) + 1}\"")}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td>'
+        + "".join(f'<td data-label="{key.split("-")[1]}" class="num" data-sum="w_{key}">Rp 0</td>' for key, _, _ in weeks) + '</tr></tfoot></table></div>'
+        '<h2 class="vw-h2" style="margin-top:32px">Spend bulanan</h2>'
+        '<p style="margin:0 0 12px;color:#607188">Isi total spend bulan berjalan (kumulatif) per campaign, sesuai angka di platform iklan. Ini tidak dihitung dari spend mingguan, jadi bisa berbeda. Report menampilkan angka bulanan terakhir yang diisi sampai tanggal report itu.</p>'
+        f'<div class="vw-field" style="flex:0 1 240px;max-width:240px;margin-bottom:12px"><label for="as_of">Spend bulan diisi sampai tanggal</label><input id="as_of" name="as_of" type="date" value="{escape(as_of_text)}"{invalid("as_of")}></div>'
+        f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-month"><caption class="vw-sr">Spend bulanan per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Spend {escape(month_label(month))} (Rp)</th></tr></thead>'
+        f'<tbody>{month_rows}{empty_note.replace("colspan=\"9\"", "colspan=\"2\"")}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td><td data-label="Spend" class="num" data-sum="m">Rp 0</td></tr></tfoot></table></div>'
+    )
+    messages = "".join(f'<p role="alert" class="vw-alert" style="margin:20px 0 0">{escape(m)}</p>' for k, m in errors.items())
+    flash = f'<p role="status" class="vw-ok">{escape(notice)}</p>' if notice else ""
+    fail = f'<p role="alert" class="vw-alert" style="margin:20px 0 0">{escape(failed)}</p>' if failed else ""
+    if history:
+        hrows = "".join(
+            f'<tr><td data-label="Bulan">{escape(month_label(h["month"]))}</td><td data-label="Total budget" class="num">{("Rp " + _digits(h["total_budget"])) if h["total_budget"] is not None else "-"}</td>'
+            f'<td data-label="Total spend" class="num">{_history_spend(h)}</td><td data-label="Spend bulan sampai">{escape(h["spend_as_of"].strftime("%d-%m-%Y")) if h["spend_as_of"] else "-"}</td>'
+            f'<td data-label="Dicatat pada">{escape(dt_text(h["saved_at"]))} oleh {escape(h["saved_by"])}</td></tr>' for h in history
+        )
+        hist = (f'<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Riwayat budget {escape(label)}</caption><thead><tr><th scope="col">Bulan</th><th scope="col" class="num">Total budget</th><th scope="col" class="num">Total spend</th>'
+                f'<th scope="col">Spend bulan sampai</th><th scope="col">Dicatat pada</th></tr></thead><tbody>{hrows}</tbody></table></div>')
+    else:
+        hist = (f'<div class="vw-box" style="padding:24px"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Belum ada budget tersimpan untuk {escape(label)}</div>'
+                '<div>Sampai budget disimpan, report menampilkan "Budget belum diatur".</div></div>')
+    tail = (
+        f'{messages}{flash}{fail}<div style="margin-top:20px"><button class="vw-btn" type="submit">Simpan budget dan spend</button></div></form>'
+        f'<section aria-label="Riwayat budget"><h2 class="vw-h2">Riwayat budget {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
+        + "".join(f'<template id="tpl-{name}">{html}</template>' for name, html in (("budget", t_budget), ("weeks", t_weeks), ("month", t_month)))
+    )
+    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
+    return page("Budget", sections + tail, nonce, csrf, menu(csrf, me, "budget"), script)
+
+
+def _history_spend(h: dict) -> str:
+    values = [c.get("month_spend") for c in (h["data"].get("campaigns") or {}).values() if c.get("month_spend") is not None]
+    return "Rp " + _digits(sum(values)) if values else "-"
+
+
+BUDGET_JS = r"""
+(function(){
+  var form=document.getElementById('budget-form'),weeks=__WEEKS__;
+  form.querySelectorAll('select[data-reload]').forEach(function(s){s.addEventListener('change',function(){
+    var u=new URL(location.href);u.searchParams.set('bu',document.getElementById('bu').value);u.searchParams.set('month',document.getElementById('month').value);location.href=u.toString();});});
+  function num(el){var d=(el.value||'').replace(/[^0-9]/g,'');return d?parseInt(d,10):0;}
+  function fmt(n){return 'Rp '+String(n).replace(/\B(?=(\d{3})+(?!\d))/g,'.');}
+  function sums(){
+    var all=form.querySelectorAll('[data-sum]');
+    all.forEach(function(cell){
+      var key=cell.dataset.sum,sel=key==='b'?'#t-budget input[name^=b_]':key==='m'?'#t-month input[name^=m_]':'#t-weeks input[name$="'+key.slice(2)+'"]';
+      var t=0;form.querySelectorAll(sel).forEach(function(i){t+=num(i);});cell.textContent=fmt(t);
+    });
+  }
+  form.addEventListener('input',function(e){if(e.target.matches('.cell input'))sums();});
+  var q=document.getElementById('cari');
+  q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();
+    form.querySelectorAll('tr[data-row]').forEach(function(r){r.hidden=v&&r.querySelector('[data-name]').textContent.toLowerCase().indexOf(v)<0;});});
+  var next=form.querySelectorAll('#t-budget tr[data-row]').length,msg=document.getElementById('tambah-msg');
+  function add(){
+    var box=document.getElementById('baru'),name=box.value.replace(/\s+/g,' ').trim();msg.hidden=true;
+    if(!name){msg.textContent='Isi nama campaign dulu.';msg.hidden=false;return;}
+    var dup=false;form.querySelectorAll('#t-budget [data-name]').forEach(function(c){if(c.textContent.trim().toLowerCase()===name.toLowerCase())dup=true;});
+    if(dup){msg.textContent='Campaign '+name+' sudah ada di daftar.';msg.hidden=false;return;}
+    var i=next++;
+    [['budget','#t-budget'],['weeks','#t-weeks'],['month','#t-month']].forEach(function(p){
+      var html=document.getElementById('tpl-'+p[0]).innerHTML.split('__I__').join(String(i));
+      var tb=form.querySelector(p[1]+' tbody'),empty=tb.querySelector('[data-empty]');if(empty)empty.remove();
+      tb.insertAdjacentHTML('beforeend',html);
+      var row=tb.lastElementChild,cell=row.querySelector('[data-name]');cell.insertBefore(document.createTextNode(name),cell.firstChild);
+      var hidden=row.querySelector('input[type=hidden]');if(hidden)hidden.value=name;
+      row.querySelectorAll('.cell input').forEach(function(inp){inp.setAttribute('aria-label',inp.getAttribute('aria-label').replace('campaign baru',name));});
+    });
+    box.value='';sums();
+  }
+  document.getElementById('tambah').addEventListener('click',add);
+  document.getElementById('baru').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();add();}});
+  sums();
+})();
+"""

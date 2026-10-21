@@ -30,7 +30,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 
 1. **Database.** Setelah `marketing_reports` terpasang:
    `deploy/install-viewer-db.sh --container <postgres> --admin-user <superuser>`
-   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 19 baris harus PASS.
+   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 20 baris harus PASS.
 2. **Rahasia lain** (di folder tempat compose dijalankan, jangan di-commit):
    - `viewer_session_secret` dan `n8n_webhook_token` (acak, 64 karakter heks). Linux, macOS, WSL: `openssl rand -hex 32 > viewer_session_secret`. **PowerShell (Windows):**
      ```powershell
@@ -59,6 +59,16 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 - Pada tabel Campaign Hardware, hanya kolom MQL, SQL, dan SQL Value yang berubah. Submission, Target, dan Progress tetap, begitu pula kartu target, bagian Progress target, dan blok Funnel per hardware.
 - Saklar bekerja di browser dari data yang sudah ada di halaman, tanpa permintaan ke server. Report yang disimpan sebelum fitur ini tampil tanpa saklar sampai Report Generate dijalankan lagi.
 
+## Budget dan spend
+
+- Menu **Budget** (admin): pilih perusahaan dan bulan, isi **total budget**, **budget per campaign**, **spend per minggu**, dan **spend bulanan**, lalu *Simpan budget dan spend*. Section **Budget dan spend {bulan}** tampil paling atas di setiap report (kartu Total budget, Spend Week n, Spend bulan, Sisa budget, bar Pemakaian budget, dan tabel per campaign, dengan pembanding bulan lalu atau minggu lalu).
+- **Spend mingguan dan bulanan diisi terpisah dan tidak dijumlahkan.** Minggu ISO bisa melewati pergantian bulan (W44 = 26 Okt sampai 1 Nov, W45 lanjut dari 2 Nov), jadi satu bulan bukan 4 atau 5 minggu penuh. Sebuah minggu diisi di halaman bulan yang memuat hari Kamisnya. Minggu yang belum berjalan tidak bisa diisi.
+- **Spend bulan di report** = angka bulanan terakhir yang diisi dengan tanggal "sampai" tidak lebih baru dari hari terakhir report itu. Report Week 42 (sampai 18 Okt) tidak memakai angka yang diisi sampai 25 Okt. Bila belum ada, tampil "Belum diisi", bukan nol.
+- Daftar campaign berasal dari kolom Campaign di sheet (disimpan di report terbaru), ditambah campaign yang Anda tambahkan sendiri. Nama harus persis sama dengan di Tracker; ejaan berbeda dianggap campaign lain.
+- Total budget wajib diisi bila ada budget per campaign, dan jumlah budget per campaign tidak boleh melebihi total. Selisihnya tampil sebagai baris "Belum dialokasikan ke campaign". Budget 0 sama dengan kosong.
+- Setiap simpan menambah satu versi lengkap di `reports.budget_snapshots` (tidak ada UPDATE atau DELETE) dan muncul di Riwayat budget. Bila dua admin menyimpan bulan yang sama bergantian, yang membuka halaman lebih dulu ditolak dengan pesan untuk memuat ulang, supaya tidak menimpa tanpa sadar.
+- Report lama ikut memakai budget terbaru, seperti target: budget tidak disimpan di report.
+
 ## Edit analisis manual
 
 - Setiap panel analisis (Executive Summary, ringkasan hardware, dan satu per produk) punya chip status: **AI · nama model** atau **Edited**, plus baris asal teks ("Dibuat oleh model ... · waktu", "Diedit oleh admin · waktu · model awal: ...", atau "Ditulis manual oleh ... · belum ada analisis AI"). Semua orang dengan akses ke report melihatnya; hanya admin yang melihat tombol Edit, Tulis manual, dan Kembalikan ke versi AI.
@@ -72,7 +82,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator). Dulu versi kode tidak ikut kunci, jadi setelah generator diperbarui, menjalankan Report Generate pada sheet yang sama tidak menambah apa pun dan HTML lama tetap tampil. Sekarang versi kode (hash isi `generate_report.py`, template, dan profil) ikut kunci. Urutan memperbarui:
 
 1. `git pull`, lalu bangun ulang `report-service` (versi kode baru terbaca di `/healthz` sebagai `generator_version`).
-2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, dan `005_analysis_edits.sql`).
+2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, dan `006_budget.sql`).
 3. Di n8n, perbarui node *Save Run* di `Report_Generate_v1` dengan isi `n8n/sql/insert_run.sql` terbaru (atau impor ulang workflow). **Kedua langkah 2 dan 3 harus dilakukan bersama:** setelah 003 diterapkan, SQL lama gagal karena tidak ada constraint yang cocok.
 4. Jalankan Report Generate lagi untuk periode yang dibutuhkan. Run baru muncul sebagai report terbaru; run lama dan analisisnya tetap tersimpan. Analisis dibuat per run, jadi tekan *Buat analisis* lagi pada report baru.
 

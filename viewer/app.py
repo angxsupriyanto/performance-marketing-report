@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, analysis_edits, auth, pages, targets  # noqa: E402
+from viewer import access, analysis_edits, auth, budget, pages, targets  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -321,6 +321,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_companies(form, csrf, nonce)
                     return
+                if path == "/budget":
+                    self.need_admin()
+                    status = self.save_budget(form, csrf, nonce)
+                    return
             elif path == "/":
                 status = self.list_page(csrf, nonce)
                 return
@@ -341,6 +345,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/companies":
                 self.need_admin()
                 status = self.companies_page(query, csrf, nonce)
+                return
+            elif path == "/budget":
+                self.need_admin()
+                status = self.budget_page(query, csrf, nonce)
                 return
             raise HttpError(404, "halaman tidak ditemukan")
         except HttpError as exc:
@@ -461,7 +469,7 @@ class Handler(BaseHTTPRequestHandler):
             rows = self.cfg.store.latest_targets(bu)
         except Exception:  # noqa: BLE001
             rows = None
-        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names())
+        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view))
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
 
@@ -593,6 +601,93 @@ class Handler(BaseHTTPRequestHandler):
                 return self.render_targets(bu, ctx, csrf, nonce, failed="Target tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", errors=errors, status=503)
         saved = kind if entries else "same"
         self.redirect(f"/targets?bu={bu}&year={ctx['year']}&month={ctx['month']}&saved={saved}")
+        return 303
+
+    # ---- budget
+    def report_budget(self, report: dict, view: dict) -> dict:
+        kind, start, bu = report["period_kind"], report["period_start"], report["bu"]
+        month = budget.month_of_period(kind, start)
+        try:
+            snaps = self.cfg.store.budget_snapshots(bu, budget.months_needed(kind, start))
+            result = budget.report_budget(kind, start, report["period_end"], report["period"], snaps)
+        except Exception:  # noqa: BLE001 - a budget problem must not hide the report
+            result = {"state": "gagal", "month_label": budget.month_label(month), "kind": kind}
+        result.update(bu=bu, month=month, admin=access.is_admin(self.user), prev_week_label=view.get("prev_label", ""))
+        return result
+
+    def budget_months(self) -> list[tuple[str, str]]:
+        current = budget.month_of_date(self.now().date())
+        return [(m, budget.month_label(m)) for m in (budget.shift_month(current, d) for d in range(-2, 4))]
+
+    def budget_page(self, query: dict, csrf: str, nonce: str, posted: dict | None = None, errors: dict | None = None, failed: str = "", status: int = 200) -> int:
+        names = access.names_with_defaults(self.safe_names())
+        bu = posted.get("bu") if posted else query.get("bu", "")
+        bu = bu if bu in names else next(iter(names))
+        options = self.budget_months()
+        wanted = posted.get("month") if posted else query.get("month", "")
+        month = wanted if wanted in dict(options) else budget.month_of_date(self.now().date())
+        store = self.cfg.store
+        try:
+            snaps = store.budget_snapshots(bu, [month])[month]
+            history = store.budget_history(bu)
+            html_text = store.latest_view_html(bu)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Budget tidak bisa dimuat. Database marketing_reports tidak menjawab; muat ulang halaman ini.")
+        current = budget.newest(snaps)
+        weeks = budget.weeks_of_month(month)
+        today = self.now().date()
+        digits = lambda v: "" if v in (None, "") else f"{int(v):,}".replace(",", ".")
+        rows: list[dict] = []
+        if posted is not None:
+            index = 0
+            while f"n_{index}" in posted:
+                rows.append({"name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
+                             "weeks": {k: posted.get(f"w_{index}_{k}", "") for k, _, _ in weeks}})
+                index += 1
+            total_text, as_of_text = posted.get("total", ""), posted.get("as_of", "")
+        else:
+            saved = budget.campaigns_of(current)
+            tracker = (report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else []
+            merged = {n.casefold(): n for n in tracker}
+            merged.update({n.casefold(): n for n in saved})
+            for key in sorted(merged):
+                name = merged[key]
+                c = saved.get(name, {})
+                rows.append({"name": name, "budget": digits(c.get("budget")), "month": digits(c.get("month_spend")),
+                             "weeks": {k: digits((c.get("weeks") or {}).get(k)) for k, _, _ in weeks}})
+            total_text = digits(current["total_budget"]) if current else ""
+            as_of_text = current["spend_as_of"].isoformat() if current and current["spend_as_of"] else ""
+        base_id = str(current["snapshot_id"]) if current else ""
+        notice = ""
+        if query.get("saved"):
+            notice = f"Budget dan spend {names[bu]} {budget.month_label(month)} tersimpan."
+        self.send(status, pages.budget_page(bu, names, month, options, rows, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed), nonce=nonce)
+        return status
+
+    def safe_names(self) -> dict[str, str]:
+        try:
+            return self.cfg.store.company_names()
+        except Exception:  # noqa: BLE001
+            return {}
+
+    def save_budget(self, form: dict, csrf: str, nonce: str) -> int:
+        names = access.names_with_defaults(self.safe_names())
+        bu, month = form.get("bu", ""), form.get("month", "")
+        if bu not in names or month not in dict(self.budget_months()):
+            raise HttpError(400, "perusahaan atau bulan tidak valid")
+        today = self.now().date()
+        try:
+            parsed = budget.parse_form(form, month, today)
+        except budget.FormError as exc:
+            return self.budget_page({}, csrf, nonce, posted=form, errors=exc.errors, failed="Periksa isian yang ditandai. Belum ada yang disimpan.", status=422)
+        data = {"campaigns": parsed["campaigns"]}
+        try:
+            saved = self.cfg.store.add_budget_snapshot(bu, month, form.get("base", ""), parsed["total"], parsed["as_of"], data, self.user["username"])
+        except Exception:  # noqa: BLE001
+            return self.budget_page({}, csrf, nonce, posted=form, failed="Budget tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", status=503)
+        if not saved:
+            raise HttpError(409, "Budget bulan ini sudah diubah orang lain sejak halaman dibuka. Muat ulang halaman Budget, lalu isi lagi.")
+        self.redirect(f"/budget?bu={bu}&month={month}&saved=1")
         return 303
 
     # ---- users and company names (admin)

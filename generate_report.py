@@ -525,6 +525,8 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
             won_rows.append({"company": r.get("Company") or "Unknown", "industry": r.get("Industry") or "—", "campaign": campaign(r), "value": whole(stage_value(r, "Deal Won")), "timing": f"{(event - inbound).days} hari" if inbound else "—",
                              "same": bool(inbound and inbound_in_period(r, period))})
         view["won_list"] = {"rows": won_rows, "count": len(rows), "value": whole(now["Deal Won Value"]), "column": WON_VALUE.replace("SUM of ", "")}
+    # Every campaign this company has ever had a lead for: the Budget page offers these names. Not part of facts (the model never sees it).
+    view["campaign_names"] = sorted({campaign(r) for rows in data.values() for r in rows if r.get("Campaign", "").strip()}, key=str.casefold)[:500]
     view["analysis_keys"] = report_view.analysis_keys(view)
     return view, metrics, same, facts, lists
 

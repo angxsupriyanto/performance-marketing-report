@@ -63,6 +63,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/004_users_and_company_names.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/005_analysis_edits.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/005_analysis_edits.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/006_budget.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/006_budget.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -326,6 +328,32 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM reports.analysis_edits").fetchone()[0], 3)  # writer reads them
             with self.assertRaises(pe.InsufficientPrivilege):
                 conn.execute("INSERT INTO reports.analysis_edits (run_id, panel_key, body, edited_by) VALUES (%s, 'a', 'b', 'c')", (run_id,))
+
+    def test_budget_snapshots_are_append_only_checked_and_guarded_against_stale_saves(self):
+        import psycopg.errors as pe
+        from datetime import date
+        store = self.viewer_store()
+        data = {"campaigns": {"Alpha": {"budget": 6000000, "month_spend": 3000000, "weeks": {"2026-W42": 1000000}}}}
+        self.assertTrue(store.add_budget_snapshot("bu1", "2026-10", "", 10000000, date(2026, 10, 18), data, "admin"))
+        first = store.budget_snapshots("bu1", ["2026-10"])["2026-10"]
+        self.assertEqual((len(first), first[0]["total_budget"], first[0]["spend_as_of"], first[0]["data"]["campaigns"]["Alpha"]["weeks"]["2026-W42"]), (1, 10000000, date(2026, 10, 18), 1000000))
+        self.assertFalse(store.add_budget_snapshot("bu1", "2026-10", "", 1, None, data, "admin"))  # a form opened before the first save is stale
+        self.assertTrue(store.add_budget_snapshot("bu1", "2026-10", str(first[0]["snapshot_id"]), 12000000, date(2026, 10, 20), data, "admin"))
+        history = store.budget_history("bu1")
+        self.assertEqual([h["total_budget"] for h in history], [12000000, 10000000])  # newest first, both kept
+        self.assertEqual(store.budget_snapshots("bu2", ["2026-10"])["2026-10"], [])
+        self.assertEqual(store.latest_view_html("bu1"), None)
+        with self.viewer() as conn:
+            for statement in ("UPDATE reports.budget_snapshots SET total_budget = 1", "DELETE FROM reports.budget_snapshots", "TRUNCATE reports.budget_snapshots"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in (("bu1", "2026-13", None, None, data), ("BU 1", "2026-10", None, None, data), ("bu1", "2026-10", -5, None, data), ("bu1", "2026-10", None, None, {"nope": {}})):
+            with self.assertRaises(pe.CheckViolation):
+                store.add_budget_snapshot(bad[0], bad[1], str(history[0]["snapshot_id"]) if bad[:2] == ("bu1", "2026-10") else "", bad[2], bad[3], bad[4], "admin")
+        with self.writer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.budget_snapshots").fetchone()[0], 2)
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.budget_snapshots (bu, month, data, saved_by) VALUES ('bu1', '2026-10', '{\"campaigns\": {}}', 'x')")
 
 
 if __name__ == "__main__":

@@ -6,6 +6,7 @@ import os
 from decimal import Decimal
 
 import psycopg
+import psycopg.types.json
 from psycopg.rows import dict_row
 
 
@@ -83,6 +84,48 @@ class Store:
                         "INSERT INTO reports.target_entries (bu, scope, product, period_key, unit, amount) VALUES (%s, %s, %s, %s, %s, %s)",
                         (bu, scope, product, period_key, unit, amount),
                     )
+
+    # ---- budget and spend
+    def budget_snapshots(self, bu: str, months: list[str], per_month: int = 200) -> dict[str, list[dict]]:
+        """Saved versions per month, newest first. Capped per month so a long history cannot slow a report page down."""
+        out: dict[str, list[dict]] = {m: [] for m in months}
+        with self._connect() as conn:
+            for month in months:
+                out[month] = conn.execute(
+                    """SELECT snapshot_id, month, total_budget, spend_as_of, data, saved_by, saved_at FROM reports.budget_snapshots
+                       WHERE bu = %s AND month = %s ORDER BY saved_at DESC LIMIT %s""",
+                    (bu, month, per_month),
+                ).fetchall()
+        return out
+
+    def budget_history(self, bu: str, limit: int = 30) -> list[dict]:
+        with self._connect() as conn:
+            return conn.execute(
+                """SELECT snapshot_id, month, total_budget, spend_as_of, data, saved_by, saved_at FROM reports.budget_snapshots
+                   WHERE bu = %s ORDER BY saved_at DESC LIMIT %s""",
+                (bu, limit),
+            ).fetchall()
+
+    def add_budget_snapshot(self, bu: str, month: str, base_id: str, total, spend_as_of, data: dict, saved_by: str) -> bool:
+        """Adds one version. Returns False, saving nothing, when someone else saved this month after the form was opened (base_id is
+        the version the form was built from, "" for none). The advisory lock makes check and insert one step, so two saves cannot interleave."""
+        with psycopg.connect(self.conninfo, row_factory=dict_row) as conn:
+            with conn.transaction():
+                conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"budget:{bu}:{month}",))
+                latest = conn.execute("SELECT snapshot_id FROM reports.budget_snapshots WHERE bu = %s AND month = %s ORDER BY saved_at DESC LIMIT 1", (bu, month)).fetchone()
+                if str(latest["snapshot_id"] if latest else "") != base_id:
+                    return False
+                conn.execute(
+                    "INSERT INTO reports.budget_snapshots (bu, month, total_budget, spend_as_of, data, saved_by) VALUES (%s, %s, %s, %s, %s, %s)",
+                    (bu, month, total, spend_as_of, psycopg.types.json.Jsonb(data), saved_by),
+                )
+        return True
+
+    def latest_view_html(self, bu: str) -> str | None:
+        """HTML of the company's most recent report, for the campaign names embedded in its view."""
+        with self._connect() as conn:
+            row = conn.execute("SELECT numeric_html FROM reports.latest_reports WHERE bu = %s ORDER BY period_start DESC LIMIT 1", (bu,)).fetchone()
+        return row["numeric_html"] if row else None
 
     # ---- manual edits of analysis panels
     def latest_edits(self, run_id) -> list[dict]:

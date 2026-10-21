@@ -48,6 +48,7 @@ class FakeStore:
         self.users = {}
         self.names = {}
         self.edits = []
+        self.snaps = []
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
 
     def _check(self):
@@ -93,6 +94,29 @@ class FakeStore:
 
     def ping(self):
         return not self.down
+
+    # ---- budget snapshots, same rules as the real Store
+    def budget_snapshots(self, bu, months, per_month=200):
+        self._check()
+        return {m: sorted((s for s in self.snaps if s["bu"] == bu and s["month"] == m), key=lambda s: s["saved_at"], reverse=True) for m in months}
+
+    def budget_history(self, bu, limit=30):
+        self._check()
+        return sorted((s for s in self.snaps if s["bu"] == bu), key=lambda s: s["saved_at"], reverse=True)[:limit]
+
+    def add_budget_snapshot(self, bu, month, base_id, total, spend_as_of, data, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        mine = self.budget_snapshots(bu, [month])[month]
+        if str(mine[0]["snapshot_id"] if mine else "") != base_id:
+            return False
+        self.snaps.append({"snapshot_id": f"snap-{len(self.snaps) + 1}", "bu": bu, "month": month, "total_budget": total, "spend_as_of": spend_as_of, "data": data,
+                           "saved_by": saved_by, "saved_at": datetime(2026, 10, 21, 8, 0, tzinfo=UTC) + timedelta(minutes=len(self.snaps))})
+        return True
+
+    def latest_view_html(self, bu):
+        self._check()
+        return self.html[bu][0]
 
     def latest_edits(self, run_id):
         self._check()
