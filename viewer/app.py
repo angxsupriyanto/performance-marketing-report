@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, analysis_edits, auth, budget, pages, targets  # noqa: E402
+from viewer import access, analysis_edits, auth, budget, pages, performance, performance_pages, targets  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -350,6 +350,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.need_admin()
                 status = self.budget_page(query, csrf, nonce)
                 return
+            elif path == "/performa":
+                status = self.performance_page(query, csrf, nonce)
+                return
             raise HttpError(404, "halaman tidak ditemukan")
         except HttpError as exc:
             status = exc.status
@@ -602,6 +605,41 @@ class Handler(BaseHTTPRequestHandler):
         saved = kind if entries else "same"
         self.redirect(f"/targets?bu={bu}&year={ctx['year']}&month={ctx['month']}&saved={saved}")
         return 303
+
+    # ---- performance
+    def performance_page(self, query: dict, csrf: str, nonce: str) -> int:
+        names = self.names()
+        choices = [b for b in names if access.can_see(self.user, b)]
+        if not choices:
+            raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke perusahaan mana pun.")
+        bu = query.get("bu") or choices[0]
+        if bu not in names:
+            raise HttpError(404, "perusahaan tidak dikenal")
+        if bu not in choices:
+            raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke perusahaan ini.")
+        today = self.now().date()
+        try:
+            snapshot = self.cfg.store.latest_performance(bu)
+        except Exception:  # noqa: BLE001
+            params = performance.parse_params(query, today)
+            self.send(503, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state="gagal", snapshot=None, points=[], totals=None, cohort=[],
+                                                              csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+            return 503
+        params = performance.parse_params(query, snapshot["as_of"] if snapshot else today)
+        state, points, totals, cohort = "ok", [], None, []
+        if snapshot is None:
+            state = "belum"
+        elif params.error:
+            state = "error"
+        else:
+            points = performance.series(snapshot, params)
+            if not performance.has_activity(points):
+                state = "kosong"
+            else:
+                totals, cohort = performance.summary(points), performance.cohort_rows(snapshot, params)
+        self.send(200, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points, totals=totals, cohort=cohort,
+                                                          csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+        return 200
 
     # ---- budget
     def report_budget(self, report: dict, view: dict) -> dict:

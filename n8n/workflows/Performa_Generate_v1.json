@@ -1,0 +1,311 @@
+{
+  "name": "Performa Generate v1",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "43fbb369-db96-51c6-a577-d68ec38870aa",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8f4c077b-177f-5fc2-b10b-64389ee9686c",
+              "name": "bu",
+              "value": "all",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6a9813db-3b5d-59de-90de-8c104d6908fd",
+      "name": "Manual Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Which companies to compute performance for. The sheet export is the only input; there is no period.\nconst BUS = ['bu1', 'bu2'];\nconst input = $input.first().json;\nconst source = Object.assign({}, input, input.body || {});\nconst requested = String(source.bu || 'all').toLowerCase();\nif (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\nconst bus = requested === 'all' ? BUS : [requested];\nreturn [{ json: { trigger: 'manual', plans: bus.map((bu) => ({ bu, period: '' })) } }];\n"
+      },
+      "id": "7ad6242b-94f7-5f58-9eb3-41a7df63e6a5",
+      "name": "Normalize Plan",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        480,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "sheet",
+        "operation": "read",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "<SPREADSHEET_ID>"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "NEW Customers List"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "specifyRangeA1",
+              "range": "A:DR"
+            }
+          },
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "SERIAL_NUMBER"
+            }
+          }
+        }
+      },
+      "id": "7f852232-4f66-59bb-aa3f-b80a46b84e38",
+      "name": "Read Tracker",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        720,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Turns the Tracker rows into one CSV per planned report. Only the columns the generator needs are kept, so PIC\n// names, phone numbers, emails and CRM links never leave n8n. Dates arrive as Google Sheets serial numbers and are\n// written as ISO dates, which removes any M/D versus D/M ambiguity.\nconst COLUMNS = [\"Company\", \"Channel\", \"Source\", \"Campaign\", \"Campaign Hardware\", \"Industry\", \"Remark\", \"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"ARR + OTF (Tanpa PPN)\", \"Deal Won Date\", \"Total Contract Deal Won\", \"BU\", \"Record Key\", \"SQL Date\", \"Total Contract SQL\"];\nconst DATE_COLUMNS = new Set([\"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"Deal Won Date\", \"SQL Date\"]);\nconst MONEY_COLUMNS = new Set([\"ARR + OTF (Tanpa PPN)\", \"Total Contract Deal Won\", \"Total Contract SQL\"]);\nconst SERIAL_EPOCH = Date.UTC(1899, 11, 30);\nconst normalize = (name) => String(name).replace(/\\s+/g, ' ').trim();\n\nfunction cell(column, value) {\n  if (value === null || value === undefined) return '';\n  if (typeof value === 'number') {\n    if (DATE_COLUMNS.has(column)) {\n      // Serial 30000 is 1982 and 80000 is 2118. Anything else (for example 20260119 typed as a number) is left as\n      // text so the generator reports it instead of turning it into a nonsense date.\n      if (value < 30000 || value > 80000) return String(value);\n      return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);\n    }\n    if (MONEY_COLUMNS.has(column)) return String(Math.round(value * 100) / 100);\n    return String(value);\n  }\n  return String(value).trim();\n}\n\nconst quote = (text) => (/[\",\\r\\n]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text);\n\n// The Sheets API leaves out empty cells, so a column is judged missing only when NO row has it.\nconst squash = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '');\nconst seen = new Set();\nconst rows = [];\nfor (const item of $input.all()) {\n  const byName = {};\n  for (const [key, value] of Object.entries(item.json)) {\n    const name = normalize(key);\n    byName[name] = value;\n    seen.add(name);\n  }\n  const values = COLUMNS.map((column) => cell(column, byName[column]));\n  if (values.some((v) => v !== '')) rows.push(values.map(quote).join(','));\n}\nif (!rows.length) throw new Error('Sheet tidak mengembalikan baris data');\n\nconst missing = COLUMNS.filter((column) => !seen.has(column));\nif (missing.length) {\n  const hints = missing.map((column) => {\n    const close = [...seen].filter((name) => squash(name) === squash(column));\n    return close.length ? `${column} (header mirip: \"${close[0]}\")` : column;\n  });\n  throw new Error(`Kolom tidak ditemukan di satu baris pun (tidak ada di sheet atau kosong seluruhnya): ${hints.join('; ')}. Baris dibaca: ${rows.length}, header unik: ${seen.size}`);\n}\n\nconst csv = [COLUMNS.map(quote).join(','), ...rows].join('\\n') + '\\n';\nconst plans = $('Normalize Plan').first().json.plans;\nreturn plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));\n"
+      },
+      "id": "bfcf411e-e840-5fcb-b64c-f69fd9276369",
+      "name": "Build CSV",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://report-service:8080/v1/performa",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "bu",
+              "value": "={{ $json.bu }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "text/csv",
+        "body": "={{ $json.csv }}",
+        "options": {
+          "timeout": 300000
+        }
+      },
+      "id": "ee7a9efb-f30c-53d9-9caf-9a27a66b6656",
+      "name": "Compute Performa",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        0
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Maps each service response onto the parameters of sql/insert_performance.sql. Only aggregates travel from here on.\nreturn $input.all().map((item) => {\n  const r = item.json;\n  return { json: { params: [r.bu, r.as_of, r.source_sha256, r.generator_version, JSON.stringify(r.data)], bu: r.bu, as_of: r.as_of, days: r.days, rows_in_bu: r.rows_in_bu } };\n});\n"
+      },
+      "id": "5ea185bc-30d6-5ef9-af27-7986d63177e0",
+      "name": "Prepare Insert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH ins AS (\n  INSERT INTO reports.performance_snapshots (bu, as_of, source_sha256, generator_version, data)\n  VALUES ($1, $2::date, $3, $4, $5::jsonb)\n  ON CONFLICT (bu, as_of, source_sha256, generator_version) DO NOTHING\n  RETURNING snapshot_id\n)\nSELECT snapshot_id, true AS inserted FROM ins\nUNION ALL\nSELECT snapshot_id, false AS inserted\nFROM reports.performance_snapshots\nWHERE bu = $1 AND as_of = $2::date AND source_sha256 = $3 AND generator_version = $4 AND NOT EXISTS (SELECT 1 FROM ins)\n",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "id": "572d0a9c-7a8f-5856-8d7a-78bb7eee3630",
+      "name": "Save Snapshot",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1680,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// One entry per company: whether a new snapshot was stored or the same export had already been stored today.\nconst prepared = $('Prepare Insert').all();\nreturn [{ json: { snapshots: $input.all().map((item, i) => ({ bu: prepared[i].json.bu, as_of: prepared[i].json.as_of, days: prepared[i].json.days, snapshot_id: item.json.snapshot_id, inserted: item.json.inserted })) } }];\n"
+      },
+      "id": "e96d5fc2-ee03-5efe-8fc2-ef99aa64e13b",
+      "name": "Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1920,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Runs once per failed item. Short, aggregate-only text: it reads only named fields of the error and caps the length, so no\n// request body (the CSV) can leak into it.\nlet plan;\ntry { plan = $('Build CSV').item.json; } catch (e) { plan = $('Build CSV').first().json; }\nconst err = $json.error !== undefined ? $json.error : $json;\nconst parts = [];\nconst add = (value) => {\n  if (value === undefined || value === null || value === '') return;\n  const text = typeof value === 'string' ? value : JSON.stringify(value);\n  if (!parts.includes(text)) parts.push(text);\n};\nif (typeof err === 'string') {\n  add(err);\n} else {\n  add(err.httpCode);\n  add(err.message);\n  add(err.description);\n  add(err.cause && err.cause.message);\n  add(err.context && err.context.data);\n}\nconst detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\\s+/g, ' ').slice(0, 1200);\nreturn { json: { text: `Performa ${String(plan.bu).toUpperCase()} GAGAL dihitung: ${detail}` } };\n"
+      },
+      "id": "2e86ddf7-4dda-556a-8748-42e10e3a067c",
+      "name": "Format Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        160
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Manual Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Manual Parameters": {
+      "main": [
+        [
+          {
+            "node": "Normalize Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Plan": {
+      "main": [
+        [
+          {
+            "node": "Read Tracker",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Tracker": {
+      "main": [
+        [
+          {
+            "node": "Build CSV",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build CSV": {
+      "main": [
+        [
+          {
+            "node": "Compute Performa",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Insert": {
+      "main": [
+        [
+          {
+            "node": "Save Snapshot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Snapshot": {
+      "main": [
+        [
+          {
+            "node": "Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compute Performa": {
+      "main": [
+        [
+          {
+            "node": "Prepare Insert",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Format Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Asia/Jakarta",
+    "saveDataSuccessExecution": "none",
+    "saveDataErrorExecution": "none",
+    "saveManualExecutions": false
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

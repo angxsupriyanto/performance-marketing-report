@@ -445,6 +445,42 @@ class CodeNodeTests(unittest.TestCase):
             self.assertTrue(out["ok"], out)
             self.assertEqual(out["result"][0]["json"]["params"][2], stored)
 
+    def test_performa_workflow_is_manual_only_and_stores_aggregates_through_the_writer_query(self):
+        flow = load("Performa_Generate_v1.json")
+        types = {n["name"]: n["type"] for n in flow["nodes"]}
+        self.assertNotIn("n8n-nodes-base.webhook", types.values())  # started by hand, like the user wants
+        self.assertNotIn("n8n-nodes-base.telegram", types.values())
+        self.assertEqual(flow["active"], False)
+        self.assertEqual(node(flow, "Manual Parameters")["parameters"]["assignments"]["assignments"][0]["value"], "all")
+        http = node(flow, "Compute Performa")["parameters"]
+        self.assertEqual((http["url"], http["genericAuthType"]), ("http://report-service:8080/v1/performa", "httpHeaderAuth"))
+        self.assertEqual(node(flow, "Compute Performa")["onError"], "continueErrorOutput")
+        query = node(flow, "Save Snapshot")["parameters"]["query"]
+        self.assertIn("ON CONFLICT (bu, as_of, source_sha256, generator_version) DO NOTHING", query)
+        self.assertIn("reports.performance_snapshots", query)
+        self.assertEqual(max(int(n) for n in re.findall(r"\$(\d+)", query)), 5)
+        self.assertEqual(node(flow, "Build CSV")["parameters"]["jsCode"], node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"])  # same column whitelist: no PIC, phone or email
+
+    def test_performa_code_nodes(self):
+        flow = load("Performa_Generate_v1.json")
+        plan = run_code(node(flow, "Normalize Plan")["parameters"]["jsCode"], [{"bu": "all"}])
+        self.assertEqual([p["bu"] for p in plan["result"][0]["json"]["plans"]], ["bu1", "bu2"])
+        one = run_code(node(flow, "Normalize Plan")["parameters"]["jsCode"], [{"bu": "BU2"}])
+        self.assertEqual([p["bu"] for p in one["result"][0]["json"]["plans"]], ["bu2"])
+        self.assertFalse(run_code(node(flow, "Normalize Plan")["parameters"]["jsCode"], [{"bu": "bu9"}])["ok"])
+        response = {"bu": "bu1", "as_of": "2026-10-21", "source_sha256": "a" * 64, "generator_version": "dev+abc", "days": 3, "rows_in_bu": 9, "data": {"v": 1, "days": {}, "cohorts": {}}}
+        prepared = run_code(node(flow, "Prepare Insert")["parameters"]["jsCode"], [{**response}])
+        params = prepared["result"][0]["json"]["params"]
+        self.assertEqual(params[:4], ["bu1", "2026-10-21", "a" * 64, "dev+abc"])
+        self.assertEqual(json.loads(params[4]), response["data"])
+        result = run_code(node(flow, "Result")["parameters"]["jsCode"], [{"snapshot_id": "s1", "inserted": True}], {"Prepare Insert": {"items": [r["json"] for r in prepared["result"]]}})
+        self.assertEqual(result["result"][0]["json"]["snapshots"], [{"bu": "bu1", "as_of": "2026-10-21", "days": 3, "snapshot_id": "s1", "inserted": True}])
+        failed = run_code(node(flow, "Format Error")["parameters"]["jsCode"], [{"error": {"message": "x" * 3000, "httpCode": "422"}}], {"Build CSV": {"items": [{"bu": "bu2", "csv": "SECRET,ROW\nsecret,row"}]}}, )
+        text = failed["result"]["json"]["text"] if isinstance(failed["result"], dict) else failed["result"][0]["json"]["text"]
+        self.assertTrue(text.startswith("Performa BU2 GAGAL dihitung: 422"))
+        self.assertNotIn("SECRET", text)
+        self.assertLessEqual(len(text), 1300)
+
 
 if __name__ == "__main__":
     unittest.main()

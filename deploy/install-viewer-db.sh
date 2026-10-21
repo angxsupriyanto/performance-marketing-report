@@ -22,7 +22,7 @@ done
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 sql_dir="$here/database"
-for f in 002_targets_and_viewer.sql 003_run_idempotency_includes_generator.sql 004_users_and_company_names.sql 005_analysis_edits.sql 006_budget.sql; do
+for f in 002_targets_and_viewer.sql 003_run_idempotency_includes_generator.sql 004_users_and_company_names.sql 005_analysis_edits.sql 006_budget.sql 007_performance.sql; do
   [ -f "$sql_dir/$f" ] || { echo "missing $sql_dir/$f" >&2; exit 66; }
 done
 
@@ -47,6 +47,7 @@ psql_in -q -d marketing_reports -f - < "$sql_dir/003_run_idempotency_includes_ge
 psql_in -q -d marketing_reports -f - < "$sql_dir/004_users_and_company_names.sql"
 psql_in -q -d marketing_reports -f - < "$sql_dir/005_analysis_edits.sql"
 psql_in -q -d marketing_reports -f - < "$sql_dir/006_budget.sql"
+psql_in -q -d marketing_reports -f - < "$sql_dir/007_performance.sql"
 
 echo "== Checking"
 checks=$(psql_in -At -d marketing_reports -f - < "$sql_dir/verify_install.sql")

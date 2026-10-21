@@ -49,6 +49,7 @@ class FakeStore:
         self.names = {}
         self.edits = []
         self.snaps = []
+        self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
 
     def _check(self):
@@ -94,6 +95,10 @@ class FakeStore:
 
     def ping(self):
         return not self.down
+
+    def latest_performance(self, bu):
+        self._check()
+        return self.performance.get(bu)
 
     # ---- budget snapshots, same rules as the real Store
     def budget_snapshots(self, bu, months, per_month=200):

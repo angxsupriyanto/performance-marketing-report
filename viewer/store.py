@@ -85,6 +85,13 @@ class Store:
                         (bu, scope, product, period_key, unit, amount),
                     )
 
+    # ---- performance snapshots (written by n8n, read here)
+    def latest_performance(self, bu: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT snapshot_id, generated_at, as_of, data FROM reports.performance_snapshots WHERE bu = %s ORDER BY generated_at DESC LIMIT 1", (bu,),
+            ).fetchone()
+
     # ---- budget and spend
     def budget_snapshots(self, bu: str, months: list[str], per_month: int = 200) -> dict[str, list[dict]]:
         """Saved versions per month, newest first. Capped per month so a long history cannot slow a report page down."""

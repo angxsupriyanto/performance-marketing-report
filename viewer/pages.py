@@ -94,9 +94,11 @@ def menu(csrf: str, user: dict | None, current: str = "") -> str:
         return f'<a href="{href}"{here}>{text}</a>'
 
     links = ""
-    if user is not None and user["role"] == "admin":
-        links = (link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("budget", "/budget", "Budget")
-                 + link("companies", "/companies", "Nama perusahaan"))
+    if user is not None:
+        links = link("performa", "/performa", "Performa")
+        if user["role"] == "admin":
+            links += (link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("budget", "/budget", "Budget")
+                      + link("companies", "/companies", "Nama perusahaan"))
     return (
         f'<nav class="vw-menu" aria-label="Menu">{f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>' if user is not None else ""}{links}'
         f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></nav>'

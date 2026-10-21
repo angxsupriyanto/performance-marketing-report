@@ -30,7 +30,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 
 1. **Database.** Setelah `marketing_reports` terpasang:
    `deploy/install-viewer-db.sh --container <postgres> --admin-user <superuser>`
-   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 20 baris harus PASS.
+   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 21 baris harus PASS.
 2. **Rahasia lain** (di folder tempat compose dijalankan, jangan di-commit):
    - `viewer_session_secret` dan `n8n_webhook_token` (acak, 64 karakter heks). Linux, macOS, WSL: `openssl rand -hex 32 > viewer_session_secret`. **PowerShell (Windows):**
      ```powershell
@@ -59,6 +59,15 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 - Pada tabel Campaign Hardware, hanya kolom MQL, SQL, dan SQL Value yang berubah. Submission, Target, dan Progress tetap, begitu pula kartu target, bagian Progress target, dan blok Funnel per hardware.
 - Saklar bekerja di browser dari data yang sudah ada di halaman, tanpa permintaan ke server. Report yang disimpan sebelum fitur ini tampil tanpa saklar sampai Report Generate dijalankan lagi.
 
+## Halaman Performa
+
+- Menu **Performa** (semua pengguna, sesuai akses perusahaannya): grafik **Volume** (Submission, MQL, SQL, Deal Won) dan **Nilai** (SQL Value, Deal Won Value) pada rentang tanggal pilihan, per **Hari**, **Minggu** (minggu ISO, Senin sampai Minggu), atau **Bulan** (bulan kalender), ditambah Ringkasan rentang dan tabel **Cohort konversi**. Di bawah tiap grafik ada tabel angkanya.
+- **Data berasal dari workflow n8n terpisah, Performa Generate** (`n8n/workflows/Performa_Generate_v1.json`), yang dijalankan manual: membaca tab NEW Customers List, memanggil `report-service` `/v1/performa`, lalu menyimpan satu snapshot di `reports.performance_snapshots`. Hanya angka agregat yang disimpan (per hari dan cohort), tanpa nama perusahaan lead dan tanpa baris lead. Halaman menampilkan snapshot terbaru per perusahaan beserta tanggal acuannya; untuk memperbarui, jalankan workflow lagi. Mengirim ekspor yang sama pada hari yang sama tidak menambah baris.
+- **Memasang workflow:** impor `Performa_Generate_v1.json` di n8n, lalu pasang credential yang sama seperti *Report Generate v1*: Google Sheets pada node *Read Tracker* (isi `<SPREADSHEET_ID>`), Header Auth `report-service` pada *Compute Performa*, dan Postgres (role `report_writer`) pada *Save Snapshot*. Bangun ulang container `report-service` lebih dulu supaya endpoint `/v1/performa` ada.
+- Setiap peristiwa dihitung pada tanggalnya sendiri: Submission pada Inbound Date, MQL pada MQL Date, SQL pada tanggal SQL profil perusahaan itu, Deal Won pada Deal Won Date. Rate memakai definisi report: MQL ÷ Submission, SQL ÷ MQL, Deal Won ÷ SQL. Minggu atau bulan di tepi rentang hanya menghitung hari di dalam rentang. Bulan kalender dan minggu ISO tidak saling menjumlahkan, karena sebuah minggu bisa melewati pergantian bulan.
+- **Cohort:** baris = lead yang Inbound Date-nya jatuh pada periode itu. Kolom = persen yang sudah mencapai tahap itu pada akhir periode yang sama, lalu 1 sampai 4 periode kemudian (kumulatif). "Submission ke MQL" dan "Submission ke SQL" memakai semua lead cohort sebagai pembagi. "MQL ke SQL" hanya memakai lead cohort yang punya MQL Date. Kolom yang periodenya belum selesai pada tanggal acuan tampil "-". Cohort memuat periode yang tanggal awalnya ada di rentang.
+- Per hari dibatasi 180 hari supaya grafik tetap terbaca.
+
 ## Budget dan spend
 
 - Menu **Budget** (admin): pilih perusahaan dan bulan, isi **total budget**, **budget per campaign**, **spend per minggu**, dan **spend bulanan**, lalu *Simpan budget dan spend*. Section **Budget dan spend {bulan}** tampil paling atas di setiap report (kartu Total budget, Spend Week n, Spend bulan, Sisa budget, bar Pemakaian budget, dan tabel per campaign, dengan pembanding bulan lalu atau minggu lalu).
@@ -82,7 +91,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator). Dulu versi kode tidak ikut kunci, jadi setelah generator diperbarui, menjalankan Report Generate pada sheet yang sama tidak menambah apa pun dan HTML lama tetap tampil. Sekarang versi kode (hash isi `generate_report.py`, template, dan profil) ikut kunci. Urutan memperbarui:
 
 1. `git pull`, lalu bangun ulang `report-service` (versi kode baru terbaca di `/healthz` sebagai `generator_version`).
-2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, dan `006_budget.sql`).
+2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, `006_budget.sql`, dan `007_performance.sql`).
 3. Di n8n, perbarui node *Save Run* di `Report_Generate_v1` dengan isi `n8n/sql/insert_run.sql` terbaru (atau impor ulang workflow). **Kedua langkah 2 dan 3 harus dilakukan bersama:** setelah 003 diterapkan, SQL lama gagal karena tidak ada constraint yang cocok.
 4. Jalankan Report Generate lagi untuk periode yang dibutuhkan. Run baru muncul sebagai report terbaru; run lama dan analisisnya tetap tersimpan. Analisis dibuat per run, jadi tekan *Buat analisis* lagi pada report baru.
 

@@ -157,6 +157,42 @@ def generate_flow() -> Flow:
     return flow
 
 
+def performa_flow() -> Flow:
+    """Manual only: reads the Tracker and stores aggregated daily and cohort numbers for the Performa page. No webhook, no Telegram."""
+    columns, dates, money = tracker_columns()
+    flow = Flow("Performa Generate v1")
+    flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 0))
+    manual_parameters(flow, (240, 0), [("bu", "all")])
+    code_node(flow, "Normalize Plan", "normalize_performa_plan.js", (480, 0))
+    flow.add("Read Tracker", "n8n-nodes-base.googleSheets", 4.7, {
+        "resource": "sheet", "operation": "read",
+        "documentId": {"__rl": True, "mode": "id", "value": "<SPREADSHEET_ID>"},
+        "sheetName": {"__rl": True, "mode": "name", "value": "NEW Customers List"},
+        "options": {
+            "dataLocationOnSheet": {"values": {"rangeDefinition": "specifyRangeA1", "range": "A:DR"}},
+            "outputFormatting": {"values": {"general": "UNFORMATTED_VALUE", "date": "SERIAL_NUMBER"}},
+        },
+    }, (720, 0))
+    code_node(flow, "Build CSV", "build_csv.js", (960, 0), COLUMNS=json.dumps(columns), DATE_COLUMNS=json.dumps(dates), MONEY_COLUMNS=json.dumps(money))
+    flow.add("Compute Performa", "n8n-nodes-base.httpRequest", 4.2, {
+        "method": "POST", "url": f"{SERVICE_URL}/v1/performa",
+        "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
+        "sendQuery": True, "queryParameters": {"parameters": [{"name": "bu", "value": "={{ $json.bu }}"}]},
+        "sendBody": True, "contentType": "raw", "rawContentType": "text/csv", "body": "={{ $json.csv }}",
+        "options": {"timeout": 300000},
+    }, (1200, 0), onError="continueErrorOutput")
+    code_node(flow, "Prepare Insert", "prepare_performa_insert.js", (1440, -80))
+    postgres_node(flow, "Save Snapshot", "insert_performance.sql", (1680, -80))
+    code_node(flow, "Result", "result_performa.js", (1920, -80))
+    code_node(flow, "Format Error", "format_performa_error.js", (1440, 160), mode="runOnceForEachItem")
+    flow.connect("Manual Trigger", "Manual Parameters")
+    for a, b in (("Manual Parameters", "Normalize Plan"), ("Normalize Plan", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Compute Performa"), ("Prepare Insert", "Save Snapshot"), ("Save Snapshot", "Result")):
+        flow.connect(a, b)
+    flow.connect("Compute Performa", "Prepare Insert", 0)
+    flow.connect("Compute Performa", "Format Error", 1)
+    return flow
+
+
 def analysis_flow() -> Flow:
     prompt = (HERE / "prompts" / PROMPT_FILE).read_text(encoding="utf-8").strip()
     flow = Flow("Report Analysis Button v1")
@@ -214,6 +250,7 @@ def view_flow() -> Flow:
 
 FLOWS = {
     "Report_Generate_v1.json": generate_flow,
+    "Performa_Generate_v1.json": performa_flow,
     "Report_Analysis_Button_v1.json": analysis_flow,
     "Report_View_v1.json": view_flow,
 }

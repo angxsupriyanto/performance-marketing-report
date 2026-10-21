@@ -31,7 +31,7 @@ GENERATOR_TIMEOUT_SECONDS = int(os.environ.get("REPORT_GENERATOR_TIMEOUT", 180))
 def _code_fingerprint() -> str:
     """Short hash of the files that decide a report's content. A report built by different code is a different run."""
     digest = hashlib.sha256()
-    for path in [ROOT / "generate_report.py", ROOT / "apply_analysis.py", ROOT / "report_view.py", *sorted((ROOT / "profiles").glob("*.json"))]:
+    for path in [ROOT / "generate_report.py", ROOT / "apply_analysis.py", ROOT / "report_view.py", ROOT / "performa.py", *sorted((ROOT / "profiles").glob("*.json"))]:
         digest.update(path.name.encode() + b"\0" + path.read_bytes())
     return digest.hexdigest()[:8]
 
@@ -105,6 +105,33 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
     }
 
 
+def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool) -> dict:
+    """Aggregates for the Performa page: per-day counts and values and cohort counts. Aggregates only; the CSV is never stored."""
+    if not PROFILE_NAME.fullmatch(bu):
+        raise HttpError(400, "parameter bu tidak valid")
+    try:
+        generate_report.load_profile(bu)
+    except ValueError as exc:
+        raise HttpError(400, str(exc))
+    with tempfile.TemporaryDirectory(prefix="performa-") as tmp:
+        table, output = Path(tmp) / "table.csv", Path(tmp) / "performa.json"
+        table.write_bytes(csv_bytes)
+        command = [sys.executable, str(ROOT / "generate_report.py"), "--table", str(table), "--bu", bu, "--performa-json", str(output)]
+        if allow_duplicate_keys:
+            command.append("--allow-duplicate-keys")
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=GENERATOR_TIMEOUT_SECONDS, cwd=tmp)
+        except subprocess.TimeoutExpired:
+            raise HttpError(504, "perhitungan performa melebihi batas waktu")
+        if result.returncode != 0:
+            message = (result.stderr or "").strip().splitlines()
+            raise HttpError(422, (message[-1] if message else "perhitungan performa gagal")[:2500])
+        data = json.loads(output.read_text(encoding="utf-8"))
+    audit = data.pop("audit")
+    return {"bu": bu, "as_of": data["as_of"], "source_sha256": audit["source_sha256"], "generator_version": GENERATOR_VERSION,
+            "rows_total": audit["rows_total"], "rows_in_bu": audit["rows_in_bu"], "days": len(data["days"]), "data": data}
+
+
 def apply(body: bytes) -> dict:
     try:
         payload = json.loads(body.decode("utf-8"))
@@ -161,13 +188,16 @@ class Handler(BaseHTTPRequestHandler):
             if not self._authorized():
                 status = 401
                 return self._send(401, {"error": "unauthorized"})
-            if method == "POST" and url.path in ("/v1/reports", "/v1/analysis/apply"):
+            if method == "POST" and url.path in ("/v1/reports", "/v1/performa", "/v1/analysis/apply"):
                 body = self._read_body()
                 with CONCURRENCY:
-                    if url.path == "/v1/reports":
+                    if url.path in ("/v1/reports", "/v1/performa"):
                         query = parse_qs(url.query)
                         one = lambda key: (query.get(key) or [""])[0]
-                        result = generate(body, one("bu").lower(), one("period"), one("allow_duplicate_keys") == "true")
+                        if url.path == "/v1/reports":
+                            result = generate(body, one("bu").lower(), one("period"), one("allow_duplicate_keys") == "true")
+                        else:
+                            result = performance(body, one("bu").lower(), one("allow_duplicate_keys") == "true")
                     else:
                         result = apply(body)
                 status = 200

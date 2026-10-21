@@ -105,7 +105,7 @@ class RoleTests(UserCase):
         self.assertIn("Hanya admin yang bisa membuat atau membuat ulang analisis.", box.get_text())
         self.assertIsNone(soup.select_one("#vw-confirm"))
         self.assertEqual(soup.select("[data-act]"), [])  # no edit controls for a viewer
-        self.assertEqual([a.get_text() for a in soup.select(".vw-menu a")], [])
+        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/performa"])
         self.assertIn("andi (Pengguna)", soup.select_one(".vw-menu").get_text())
         for path in ("/targets", "/users", "/users/new", "/users/edit?u=admin", "/companies"):
             self.assertEqual(self.call("GET", path)[0].status, 403, path)
@@ -118,7 +118,7 @@ class RoleTests(UserCase):
     def test_the_admin_menu_has_the_admin_pages(self):
         self.login()
         soup = BeautifulSoup(self.call("GET", "/")[1], "html.parser")
-        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/users", "/targets", "/budget", "/companies"])
+        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/performa", "/users", "/targets", "/budget", "/companies"])
         self.assertIn("admin (Admin)", soup.select_one(".vw-menu").get_text())
 
 

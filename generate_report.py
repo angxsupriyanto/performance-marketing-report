@@ -13,8 +13,9 @@ from decimal import ROUND_HALF_UP, Decimal
 import calendar
 import copy
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+import performa
 import report_view
 
 PROFILE_DIR = Path(__file__).with_name("profiles")
@@ -531,6 +532,33 @@ def build(data: dict[str, list[dict[str, str]]], period: Period) -> tuple[dict, 
     return view, metrics, same, facts, lists
 
 
+def performance(data: dict[str, list[dict[str, str]]], as_of: date) -> dict:
+    """Aggregates for the Performa page: counts and values per day of each stage on its own date (the same rule the reports use),
+    and cohort counts by Inbound Date. Aggregates only; no company names and no lead rows leave this function."""
+    days: dict[str, dict] = {}
+
+    def add(day: date, key: str, amount) -> None:
+        entry = days.setdefault(day.isoformat(), {})
+        entry[key] = entry.get(key, 0) + amount
+
+    for stage, count_key, value_key in (("Submission", "sub", None), ("MQL", "mql", None), ("SQL", "sql", "sqlv"), ("Deal Won", "won", "wonv")):
+        for row in data[stage]:
+            day = parse_date(row[STAGES[stage]], STAGES[stage])
+            add(day, count_key, 1)
+            if value_key:
+                add(day, value_key, stage_value(row, stage))
+    for entry in days.values():  # money as text so that exact decimals survive JSON
+        for key in ("sqlv", "wonv"):
+            if key in entry:
+                entry[key] = str(entry[key])
+    leads = []
+    for row in data["Submission"]:
+        mql, sql = row.get(STAGES["MQL"], ""), row.get(STAGES["SQL"], "")
+        leads.append((parse_date(row[STAGES["Submission"]], STAGES["Submission"]),
+                      parse_date(mql, STAGES["MQL"]) if mql else None, parse_date(sql, STAGES["SQL"]) if sql else None))
+    return {"v": 1, "as_of": as_of.isoformat(), "days": dict(sorted(days.items())), "cohorts": performa.build(leads, as_of)}
+
+
 def find_inputs(directory: Path) -> dict[str, Path]:
     keys = {"Submission": "submission", "MQL": "mql", "SQL": "sql", "Deal Won": "deal won"}
     files = [p for p in sorted(directory.iterdir()) if p.suffix.lower() == ".csv"]
@@ -553,12 +581,25 @@ def main():
     parser.add_argument("--mql",type=Path)
     parser.add_argument("--sql",type=Path)
     parser.add_argument("--won",type=Path)
-    parser.add_argument("--period","--week",dest="period",required=True,help="YYYY-Www untuk mingguan (contoh 2026-W39) atau YYYY-MM untuk bulanan (contoh 2026-09)")
+    parser.add_argument("--performa-json",type=Path,help="tulis agregat untuk halaman Performa (harian dan cohort) ke berkas ini, tanpa membuat report; --period tidak dipakai")
+    parser.add_argument("--as-of",help="tanggal acuan cohort (YYYY-MM-DD), default hari ini menurut WIB")
+    parser.add_argument("--period","--week",dest="period",default=None,help="YYYY-Www untuk mingguan (contoh 2026-W39) atau YYYY-MM untuk bulanan (contoh 2026-09)")
     parser.add_argument("--output",type=Path,help="default: output/<BU>_<periode>.html")
     args=parser.parse_args()
     try:
         profile=load_profile(args.bu)
         use_profile(profile)
+        if args.performa_json:
+            if not args.table:parser.error("--performa-json memerlukan --table")
+            data,table_info=read_table(args.table,args.allow_duplicate_keys)
+            as_of=date.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone(timedelta(hours=7))).date()
+            result=performance(data,as_of)
+            result["audit"]={"bu":profile["name"],"rows_total":table_info["rows_total"],"rows_in_bu":table_info["rows_in_bu"],"source_sha256":hashlib.sha256(args.table.read_bytes()).hexdigest()}
+            args.performa_json.parent.mkdir(parents=True,exist_ok=True)
+            args.performa_json.write_text(json.dumps(result,ensure_ascii=False,default=json_default)+"\n",encoding="utf-8")
+            print(f"OK: {args.performa_json} ({len(result['days'])} hari)")
+            return
+        if not args.period:parser.error("--period wajib diisi (kecuali dengan --performa-json)")
         period=parse_period(args.period)
         table_info=None
         if args.table:

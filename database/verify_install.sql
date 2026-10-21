@@ -68,5 +68,12 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'INSERT')
                       AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'DELETE')
                                OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.budget_snapshots'), 'TRUNCATE')), false)
+  UNION ALL SELECT 21, 'performance_snapshots exists; report_writer can SELECT and INSERT, report_viewer and report_reader can only SELECT, nobody can UPDATE or DELETE',
+         to_regclass('reports.performance_snapshots') IS NOT NULL
+         AND coalesce(has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'SELECT') AND has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'INSERT')
+                      AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.performance_snapshots'), 'SELECT') AND has_table_privilege('report_reader', to_regclass('reports.performance_snapshots'), 'SELECT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.performance_snapshots'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.performance_snapshots'), 'INSERT')
+                               OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'UPDATE') OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'DELETE')
+                               OR has_table_privilege('report_writer', to_regclass('reports.performance_snapshots'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

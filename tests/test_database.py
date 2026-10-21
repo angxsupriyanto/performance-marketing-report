@@ -65,6 +65,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/005_analysis_edits.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/006_budget.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/006_budget.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -354,6 +356,35 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM reports.budget_snapshots").fetchone()[0], 2)
             with self.assertRaises(pe.InsufficientPrivilege):
                 conn.execute("INSERT INTO reports.budget_snapshots (bu, month, data, saved_by) VALUES ('bu1', '2026-10', '{\"campaigns\": {}}', 'x')")
+
+    def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
+        import psycopg.errors as pe
+        from viewer.store import Store
+        data = json.dumps({"v": 1, "as_of": "2026-10-21", "days": {"2026-10-01": {"sub": 1}}, "cohorts": {"day": [], "week": [], "month": []}})
+        insert = sql("insert_performance.sql")
+        named = lambda *values: {f"p{i}": v for i, v in enumerate(values, 1)}
+        with self.writer() as conn:
+            first = conn.execute(insert, named("bu1", "2026-10-21", SHA_A, "test+v1", data)).fetchall()
+            again = conn.execute(insert, named("bu1", "2026-10-21", SHA_A, "test+v1", data)).fetchall()
+            tomorrow = conn.execute(insert, named("bu1", "2026-10-22", SHA_A, "test+v1", data)).fetchall()
+            upgraded = conn.execute(insert, named("bu1", "2026-10-21", SHA_A, "test+v2", data)).fetchall()
+        self.assertEqual((first[0][1], again[0][1], again[0][0], tomorrow[0][1], upgraded[0][1]), (True, False, first[0][0], True, True))
+        store = Store(f"{ADMIN} dbname=marketing_reports user=report_viewer password=viewer-pw")
+        latest = store.latest_performance("bu1")
+        self.assertEqual(latest["data"]["days"], {"2026-10-01": {"sub": 1}})
+        self.assertIsNone(store.latest_performance("bu2"))
+        with self.viewer() as conn:
+            for statement in ("INSERT INTO reports.performance_snapshots (bu, as_of, source_sha256, generator_version, data) VALUES ('bu1', '2026-10-21', repeat('a', 64), 'x', '{}')",
+                              "UPDATE reports.performance_snapshots SET bu = 'bu2'", "DELETE FROM reports.performance_snapshots"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            for statement in ("UPDATE reports.performance_snapshots SET bu = 'bu2'", "DELETE FROM reports.performance_snapshots"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+            for bad in (("BU 1", "2026-10-21", SHA_B, "t", data), ("bu1", "2026-10-21", "short", "t", data), ("bu1", "2026-10-21", SHA_B, "t", "{}"), ("bu1", "2026-10-21", SHA_B, "t", "[]")):
+                with self.assertRaises(pe.CheckViolation):
+                    conn.execute(insert, named(*bad))
 
 
 if __name__ == "__main__":
