@@ -681,30 +681,28 @@ class Handler(BaseHTTPRequestHandler):
         today = self.now().date()
         digits = lambda v: "" if v in (None, "") else f"{int(v):,}".replace(",", ".")
         rows: list[dict] = []
+        tracker = (report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else []
         if posted is not None:
-            index = 0
-            while f"n_{index}" in posted:
-                rows.append({"name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
+            for index in budget.row_indexes(posted):
+                rows.append({"idx": index, "name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
                              "weeks": {k: posted.get(f"w_{index}_{k}", "") for k, _, _ in weeks}})
-                index += 1
             total_text, as_of_text = posted.get("total", ""), posted.get("as_of", "")
         else:
             saved = budget.campaigns_of(current)
-            tracker = (report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else []
-            merged = {n.casefold(): n for n in tracker}
-            merged.update({n.casefold(): n for n in saved})
-            for key in sorted(merged):
-                name = merged[key]
-                c = saved.get(name, {})
-                rows.append({"name": name, "budget": digits(c.get("budget")), "month": digits(c.get("month_spend")),
+            for index, name in enumerate(sorted(saved, key=str.casefold)):  # only campaigns that already have figures; the rest are added by hand
+                c = saved[name]
+                rows.append({"idx": index, "name": name, "budget": digits(c.get("budget")), "month": digits(c.get("month_spend")),
                              "weeks": {k: digits((c.get("weeks") or {}).get(k)) for k, _, _ in weeks}})
             total_text = digits(current["total_budget"]) if current else ""
             as_of_text = current["spend_as_of"].isoformat() if current and current["spend_as_of"] else ""
+        universe = {n.casefold(): n for n in tracker}
+        universe.update({r["name"].casefold(): r["name"] for r in rows if r["name"]})  # a saved name missing from the tracker can still be added back
+        picker = sorted(universe.values(), key=str.casefold)
         base_id = str(current["snapshot_id"]) if current else ""
         notice = ""
         if query.get("saved"):
             notice = f"Budget dan spend {names[bu]} {budget.month_label(month)} tersimpan."
-        self.send(status, pages.budget_page(bu, names, month, options, rows, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed), nonce=nonce)
+        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed), nonce=nonce)
         return status
 
     def safe_names(self) -> dict[str, str]:

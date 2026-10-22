@@ -174,31 +174,33 @@ def _money(raw: str, label: str, errors: dict, key: str) -> Decimal | None:
         return None
 
 
+def row_indexes(form: dict) -> list[int]:
+    """Row numbers of the campaigns in a posted form. Removing a campaign in the browser leaves gaps, so they are read, never counted."""
+    return sorted({int(k[2:]) for k in form if k.startswith("n_") and k[2:].isdigit()})
+
+
 def parse_form(form: dict[str, str], month: str, today: date) -> dict:
     """Turns the posted Budget form into what is stored, or raises FormError naming the fields. Nothing is stored here."""
     errors: dict[str, str] = {}
-    names: list[str] = []
+    names: list[tuple[int, str]] = []
     seen: set[str] = set()
-    index = 0
-    while f"n_{index}" in form:
+    for index in row_indexes(form):
         try:
             name = clean_name(form[f"n_{index}"])
         except ValueError as exc:
             errors[f"n_{index}"] = str(exc)
-            index += 1
             continue
         if name.casefold() in seen:
             errors[f"n_{index}"] = f"Campaign {name} tercatat dua kali."
         seen.add(name.casefold())
-        names.append(name)
-        index += 1
+        names.append((index, name))
     total = _money(form.get("total", ""), "Total budget", errors, "total")
     first, last = month_bounds(month)
     as_of_text = form.get("as_of", "").strip()
     as_of = None
     campaigns: dict[str, dict] = {}
     weeks = weeks_of_month(month)
-    for i, name in enumerate(names):
+    for i, name in names:
         entry: dict = {"budget": None, "month_spend": None, "weeks": {}}
         budget = _money(form.get(f"b_{i}", ""), f"Budget {name}", errors, f"b_{i}")
         if budget:  # 0 means no budget, like an empty field

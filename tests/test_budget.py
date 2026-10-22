@@ -166,14 +166,21 @@ class BudgetPageTests(ViewerCase):
         self.assertEqual(soup.select_one("h1").get_text(), "Budget")
         self.assertEqual([o.get_text() for o in soup.select("#bu option")], ["Perusahaan 1", "Perusahaan 2"])
         self.assertIn(budget.month_label(self.month), [o.get_text() for o in soup.select("#month option")])
-        self.assertEqual([td.get_text() for td in soup.select("#t-budget [data-name]")], ["Camp A"])  # from the tracker, in the report's view
+        self.assertEqual(soup.select("#t-budget [data-name]"), [])  # starts empty: the tracker names are offered, not listed
+        self.assertTrue(soup.select_one("#tables").has_attr("hidden"))
+        self.assertFalse(soup.select_one("#empty-box").has_attr("hidden"))
+        picker = {o["data-pick-name"]: o.has_attr("hidden") for o in soup.select("#pick-list [data-pick-name]")}
+        self.assertEqual(picker, {"Camp A": False})
+        self.assertTrue(soup.select_one("#picker").has_attr("hidden"))
+        self.assertEqual(soup.select_one("#buka")["aria-controls"], "picker")
+        self.assertIsNone(soup.select_one("#baru"))  # no free-text name: every campaign comes from the tracker
         weeks = budget.weeks_of_month(self.month)
         heads = [th.get_text(" ", strip=True) for th in soup.select("#t-weeks thead th")][1:]
         self.assertEqual([h.split()[0] for h in heads], [w[0].split("-")[1] for w in weeks])
-        future = [w[0] for w in weeks if w[1] > self.now]
+        future = {w[0] for w in weeks if w[1] > self.now}
+        template = BeautifulSoup(soup.select_one("#tpl-weeks").decode_contents(), "html.parser")
         for key, _, _ in weeks:
-            box = soup.select_one(f'input[name="w_0_{key}"]')
-            self.assertEqual(box.has_attr("disabled"), key in future, key)
+            self.assertEqual(template.select_one(f'input[name="w___I___{key}"]').has_attr("disabled"), key in future, key)
         self.assertIn("Belum ada budget tersimpan untuk Perusahaan 1", soup.get_text())
         self.assertEqual(soup.select_one('input[name="base"]')["value"], "")
         self.assertEqual(len(soup.select("template")), 3)
@@ -188,7 +195,10 @@ class BudgetPageTests(ViewerCase):
         _, soup = self.get(f"?bu=bu1&month={self.month}&saved=1")
         self.assertIn("Budget dan spend Perusahaan 1", soup.select_one(".vw-ok").get_text())
         self.assertEqual(soup.select_one("#total")["value"], "10.000.000")
-        self.assertEqual({i["name"]: i["value"] for i in soup.select("#t-budget input[name^=b_]")}, {"b_0": "6.000.000", "b_1": "3.000.000", "b_2": ""})  # b_2 is the tracker campaign without a budget
+        self.assertEqual({i["name"]: i["value"] for i in soup.select("#t-budget input[name^=b_]")}, {"b_0": "6.000.000", "b_1": "3.000.000"})  # saved campaigns show by themselves
+        self.assertFalse(soup.select_one("#tables").has_attr("hidden"))
+        picker = {o["data-pick-name"]: o.has_attr("hidden") for o in soup.select("#pick-list [data-pick-name]")}
+        self.assertEqual(picker, {"Alpha": True, "Beta": True, "Camp A": False})  # added ones leave the list, the rest stays offered
         hist = [td.get_text() for td in soup.select("section[aria-label='Riwayat budget'] tbody td")]
         self.assertEqual(hist[:3], [budget.month_label(self.month), "Rp 10.000.000", "Rp 3.000.000"])
         self.assertIn("oleh admin", hist[4])
@@ -229,12 +239,24 @@ class BudgetPageTests(ViewerCase):
         self.store.fail_writes, self.store.down = False, True
         self.assertEqual(self.call("GET", "/budget")[0].status, 503)
 
-    def test_a_campaign_added_by_hand_is_saved_and_listed_next_time(self):
-        self.call("POST", "/budget", self.form(n_2="Campaign Baru", total="10.000.000"))
-        self.assertIn("Campaign Baru", self.store.snaps[0]["data"]["campaigns"])
+    def test_an_added_campaign_is_saved_and_listed_next_time_and_gaps_from_removed_rows_are_fine(self):
+        form = self.form(n_5="Campaign Baru", b_5="", total="10.000.000")  # rows 2 to 4 were removed in the browser
+        self.call("POST", "/budget", form)
+        self.assertEqual(sorted(self.store.snaps[0]["data"]["campaigns"]), ["Alpha", "Beta", "Campaign Baru"])
         _, soup = self.get(f"?bu=bu1&month={self.month}")
-        self.assertEqual(sorted(td.get_text() for td in soup.select("#t-budget [data-name]")), ["Alpha", "Beta", "Camp A", "Campaign Baru"])
+        self.assertEqual(sorted(td.get_text() for td in soup.select("#t-budget [data-name]")), ["Alpha", "Beta", "Campaign Baru"])
         self.assertIn("Campaign Baru", [td.get_text() for td in soup.select("#t-month [data-name]")])
+        self.assertEqual(len(soup.select("#t-budget [data-remove]")), 3)
+
+    def test_removing_every_campaign_saves_an_empty_list_and_a_failed_save_keeps_the_rows(self):
+        only_total = {k: v for k, v in self.form().items() if not k[:2] in ("n_", "b_", "m_", "w_")}
+        self.assertEqual(self.call("POST", "/budget", only_total)[0].status, 303)
+        self.assertEqual(self.store.snaps[0]["data"]["campaigns"], {})
+        response, body = self.call("POST", "/budget", self.form(b_1="99.000.000"))
+        soup = BeautifulSoup(body, "html.parser")
+        self.assertEqual(response.status, 422)
+        self.assertEqual([td.get_text() for td in soup.select("#t-budget [data-name]")], ["Alpha", "Beta"])
+        self.assertFalse(soup.select_one("#tables").has_attr("hidden"))
 
     def test_only_admins_reach_the_budget_page(self):
         self.store.create_user("andi", auth.hash_password(USER_PASSWORD), "user", True, [], True)
