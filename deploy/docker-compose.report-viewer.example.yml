@@ -3,7 +3,7 @@
 #   (change only the network name and the container names below to the ones your stack uses)
 #   docker compose -p report-viewer -f docker-compose.report-viewer.local.yml up -d --build
 # Do not publish a port. Cloudflare Tunnel reaches the viewer by name over the shared network:
-#   public hostname officehour.pesankopi.com  ->  service http://report-viewer:8090
+#   public hostname officehours.pesankopi.com  ->  service http://report-viewer:8090
 # Create the four secret files out of band (never commit them); see deploy/VIEWER.md.
 services:
   report-viewer:

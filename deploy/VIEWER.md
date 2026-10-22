@@ -1,4 +1,4 @@
-# Viewer report di officehour.pesankopi.com
+# Viewer report di officehours.pesankopi.com
 
 Halaman web internal untuk melihat report yang sudah disimpan di `marketing_reports`, menekan tombol analisis, dan mengatur target. Setiap orang punya username dan password sendiri. Admin punya akses penuh; pengguna biasa hanya melihat report perusahaan yang diberikan kepadanya.
 
@@ -45,7 +45,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
    `docker compose -p report-viewer -f deploy/docker-compose.report-viewer.local.yml up -d --build`
    Proyek terpisah, jadi stack n8n tidak dibuat ulang. Jangan publikasikan port.
 4. **n8n.** Impor ulang `Report_Analysis_Button_v1.json` (sekarang menerima `targets` dari viewer), aktifkan workflow itu supaya URL produksi `/webhook/report-analysis` berlaku, dan pasang credential Header Auth untuk node *Ask Model* (`Authorization` = `Bearer <API key 9router>`). Model dan alamat router sudah terisi di node *Prepare Analysis Request* (`pesankopi-report`).
-5. **Cloudflare Tunnel.** Di Zero Trust, pada tunnel yang sudah melayani n8n: *Public hostname* `officehour.pesankopi.com` → *Service* `HTTP` `report-viewer:8090`. Container `cloudflared` harus berada di network Docker yang sama dengan `report-viewer`. Selesai; tidak ada port yang dibuka di server.
+5. **Cloudflare Tunnel.** Di Zero Trust, pada tunnel yang sudah melayani n8n: *Public hostname* `officehours.pesankopi.com` → *Service* `HTTP` `report-viewer:8090`. Container `cloudflared` harus berada di network Docker yang sama dengan `report-viewer`. Selesai; tidak ada port yang dibuka di server.
 
 ## Pengguna dan nama perusahaan
 
@@ -101,7 +101,7 @@ Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generato
 
 ## Memeriksa
 
-1. `https://officehour.pesankopi.com/healthz` menjawab `{"status":"ok","database":true}`.
+1. `https://officehours.pesankopi.com/healthz` menjawab `{"status":"ok","database":true}`.
 2. Membuka `/` tanpa masuk mengarah ke `/login`; username atau password salah ditolak; lima kali salah mengunci.
 3. Setelah masuk, Daftar report menampilkan report yang sudah dibuat lewat n8n.
 4. Buka satu report: bagian atas memuat tombol analisis, tabel Campaign Hardware punya kolom Target dan Progress.
