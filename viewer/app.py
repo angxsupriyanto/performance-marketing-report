@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, actions, analysis_edits, auth, budget, pages, performance, performance_pages, targets  # noqa: E402
+from viewer import access, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -334,6 +334,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/":
                 status = self.list_page(csrf, nonce)
                 return
+            elif path.startswith("/report/") and path.endswith("/pdf"):
+                status = self.report_pdf(path)
+                return
             elif path.startswith("/report/"):
                 status = self.report_page(path, csrf, nonce)
                 return
@@ -494,6 +497,52 @@ class Handler(BaseHTTPRequestHandler):
             rows = None
         document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view), actions=actions_block)
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
+        return 200
+
+    def report_pdf(self, path: str) -> int:
+        """The report page as a PDF file: the same data, text and access rules as the page, without the buttons that only work on a screen."""
+        parts = path.split("/")
+        if len(parts) != 5 or not BU.fullmatch(parts[2]) or not PERIOD.fullmatch(parts[3]):
+            raise HttpError(404, "report tidak ditemukan")
+        bu, period = parts[2], parts[3]
+        if not access.can_see(self.user, bu):
+            raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke report perusahaan ini.")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab; coba lagi")
+        view = report_view.extract_view(report["html"]) if report else None
+        if view is None:
+            raise HttpError(404, "report tidak ditemukan atau dibuat oleh generator versi lama")
+        try:
+            edits = self.cfg.store.latest_edits(report["run_id"])
+        except Exception:  # noqa: BLE001 - without the edit table the AI text still prints
+            edits = []
+        analysis, _ = analysis_edits.effective(report, edits, report_view.analysis_keys(view), False, pages.dt_text)
+        analysis = {k: v for k, v in analysis.items() if not k.startswith("_")}  # plain text: no chips, no provenance, no controls
+        try:
+            rows = self.cfg.store.latest_targets(bu)
+        except Exception:  # noqa: BLE001
+            rows = None
+        spend = self.report_budget(report, view)
+        spend["admin"] = False
+        try:
+            saved = self.cfg.store.latest_actions(bu, period)
+            block = {"items": list(saved["items"]) if saved else [], "saved_by": saved["saved_by"] if saved else None,
+                     "saved_at": pages.dt_text(saved["saved_at"]) if saved else None, "can_edit": False}
+        except Exception:  # noqa: BLE001
+            block = None
+        html_text = report_view.print_document(view, targets.build_tg(view, rows), analysis, self.names(), spend, block, pages.dt_text(report["generated_at"]))
+        try:
+            data = pdf.render_pdf(html_text)
+        except pdf.PdfBusy as exc:
+            self.json(429, {"error": str(exc)})
+            return 429
+        except pdf.PdfError as exc:
+            self.json(503, {"error": str(exc)})
+            return 503
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{self.names().get(bu, bu)}-{period}").strip("-") or f"{bu}-{period}"
+        self.send(200, data, "application/pdf", extra={"Content-Disposition": f'attachment; filename="report-{slug}.pdf"'})
         return 200
 
     def start_analysis(self, form: dict) -> int:

@@ -211,6 +211,19 @@ ANALYSIS_JS = """
         poll();
       }).catch(function(){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal','Tidak bisa menghubungi server. Coba lagi.','#ac3d3d');});
   }
+  /* the report as a PDF: fetched in the page so that a wait and a failure can be shown, then saved from memory */
+  var pdfBtn=document.getElementById('vw-pdf'),pdfMsg=document.getElementById('vw-pdf-msg');
+  if(pdfBtn){pdfBtn.addEventListener('click',function(){
+    pdfMsg.hidden=true;pdfBtn.disabled=true;pdfBtn.textContent='Membuat PDF...';
+    function done(){pdfBtn.disabled=false;pdfBtn.textContent='Simpan sebagai PDF';}
+    function fail(m){done();pdfMsg.textContent=m;pdfMsg.hidden=false;}
+    fetch(pdfBtn.dataset.href,{credentials:'same-origin'}).then(function(r){
+      if(!r.ok){return r.json().catch(function(){return {};}).then(function(j){fail(j.error||(r.status===403?'Tidak ada akses ke report ini.':'PDF tidak berhasil dibuat. Coba lagi.'));});}
+      var name=((r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)||[])[1]||'report.pdf';
+      return r.blob().then(function(b){var url=URL.createObjectURL(b),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+        setTimeout(function(){URL.revokeObjectURL(url);},4000);done();});
+    }).catch(function(){fail('Tidak bisa menghubungi server. Coba lagi.');});
+  });}
   /* the list of actions: one form for both "create analysis" and "change actions" */
   var rowsBox=form?form.querySelector('[data-role=rows]'):null,tpl=document.getElementById('vw-row-tpl'),formError=form?form.querySelector('[data-role=form-error]'):null;
   function renumber(){rowsBox.querySelectorAll('[data-row]').forEach(function(r,i){var n=i+1;
@@ -325,7 +338,10 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dic
         '<div class="vw-chrome"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span>'
         f'<span aria-current="page" style="color:#17283e">{escape(label)}</span></nav>'
         f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(name)}</h1>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:8px 24px">'
         f'<dl class="vw-dl"><div><dt>Periode</dt><dd>{escape(period)}</dd></div><div><dt>Tanggal</dt><dd style="font-weight:400">{escape(range_text(report["period_start"], report["period_end"]))}</dd></div></dl>'
+        f'<div style="margin-bottom:24px"><button type="button" id="vw-pdf" class="vw-btn alt" data-href="/report/{escape(bu)}/{escape(period)}/pdf">Simpan sebagai PDF</button>'
+        '<p id="vw-pdf-msg" role="alert" hidden class="vw-alert" style="margin:8px 0 0;max-width:320px"></p></div></div>'
         + (f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" data-edited="{edited}" style="margin-bottom:24px">'
         f'<div class="vw-bar"><div style="flex:1 1 360px;min-width:0"><div data-role="title" style="font-weight:600;color:{color}">{escape(head)}</div><div data-role="text">{escape(text)}</div></div>'
         + (f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div>' if user["role"] == "admin"

@@ -14,6 +14,8 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 
+from bs4 import BeautifulSoup
+
 VIEW_ID = "report-view"
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 NUMBER_WORDS = {1: "Satu", 2: "Dua", 3: "Tiga", 4: "Empat", 5: "Lima", 6: "Enam", 7: "Tujuh"}
@@ -576,7 +578,7 @@ def actions_section(view: dict, actions: dict) -> str:
 
 
 def next_action_section(analysis: dict | None) -> str:
-    return (f'<div style="margin-top: 32px">{h3("Next Action")}<p style="margin: 0 0 12px; color: {MUTED}">Rekomendasi tindak lanjut untuk periode berikutnya, dari analisis dan bisa diedit admin.</p>'
+    return (f'<div data-role="next-action" style="margin-top: 32px">{h3("Next Action")}<p style="margin: 0 0 12px; color: {MUTED}">Rekomendasi tindak lanjut untuk periode berikutnya, dari analisis dan bisa diedit admin.</p>'
             f'{analysis_panel("Rekomendasi dari analisis", "next_action", analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px")}</div>')
 
 
@@ -642,6 +644,44 @@ def render_document(view: dict, tg: dict | None = None, analysis: dict | None = 
         f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget, actions)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
+
+
+PRINT_CSS = """
+@page { size: A4; margin: 12mm }
+body { background: #ffffff; -webkit-print-color-adjust: exact; print-color-adjust: exact }
+.rp-main { max-width: none; padding: 0 }
+.rp-main { font-size: 12px }
+section[aria-label=Report] > h2 { display: none }
+section[aria-label=Report] > div { border: 0 !important; padding: 0 !important; background: transparent !important }
+.list th, .list td { padding: 8px 8px }
+.list .num { white-space: nowrap }
+.cards > div, .split, .tablebox, tr, [data-panel], [data-role=next-action] { break-inside: avoid }
+h2, h3, h4, h3 + p { break-after: avoid }
+"""
+
+
+def print_document(view: dict, tg: dict | None = None, analysis: dict | None = None, names: dict | None = None, budget: dict | None = None, actions: dict | None = None,
+                   generated: str = "") -> str:
+    """The report as it is printed to PDF: everything the page shows, minus what only works on a screen (the same-week switch, edit and
+    budget links, buttons). The list views that the switch would hide are dropped, so the print always shows the full period. No script runs."""
+    soup = BeautifulSoup(render_document(view, tg, analysis, True, names, budget, actions), "html.parser")
+    for tag in soup.select("script"):
+        tag.decompose()
+    for tag in soup.select("[data-cohort-view=same], [data-cohort-note], button, [data-role=controls], [data-editor]"):
+        tag.decompose()
+    for tag in soup.select("[data-cohort-toggle]"):
+        group = tag.find_parent("div")
+        (group or tag).decompose()
+    for link in soup.select('a[href^="/"]'):
+        link.unwrap() if link.get_text(strip=True) else link.decompose()
+    for tag in soup.select("[data-cohort-view=all]"):
+        tag.attrs.pop("hidden", None)
+    soup.head.append(BeautifulSoup(f"<style>{PRINT_CSS}</style>", "html.parser"))
+    head = (f'<div style="margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid {LINE}"><div style="font: 600 20px/1.3 Inter, Arial, sans-serif; color: {INK}">'
+            f'{e(company_name(view["bu"], names))} · {e(view["label"])}</div><div style="color: {MUTED}">{e(view["range"])}'
+            f'{" · Dibuat " + e(generated) if generated else ""}</div></div>')
+    soup.select_one("main").insert(0, BeautifulSoup(head, "html.parser"))
+    return str(soup)
 
 
 _VIEW = re.compile(r'<script type="application/json" id="' + VIEW_ID + r'"[^>]*>(.*?)</script>', re.S)

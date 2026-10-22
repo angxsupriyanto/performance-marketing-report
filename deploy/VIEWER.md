@@ -54,6 +54,14 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 - **Next Action** adalah panel analisis biasa di paling bawah report (penanda AI atau Edited, admin bisa mengedit atau memulihkan versi AI). Report yang dibuat sebelum pembaruan ini belum punya slot untuk panel itu sampai Report Generate dijalankan lagi.
 - Instruksi analisis (`n8n/prompts/analysis_v2.md`) memuat pengetahuan internal bahwa target utama KPI BU1 adalah SQL Value (bukan Deal Won) dan KPI BU2 adalah volume SQL dari campaign Ecosystem. Keduanya hanya ada di instruksi, tidak ditulis ke hasil analisis atau report.
 
+## Simpan sebagai PDF
+
+- Tombol **Simpan sebagai PDF** ada di halaman report untuk semua pengguna yang punya akses ke report itu. Server membuat file A4 dari halaman yang sama (data, teks analisis hasil edit, Action, Next Action, budget), tanpa tombol dan tautan yang hanya berguna di layar, dan selalu memuat daftar penuh satu periode (bukan hasil saklar submission). Nama file: `report-<perusahaan>-<periode>.pdf`.
+- Dibuat oleh Chromium tanpa tampilan di dalam container viewer, satu proses singkat per klik (kira-kira 3 sampai 10 detik), tanpa jaringan dan tanpa profil yang disimpan. Hanya satu PDF dibuat sekaligus; klik kedua saat yang pertama berjalan diminta mengulang beberapa detik kemudian.
+- **Image viewer sekarang memasang Chromium** (tambah kira-kira 300 sampai 400 MB; `docker build` butuh internet untuk `apt`). `docker compose ... up -d --build` yang biasa sudah cukup, tanpa mengubah file compose. Untuk image `report-service`, yang tidak membutuhkannya, bangun dengan `--build-arg INSTALL_CHROMIUM=false` (di compose: `build.args.INSTALL_CHROMIUM: "false"`).
+- Container viewer berjalan dengan filesystem hanya-baca; Chromium menulis ke `/tmp` (tmpfs) dan membersihkannya sendiri. Bila pembuatan PDF sering gagal karena memori, naikkan batas memori container (Chromium memakai kira-kira 300 MB saat mencetak).
+- Lokasi biner bisa diganti dengan `VIEWER_CHROMIUM` (bawaan `chromium`).
+
 ## Pengguna dan nama perusahaan
 
 - Masuk pertama kali dengan username `admin` dan password dari `viewer_password_hash`. Segera buka **Pengguna** untuk menambah orang lain (username 3 sampai 32 karakter huruf kecil, angka, titik, garis bawah, strip; tidak bisa diubah setelah dibuat) dan mengganti password admin.
