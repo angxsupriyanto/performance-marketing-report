@@ -78,5 +78,10 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
   UNION ALL SELECT 22, 'performance_snapshots accepts the v2 lead-row shape (constraint performance_snapshots_data_shape)',
          EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'performance_snapshots_data_shape' AND conrelid = to_regclass('reports.performance_snapshots') AND contype = 'c'
                  AND pg_get_constraintdef(oid) LIKE '%dims%')
+  UNION ALL SELECT 23, 'report_actions exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.report_actions') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

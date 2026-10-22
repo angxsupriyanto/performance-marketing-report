@@ -72,6 +72,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -361,6 +363,32 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM reports.budget_snapshots").fetchone()[0], 2)
             with self.assertRaises(pe.InsufficientPrivilege):
                 conn.execute("INSERT INTO reports.budget_snapshots (bu, month, data, saved_by) VALUES ('bu1', '2026-10', '{\"campaigns\": {}}', 'x')")
+
+    def test_report_actions_are_append_only_per_period_and_the_newest_list_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_actions("bu1", "2026-W42"))
+        store.add_actions("bu1", "2026-W42", [{"action": "Naikkan bid", "campaign": "Camp A", "note": ""}], "admin")
+        store.add_actions("bu1", "2026-W42", [{"action": "Ganti materi", "campaign": "", "note": "mulai Selasa"}, {"action": "Pause iklan lama", "campaign": "Camp B", "note": ""}], "andi")
+        latest = store.latest_actions("bu1", "2026-W42")
+        self.assertEqual([i["action"] for i in latest["items"]], ["Ganti materi", "Pause iklan lama"])
+        self.assertEqual(latest["saved_by"], "andi")
+        store.add_actions("bu1", "2026-W42", [], "admin")  # removing everything is a save too
+        self.assertEqual(store.latest_actions("bu1", "2026-W42")["items"], [])
+        self.assertIsNone(store.latest_actions("bu2", "2026-W42"))
+        self.assertIsNone(store.latest_actions("bu1", "2026-W41"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_actions").fetchone()[0], 3)  # every version kept
+            for statement in ("UPDATE reports.report_actions SET saved_by = 'x'", "DELETE FROM reports.report_actions", "TRUNCATE reports.report_actions"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_actions").fetchone()[0], 3)
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES ('bu1', '2026-W42', '[]', 'x')")
+        for bad in (("bu1", "2026-W99x", []), ("BU 1", "2026-W42", []), ("bu1", "2026-W42", {"action": "x"}), ("bu1", "2026-W42", [{"action": "x", "campaign": "", "note": ""}] * 31)):
+            with self.assertRaises(pe.CheckViolation):
+                store.add_actions(bad[0], bad[1], bad[2], "admin")
 
     def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
         import psycopg.errors as pe

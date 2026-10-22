@@ -173,6 +173,11 @@ ANALYSIS_CSS = """
 .vw-chrome{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 0}
 .vw-chrome *{box-sizing:border-box}
 .vw-chrome a{color:#2159a9}
+.vw-arow{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) minmax(0,2fr) 72px;gap:8px;align-items:center;margin-bottom:8px}
+.vw-arow-head{color:#607188}
+.vw-in{width:100%;height:44px;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif}
+.vw-linkbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}
+@media (max-width:760px){.vw-arow{grid-template-columns:1fr}.vw-arow-head{display:none}}
 """
 
 ANALYSIS_JS = """
@@ -181,7 +186,7 @@ ANALYSIS_JS = """
   var csrf=document.querySelector('meta[name=csrf]').content;
   var bu=box.dataset.bu,period=box.dataset.period,timer=null;
   var title=box.querySelector('[data-role=title]'),text=box.querySelector('[data-role=text]'),btn=box.querySelector('button');
-  var confirmBox=document.getElementById('vw-confirm');
+  var form=document.getElementById('vw-form'),mode='generate';
   function show(kind,head,body,color){title.textContent=head;title.style.color=color||'#17283e';text.textContent=body;
     box.setAttribute('role',kind==='error'?'alert':'status');}
   function post(url,payload){
@@ -197,24 +202,50 @@ ANALYSIS_JS = """
         show('error','Analisis gagal',s.error||'Analisis tidak selesai. Report numerik tidak berubah.','#ac3d3d');
       }).catch(function(){timer=setTimeout(poll,8000);});
   }
-  function start(){
-    if(confirmBox)confirmBox.hidden=true;
+  function start(items){
+    if(form)form.hidden=true;
     btn.disabled=true;btn.textContent='Menganalisis';
     show('status','Menganalisis','Mengirim ringkasan angka ke Claude dan menyisipkan hasilnya ke report. Jangan tutup halaman ini.');
-    post('/api/analysis',{bu:bu,period:period}).then(function(res){
+    post('/api/analysis',{bu:bu,period:period,items:JSON.stringify(items)}).then(function(res){
         if(!res.ok){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal',res.body.error||'Permintaan ditolak.','#ac3d3d');return;}
         poll();
       }).catch(function(){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal','Tidak bisa menghubungi server. Coba lagi.','#ac3d3d');});
   }
-  if(btn){
-    btn.addEventListener('click',function(){
-      if(confirmBox&&Number(box.dataset.edited)>0){confirmBox.hidden=false;confirmBox.querySelector('button').focus();return;}
-      start();
+  /* the list of actions: one form for both "create analysis" and "change actions" */
+  var rowsBox=form?form.querySelector('[data-role=rows]'):null,tpl=document.getElementById('vw-row-tpl'),formError=form?form.querySelector('[data-role=form-error]'):null;
+  function renumber(){rowsBox.querySelectorAll('[data-row]').forEach(function(r,i){var n=i+1;
+    r.querySelector('input[data-f=action]').setAttribute('aria-label','Action '+n);r.querySelector('select').setAttribute('aria-label','Campaign untuk action '+n);
+    r.querySelector('input[data-f=note]').setAttribute('aria-label','Catatan untuk action '+n);r.querySelector('[data-act=row-remove]').setAttribute('aria-label','Hapus action '+n);});}
+  function addRow(){rowsBox.appendChild(tpl.content.cloneNode(true));renumber();}
+  function items(){return [].slice.call(rowsBox.querySelectorAll('[data-row]')).map(function(r){return {action:r.querySelector('input[data-f=action]').value,campaign:r.querySelector('select').value,note:r.querySelector('input[data-f=note]').value};});}
+  function openForm(kind){
+    mode=kind;formError.hidden=true;
+    form.querySelector('[data-act=form-submit]').textContent=kind==='edit'?'Simpan action':(box.dataset.state==='done'?'Buat ulang analisis':'Buat analisis');
+    form.querySelector('[data-role=warn]').hidden=!(kind==='generate'&&Number(box.dataset.edited)>0);
+    if(!rowsBox.querySelector('[data-row]'))addRow();
+    form.hidden=false;form.querySelector('input[data-f=action]').focus();
+    if(kind==='edit')form.scrollIntoView({block:'center'});
+  }
+  function closeForm(){form.hidden=true;}
+  if(form){
+    form.addEventListener('click',function(ev){
+      var el=ev.target.closest('[data-act]');if(!el)return;var act=el.dataset.act;
+      if(act==='row-add'){addRow();rowsBox.lastElementChild.querySelector('input').focus();return;}
+      if(act==='row-remove'){var row=el.closest('[data-row]');row.remove();if(!rowsBox.querySelector('[data-row]'))addRow();renumber();return;}
+      if(act==='form-cancel'){closeForm();if(btn)btn.focus();return;}
+      if(act==='form-submit'){
+        if(mode==='generate'){start(items());return;}
+        el.disabled=true;
+        post('/api/actions',{bu:bu,period:period,items:JSON.stringify(items())}).then(function(res){
+          if(res.ok){location.reload();return;}
+          el.disabled=false;formError.textContent=res.body.error||'Tidak tersimpan.';formError.hidden=false;
+        }).catch(function(){el.disabled=false;formError.textContent='Tidak bisa menghubungi server. Coba lagi.';formError.hidden=false;});
+      }
     });
-    if(confirmBox){
-      confirmBox.querySelector('[data-act=continue]').addEventListener('click',start);
-      confirmBox.querySelector('[data-act=abort]').addEventListener('click',function(){confirmBox.hidden=true;btn.focus();});
-    }
+    document.addEventListener('click',function(ev){if(ev.target.closest('[data-act=actions-open]'))openForm('edit');});
+  }
+  if(btn){
+    btn.addEventListener('click',function(){if(form)openForm('generate');else start([]);});
     if(box.dataset.state==='running'){btn.disabled=true;btn.textContent='Menganalisis';poll();}
   }
   function parts(el){var panel=el.closest('[data-panel]');return {panel:panel,key:el.dataset.key,
@@ -245,7 +276,37 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
     return "done" if has_analysis else "none"
 
 
-def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0) -> str:
+def action_form(label: str, items: list[dict], campaigns: list[str], budget_note: str) -> str:
+    """The admin-only form for the actions of the period; the viewer's script opens it from the analysis button or from the Action section."""
+    names = list(dict.fromkeys(c for c in campaigns if c))
+    for item in items:
+        if item.get("campaign") and item["campaign"] not in names:
+            names.append(item["campaign"])  # a saved name that left the tracker must not silently vanish from its row
+
+    def row(item: dict) -> str:
+        options = '<option value="">Tidak spesifik</option>' + "".join(f'<option value="{escape(c)}"{" selected" if c == item.get("campaign") else ""}>{escape(c)}</option>' for c in names)
+        return (f'<div class="vw-arow" data-row><input class="vw-in" data-f="action" type="text" maxlength="300" aria-label="Action" placeholder="Contoh: naikkan bid kata kunci brand" value="{escape(item.get("action", ""))}">'
+                f'<select class="vw-in" aria-label="Campaign">{options}</select>'
+                f'<input class="vw-in" data-f="note" type="text" maxlength="300" aria-label="Catatan" placeholder="Catatan singkat" value="{escape(item.get("note", ""))}">'
+                '<button type="button" class="vw-linkbtn" data-act="row-remove" style="width:72px">Hapus</button></div>')
+
+    rows = "".join(row(i) for i in items) or row({})
+    return (
+        '<div id="vw-form" hidden role="group" aria-labelledby="vw-form-title" class="vw-box vw-pad" style="margin-top:16px;border-color:#6f8199">'
+        f'<h2 id="vw-form-title" class="vw-h2" style="margin-bottom:4px">Action yang sudah dilakukan di {escape(label)}</h2>'
+        '<p style="margin:0 0 12px;color:#607188">Tulis action yang dijalankan pada periode ini, misalnya menaikkan bid atau mengganti materi iklan. Isian ini tersimpan di report dan ikut menjadi pertimbangan analisis. Boleh dikosongkan.</p>'
+        '<div data-role="warn" role="alert" hidden style="margin-bottom:12px;padding:10px 12px;border:1px solid #6f8199;border-radius:6px;color:#17283e">Ada panel yang sudah diedit. Membuat ulang analisis menggantikan teks yang tampil dengan versi AI baru, termasuk panel yang sudah diedit. Versi hasil edit tetap tersimpan di riwayat.</div>'
+        '<div class="vw-arow vw-arow-head" aria-hidden="true"><span>Action</span><span>Campaign (opsional)</span><span>Catatan (opsional)</span><span></span></div>'
+        f'<div data-role="rows">{rows}</div><template id="vw-row-tpl">{row({})}</template>'
+        '<button type="button" class="vw-linkbtn" data-act="row-add" style="justify-content:flex-start">+ Tambah action</button>'
+        f'<p style="margin:8px 0 12px;color:#607188">{escape(budget_note)}</p>'
+        '<p data-role="form-error" role="alert" hidden class="vw-alert" style="margin:0 0 12px"></p>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" class="vw-btn" data-act="form-submit">Buat analisis</button>'
+        '<button type="button" class="vw-linkbtn" data-act="form-cancel">Batal</button></div></div>'
+    )
+
+
+def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0, form_html: str = "") -> str:
     bu, period = report["bu"], report["period"]
     label = f"{name} {period}"
     if state == "running":
@@ -270,11 +331,7 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dic
         + (f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div>' if user["role"] == "admin"
            else '<div style="color:#607188">Hanya admin yang bisa membuat atau membuat ulang analisis.</div>')
         + '</div>'
-        + ('<div id="vw-confirm" role="alert" hidden class="vw-box vw-pad" style="margin-top:16px;border-color:#6f8199"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Ada panel yang sudah diedit</div>'
-           '<div style="margin-bottom:12px">Membuat ulang analisis menggantikan teks yang tampil dengan versi AI baru, termasuk panel yang sudah diedit. Versi hasil edit tetap tersimpan di riwayat.</div>'
-           '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" data-act="continue" class="vw-btn">Lanjutkan buat ulang</button>'
-           '<button type="button" data-act="abort" style="display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer">Batal</button></div></div>'
-           if user["role"] == "admin" else "")
+        + (form_html if user["role"] == "admin" else "")
         + '</section>')
         + '</div>'
     )

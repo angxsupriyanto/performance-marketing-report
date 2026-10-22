@@ -68,7 +68,7 @@ class ReportTests(unittest.TestCase):
         view, _, out = self.build("bu1", "2026-W39")
         keys = apply_analysis.analysis_keys(out.read_text())
         self.assertEqual(keys, view["analysis_keys"])
-        self.assertEqual(keys, ["executive_summary", "hardware_summary", "hardware_dashcam", "hardware_gps_tracker", "hardware_fuel", "hardware_mdvr", "hardware_obd"])
+        self.assertEqual(keys, ["executive_summary", "hardware_summary", "hardware_dashcam", "hardware_gps_tracker", "hardware_fuel", "hardware_mdvr", "hardware_obd", "next_action"])
         final = apply_analysis.apply_analysis(out.read_text(), {"hardware_gps_tracker": "GPS naik"})
         self.assertIn("GPS naik", BeautifulSoup(final, "html.parser").select_one('[data-analysis="hardware_gps_tracker"]').get_text())
 
@@ -113,7 +113,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(view["progress"]["year"]["actual"], 1)
         self.assertEqual(view["focus"]["rows"], [{"company": "Co3", "industry": "Mfg", "date": "2026-09-25", "value": 5000000}])
         self.assertEqual(view["won_list"]["rows"], [{"company": "Co5", "industry": "Mfg", "campaign": "Camp A", "value": 2500000, "timing": "4 hari", "same": True}])
-        self.assertEqual(apply_analysis.analysis_keys(out.read_text()), ["executive_summary"])
+        self.assertEqual(apply_analysis.analysis_keys(out.read_text()), ["executive_summary", "next_action"])
 
     def test_bu2_lists_say_so_when_the_period_has_none(self):
         leads = [lead("1", "BU2", "GPS", "9/21/2026", mql="9/22/2026", sql_date="9/23/2026", contract="Rp 3.000.000")]

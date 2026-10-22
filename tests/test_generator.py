@@ -74,7 +74,7 @@ class ReportTests(unittest.TestCase):
             self.assertIn("Backlog", sql_table.select_one("tbody").get_text())
             self.assertNotIn("<script>alert(1)</script>", out.read_text())
             panels = soup.select("[data-analysis]")
-            self.assertEqual(sorted(p["data-analysis"] for p in panels), sorted(["executive_summary", "hardware_summary"] + ["hardware_" + n for n in ("dashcam", "gps_tracker", "fuel", "mdvr", "obd")]))
+            self.assertEqual(sorted(p["data-analysis"] for p in panels), sorted(["executive_summary", "hardware_summary", "next_action"] + ["hardware_" + n for n in ("dashcam", "gps_tracker", "fuel", "mdvr", "obd")]))
             self.assertTrue(all(p.get_text() == "Kosong sampai analisis dibuat." for p in panels))
 
             monthly = root / "monthly.html"

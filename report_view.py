@@ -552,7 +552,35 @@ def budget_section(b: dict, label: str) -> str:
             f'<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px">{"".join(cards)}</div>{bar}{table}</section>')
 
 
-def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None) -> str:
+def actions_section(view: dict, actions: dict) -> str:
+    """What the team did in this period, shown under the report. `actions` comes from the viewer: {items, saved_by, saved_at, can_edit};
+    admins get a link that opens the form in the analysis box (the viewer's script handles the click)."""
+    label = view["label"]
+    items = actions.get("items") or []
+    if items:
+        rows = "".join(
+            f'<tr><td data-label="Action">{e(i["action"])}</td><td data-label="Campaign">{e(i.get("campaign") or "-")}</td><td data-label="Catatan">{e(i.get("note") or "-")}</td></tr>' for i in items
+        )
+        body = (f'<div class="tablebox"><table class="list"><caption class="sr">Action yang dilakukan {e(label)}</caption><thead><tr><th scope="col">Action</th><th scope="col">Campaign</th><th scope="col">Catatan</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table></div>')
+        if actions.get("saved_by"):
+            body += f'<div style="margin-top: 8px; color: {MUTED}; font-size: 12.5px">Diubah oleh {e(actions["saved_by"])} · {e(actions.get("saved_at") or "")}</div>'
+    else:
+        body = f'<div style="color: {MUTED}">Belum ada action tercatat untuk {e(label)}.</div>'
+    edit = ""
+    if actions.get("can_edit"):
+        edit = (f'<button type="button" data-act="actions-open" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: {BLUE}; '
+                f'font: 600 14px Inter, Arial, sans-serif; cursor: pointer">{"Ubah action" if items else "Tambah action"}</button>')
+    return (f'<div data-role="actions" style="margin-top: 32px">{h3("Action " + label)}<p style="margin: 0 0 12px; color: {MUTED}">Action yang dilakukan pada periode ini. Ikut menjadi pertimbangan analisis.</p>'
+            f'{body}{edit}</div>')
+
+
+def next_action_section(analysis: dict | None) -> str:
+    return (f'<div style="margin-top: 32px">{h3("Next Action")}<p style="margin: 0 0 12px; color: {MUTED}">Rekomendasi tindak lanjut untuk periode berikutnya, dari analisis dan bisa diedit admin.</p>'
+            f'{analysis_panel("Rekomendasi dari analisis", "next_action", analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px")}</div>')
+
+
+def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None, actions: dict | None = None) -> str:
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
@@ -594,20 +622,24 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         sections.append(won_section(view))
     if view.get("hardware"):
         sections.append(hardware_section(view, tg, analysis, company))
+    if actions is not None:
+        sections.append(actions_section(view, actions))
+    sections.append(next_action_section(analysis))
     return (
         f'<section aria-label="Report"><h2 style="margin: 0 0 16px; font: 600 16px/1.4 Inter, Arial, sans-serif; color: {INK}">Report</h2>'
         f'<div style="background: #ffffff; border: 1px solid {LINE}; border-radius: 6px; padding: 24px">{"".join(sections)}</div></section>'
     )
 
 
-def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None) -> str:
+def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None,
+                    actions: dict | None = None) -> str:
     data = json.dumps(view, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     title = f"{company_name(view['bu'], names)} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
     main_style = ' style="padding-top: 24px"' if standalone else ""
     return (
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
-        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget)}</main>'
+        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget, actions)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
 
@@ -632,4 +664,5 @@ def analysis_keys(view: dict) -> list[str]:
     if view.get("hardware"):
         keys.append("hardware_summary")
         keys.extend("hardware_" + h["slug"] for h in view["hardware"])
+    keys.append("next_action")
     return keys

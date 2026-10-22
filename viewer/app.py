@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, analysis_edits, auth, budget, pages, performance, performance_pages, targets  # noqa: E402
+from viewer import access, actions, analysis_edits, auth, budget, pages, performance, performance_pages, targets  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -123,11 +123,11 @@ class Jobs:
             self.items[key] = {"state": "failed" if error else "done", "error": error, "started": self.items.get(key, {}).get("started", 0)}
 
 
-def call_n8n(cfg: Config, bu: str, period: str, context: dict) -> str:
-    """Returns an error text, or "" when n8n answered 2xx."""
+def call_n8n(cfg: Config, bu: str, period: str, context: dict, extra: dict | None = None) -> str:
+    """Returns an error text, or "" when n8n answered 2xx. `extra` adds the team's actions and the budget figures to the request."""
     if not cfg.n8n_url or not cfg.n8n_token:
         return "Alamat atau token webhook n8n belum diatur pada layanan viewer."
-    body = json.dumps({"bu": bu, "period": period, "requested_by": "viewer", "targets": context}, default=generate_report.json_default).encode()
+    body = json.dumps({"bu": bu, "period": period, "requested_by": "viewer", "targets": context, **(extra or {})}, default=generate_report.json_default).encode()
     request = urllib.request.Request(cfg.n8n_url, data=body, method="POST", headers={"Content-Type": "application/json", cfg.n8n_header: cfg.n8n_prefix + cfg.n8n_token})
     try:
         with urllib.request.urlopen(request, timeout=ANALYSIS_TIMEOUT_SECONDS) as response:
@@ -148,11 +148,11 @@ def call_n8n(cfg: Config, bu: str, period: str, context: dict) -> str:
         return "n8n tidak menjawab dalam batas waktu."
 
 
-def run_analysis(cfg: Config, jobs: Jobs, bu: str, period: str, context: dict) -> None:
+def run_analysis(cfg: Config, jobs: Jobs, bu: str, period: str, context: dict, extra: dict | None = None) -> None:
     key = (bu, period)
     try:
         before = cfg.store.latest_analysis_time(bu, period)
-        error = call_n8n(cfg, bu, period, context)
+        error = call_n8n(cfg, bu, period, context, extra)
         if not error:
             after = cfg.store.latest_analysis_time(bu, period)
             if after is None or (before is not None and after <= before):
@@ -311,6 +311,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_edit(form)
                     return
+                if path == "/api/actions":
+                    self.need_admin()
+                    status = self.save_actions(form)
+                    return
                 if path in ("/targets/year", "/targets/month"):
                     self.need_admin()
                     status = self.save_targets(path.rsplit("/", 1)[1], form, csrf, nonce)
@@ -462,7 +466,21 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 - without the edit table the AI text still shows, read-only
                 edits, edits_ok = [], False
             analysis, edited = analysis_edits.effective(report, edits, report_view.analysis_keys(view), access.is_admin(self.user) and edits_ok, pages.dt_text)
-        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited)
+        saved_actions, actions_block, form_html = None, None, ""
+        if view is not None:
+            try:
+                saved_actions = self.cfg.store.latest_actions(bu, period)
+                items = list(saved_actions["items"]) if saved_actions else []
+                actions_block = {"items": items, "saved_by": saved_actions["saved_by"] if saved_actions else None,
+                                 "saved_at": pages.dt_text(saved_actions["saved_at"]) if saved_actions else None, "can_edit": access.is_admin(self.user)}
+            except Exception:  # noqa: BLE001 - without the table the report still shows; the Action section just stays out
+                items, actions_block = [], None
+            if access.is_admin(self.user):
+                spend = self.report_budget(report, view)
+                note = (f"Budget dan spend {spend['month_label']} ikut dikirim sebagai pertimbangan analisis." if spend.get("state") == "ok"
+                        else f"Budget {spend['month_label']} belum diatur, jadi analisis berjalan tanpa data budget dan spend.")
+                form_html = pages.action_form(view["label"], items, view.get("campaign_names", []), note)
+        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited, form_html)
         if view is None:
             note = (
                 '<main class="vw-main" style="padding-top:0"><div class="vw-box vw-pad" role="alert"><div class="vw-h2">Report ini dibuat oleh generator versi lama</div>'
@@ -474,7 +492,7 @@ class Handler(BaseHTTPRequestHandler):
             rows = self.cfg.store.latest_targets(bu)
         except Exception:  # noqa: BLE001
             rows = None
-        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view))
+        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view), actions=actions_block)
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
 
@@ -485,12 +503,51 @@ class Handler(BaseHTTPRequestHandler):
         report = self.cfg.store.get_report(bu, period)
         if report is None:
             raise HttpError(404, "belum ada report numerik; jalankan Report Generate di n8n dahulu")
+        items = None
+        if "items" in form:  # the form sent the list: check it before anything starts, then keep it as the period's list
+            try:
+                items = actions.clean_items(form["items"])
+            except ValueError as exc:
+                raise HttpError(400, str(exc))
         if not self.jobs.start((bu, period)):
             raise HttpError(409, "analisis untuk report ini sedang berjalan")
-        context = targets.context_for_analysis(facts_of(report), self.cfg.store.latest_targets(bu))
-        threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context), daemon=True).start()
+        try:
+            if items is not None:
+                self.cfg.store.add_actions(bu, period, items, self.user["username"])
+            else:
+                saved = self.cfg.store.latest_actions(bu, period)
+                items = list(saved["items"]) if saved else []
+            view = report_view.extract_view(report["html"])
+            budget_ctx = budget.analysis_context(self.report_budget(report, view or {}))
+            context = targets.context_for_analysis(facts_of(report), self.cfg.store.latest_targets(bu))
+        except Exception:  # noqa: BLE001 - release the job, otherwise this report could never be analysed again
+            self.jobs.finish((bu, period), "Action atau data pendukung tidak bisa disimpan atau dimuat. Coba lagi.")
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba lagi.")
+        extra = {"actions": items, "budget": budget_ctx}
+        threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202
+
+    def save_actions(self, form: dict) -> int:
+        bu, period = form.get("bu", ""), form.get("period", "")
+        if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        if report is None:
+            raise HttpError(404, "report tidak ditemukan")
+        try:
+            items = actions.clean_items(form.get("items", "[]"))
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        try:
+            self.cfg.store.add_actions(bu, period, items, self.user["username"])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        self.json(200, {"ok": True})
+        return 200
 
     def save_edit(self, form: dict) -> int:
         bu, period, key = form.get("bu", ""), form.get("period", ""), form.get("key", "")

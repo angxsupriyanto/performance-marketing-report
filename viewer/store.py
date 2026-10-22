@@ -134,6 +134,18 @@ class Store:
             row = conn.execute("SELECT numeric_html FROM reports.latest_reports WHERE bu = %s ORDER BY period_start DESC LIMIT 1", (bu,)).fetchone()
         return row["numeric_html"] if row else None
 
+    # ---- actions the team took in a period
+    def latest_actions(self, bu: str, period: str) -> dict | None:
+        """The newest saved list for one report period: {items, saved_by, saved_at}, or None when nothing was ever saved."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT items, saved_by, saved_at FROM reports.report_actions WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_actions(self, bu: str, period: str, items: list, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
+
     # ---- manual edits of analysis panels
     def latest_edits(self, run_id) -> list[dict]:
         """Newest edit row per panel of one run. body None means the AI version was restored."""

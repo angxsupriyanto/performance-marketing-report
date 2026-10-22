@@ -48,6 +48,7 @@ class FakeStore:
         self.users = {}
         self.names = {}
         self.edits = []
+        self.actions = []
         self.snaps = []
         self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
@@ -135,6 +136,16 @@ class FakeStore:
         if self.fail_writes:
             raise RuntimeError("write failed")
         self.edits.append({"run_id": run_id, "panel_key": panel_key, "body": body, "edited_by": edited_by, "created_at": datetime.now(UTC)})
+
+    def latest_actions(self, bu, period):
+        self._check()
+        saved = [a for a in self.actions if (a["bu"], a["period"]) == (bu, period)]
+        return {"items": saved[-1]["items"], "saved_by": saved[-1]["saved_by"], "saved_at": saved[-1]["saved_at"]} if saved else None
+
+    def add_actions(self, bu, period, items, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
 
     # ---- users and company names, same rules as the real Store
     def ensure_bootstrap_admin(self, password_hash):
@@ -349,7 +360,7 @@ class ViewerTests(ViewerCase):
         self.assertEqual(soup.select_one("h1.vw-h1").get_text(), "Report Perusahaan 1")
         self.assertIsNotNone(soup.select_one("#vw-analysis[data-state=none] button"))
         self.assertIn("Belum ada analisis", body)
-        self.assertEqual([h.get_text() for h in soup.select("h2")], ["Report"])
+        self.assertEqual([h.get_text() for h in soup.select("h2")], ["Action yang sudah dilakukan di Week 39", "Report"])
         self.assertIn("Campaign Hardware", [h.get_text() for h in soup.select("h3")])
         self.assertEqual(len(soup.select(".hw-funnel-block")) + len(soup.select(".hardware-section")), 0)  # nothing of the old dashboard
         nonce = re.search(r"'nonce-([^']+)'", response.getheader("Content-Security-Policy")).group(1)

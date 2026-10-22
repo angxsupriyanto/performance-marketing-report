@@ -242,3 +242,20 @@ def parse_form(form: dict[str, str], month: str, today: date) -> dict:
     if errors:
         raise FormError(errors)
     return {"total": int(total) if total else None, "as_of": as_of, "campaigns": campaigns}
+
+
+def analysis_context(result: dict) -> dict:
+    """The budget and spend of a report as plain numbers for the analysis: nothing that names the company or the people who entered it.
+    `state` is "ok" when a total budget was saved for the month; otherwise only the state is sent, and the analysis says the budget is not set."""
+    if result.get("state") != "ok":
+        return {"state": result.get("state", "belum"), "month": result.get("month_label")}
+    pick = lambda d, *keys: {k: d.get(k) for k in keys}
+    out = {"state": "ok", "month": result["month_label"], "previous_month": result.get("prev_label"),
+           **pick(result, "total", "spent", "left", "used", "week", "prev_week"), "spend_filled_until": result["as_of"].isoformat() if result.get("as_of") else None,
+           "previous_month_figures": pick(result.get("prev") or {}, "total", "spent", "left", "used"),
+           "campaigns": [pick(r, "name", "budget", "week", "spent", "left", "used") for r in result.get("rows", [])],
+           "unallocated_budget": result.get("unallocated")}
+    rest = result.get("rest")
+    if rest:
+        out["other_campaigns"] = pick(rest, "count", "budget", "week", "spent")
+    return out

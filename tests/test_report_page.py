@@ -46,7 +46,7 @@ class MockupConformanceTests(unittest.TestCase):
         html, soup = page("bu1")
         self.assertEqual(headings(soup), [
             "Report", "Progress target SQL Value 2026", "Daftar SQL Week 39", "Campaign Hardware", "Target SQL Value September 2026",
-            "Funnel per hardware", "Dashcam", "GPS Tracker", "Fuel", "MDVR", "OBD"])
+            "Funnel per hardware", "Dashcam", "GPS Tracker", "Fuel", "MDVR", "OBD", "Next Action"])
         self.assertEqual([c.select_one("div").get_text() for c in soup.select(".cards")[0].find_all("div", recursive=False)],
                          ["Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value"])
         self.assertEqual([c.select_one("div").get_text() for c in soup.select(".cards")[1].find_all("div", recursive=False)],
@@ -74,11 +74,11 @@ class MockupConformanceTests(unittest.TestCase):
 
     def test_bu2_has_exactly_the_mockup_sections_in_the_mockup_order(self):
         html, soup = page("bu2")
-        self.assertEqual(headings(soup), ["Report", "Progress target SQL Ecosystem 2026", "Daftar SQL Ecosystem Week 39", "Daftar SQL Week 39", "Daftar Deal Won Week 39"])
+        self.assertEqual(headings(soup), ["Report", "Progress target SQL Ecosystem 2026", "Daftar SQL Ecosystem Week 39", "Daftar SQL Week 39", "Daftar Deal Won Week 39", "Next Action"])
         self.assertEqual(headers(soup, "Daftar SQL Ecosystem"), ["Company", "Industry", "Tanggal SQL", "SQL Value"])
         self.assertEqual(headers(soup, "Daftar SQL Week 39"), ["Company", "Industry", "Campaign", "SQL Value", "Inbound ke SQL"])
         self.assertEqual(headers(soup, "Daftar Deal Won"), ["Company", "Industry", "Campaign", "Deal Value", "Inbound ke Deal Won"])
-        self.assertEqual([p["data-analysis"] for p in soup.select("[data-analysis]")], ["executive_summary"])
+        self.assertEqual([p["data-analysis"] for p in soup.select("[data-analysis]")], ["executive_summary", "next_action"])
         self.assertNotIn("Campaign Hardware", html)
         for text in LEFTOVERS:
             self.assertNotIn(text, html, text)
