@@ -95,12 +95,48 @@ def link_target() -> str:
     return '<a href="/targets" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur target</a>'
 
 
-def card(label: str, value: str, compare: str, share: str | None = None) -> str:
-    extra = f'<div style="color: {TEXT}">{e(share)}</div>' if share else ""
+GOOD, BAD, NEUTRAL = ("#e6f5ed", "#087450"), ("#fcecec", "#ac3d3d"), ("#eef2f7", TEXT)  # chip background and text; all pass contrast on their own background
+ARROWS = {"up": ("\u25b2", "naik", GOOD), "down": ("\u25bc", "turun", BAD), "flat": ("\u2192", "tetap", NEUTRAL)}
+HIDDEN = "position: absolute; left: -9999px"  # read by screen readers only, so the colour is never the only signal
+
+
+def delta_chip(now, before, prev_label: str, kind: str = "count") -> str:
+    """A small pill showing how a figure moved against the previous period: arrow, the difference, and the percent (kind "count" or "money").
+    Kind "pp" is for rates, which are already percentages: the difference is in percentage points and there is no percent of it.
+    Up is green, down red, unchanged grey; the arrow and a hidden word carry the same meaning for people who do not see the colour."""
+    if now is None or before is None:
+        return ""
+    diff = Decimal(str(now)) - Decimal(str(before))
+    direction = "up" if diff > 0 else "down" if diff < 0 else "flat"
+    arrow, word, (back, ink) = ARROWS[direction]
+    size = abs(diff)
+    if kind == "pp":
+        text = f"{pct_text(float(size)).rstrip('%')} pp"
+    else:
+        text = idr(size) if kind == "money" else dotted(size)
+        if before != 0:
+            text += f" ({pct_text(float(size * 100 / abs(Decimal(str(before)))))})"
+    return (f'<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: {back}; color: {ink}; font-size: 13px; font-weight: 600; white-space: nowrap">'
+            f'<span aria-hidden="true">{arrow}</span> {e(text)}<span style="{HIDDEN}"> {word} dibanding {e(prev_label)}</span></span>')
+
+
+def card(label: str, value: str, compare: str, share: str | None = None, chip: str = "", share_chip: str = "") -> str:
+    if share:
+        extra = (f'<div style="color: {TEXT}; display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap"><span>{e(share)}</span>{share_chip}</div>'
+                 if share_chip else f'<div style="color: {TEXT}">{e(share)}</div>')
+    else:
+        extra = ""
     return (
         f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="color: {MUTED}">{e(label)}</div>'
-        f'<div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div><div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
+        f'<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap"><div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div>{chip}</div>'
+        f'<div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
     )
+
+
+def legend_chip(direction: str) -> str:
+    arrow, word, (back, ink) = ARROWS[direction]
+    return (f'<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: {back}; color: {ink}; font-size: 13px; font-weight: 600">'
+            f'<span aria-hidden="true">{arrow}</span> {word}</span>')
 
 
 RATES = {"MQL": "Submission", "SQL": "MQL", "Deal Won": "SQL"}  # card -> the stage its rate divides by, see METRIC_RULES.md
@@ -522,11 +558,14 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
     def rate_card(n: str) -> str:
         value, compare = idr(m[n]) if "Value" in n else dotted(m[n]), f"{pl}: " + (idr(prev[n]) if "Value" in n else dotted(prev[n]))
+        kind = "money" if "Value" in n else "count"
+        chip = delta_chip(m[n], prev[n], pl, kind)
         base = RATES.get(n)
         if base is None:
-            return card(n, value, compare)
+            return card(n, value, compare, chip=chip)
         now_rate, prev_rate = percent(m[n], m[base]), percent(prev[n], prev[base])
-        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}")
+        rate_chip = delta_chip(now_rate, prev_rate, pl, "pp")
+        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}", chip=chip, share_chip=rate_chip)
 
     cards = "".join(rate_card(n) for n in names)
     same, same_prev = view["same"], view["same_prev"]
@@ -537,13 +576,16 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         total, tail = totals[name]
         share = percent(same[name], total)
         same_cards += card(f"{same_word} {name}", idr(same[name]) if money else dotted(same[name]), f"{pl}: " + (idr(same_prev[name]) if money else dotted(same_prev[name])),
-                           f"{pct_text(share) if share is not None else 'N/A'} dari total {idr(total) if money else dotted(total)} {tail}")
+                           f"{pct_text(share) if share is not None else 'N/A'} dari total {idr(total) if money else dotted(total)} {tail}",
+                           chip=delta_chip(same[name], same_prev[name], pl, "money" if money else "count"))
     sections = [
         f'<div style="margin-bottom: 20px"><div style="font: 600 18px/1.3 Inter, Arial, sans-serif; color: {INK}">Performance Marketing Report</div>'
         f'<div style="color: {MUTED}">{e(view["label"])} ({e(view["range"])}) vs {e(pl)} ({e(view["prev_range"])})</div></div>',
         *([budget_section(budget, view["label"])] if budget is not None else []),
         f'<div class="cards">{cards}</div>',
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
+        f'<p style="margin: 12px 0 0; color: {MUTED}">Dibandingkan dengan {e(pl)}: {legend_chip("up")} {legend_chip("down")} {legend_chip("flat")}. Selisih angka diikuti persennya. '
+        'Perubahan rate dalam poin persentase (pp), yaitu selisih dua persentase.</p>',
         analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
         progress_section(view, tg, company),
         sql_section(view),

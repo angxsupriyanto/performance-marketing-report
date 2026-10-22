@@ -53,10 +53,12 @@ class MockupConformanceTests(unittest.TestCase):
                          ["Same-week MQL", "Same-week SQL", "Same-week SQL Value"])
         self.assertEqual(len(soup.select(".cards")), 2)
         cards = {c.select_one("div").get_text(): [d.get_text() for d in c.find_all("div", recursive=False)] for c in soup.select(".cards")[0].find_all("div", recursive=False)}
-        for name in ("MQL", "SQL", "Deal Won"):  # the mockup's rate line; the formula caption was dropped on request
+        for name in ("MQL", "SQL", "Deal Won"):  # the mockup's rate line, with its own chip in percentage points; the formula caption was dropped on request
             lines = cards[name]
             self.assertEqual(len(lines), 4, name)
-            self.assertRegex(lines[3], rf"^{name} Rate [0-9]+,[0-9]% · Week 38: ([0-9]+,[0-9]%|—)$")
+            self.assertRegex(lines[3], rf"^{name} Rate [0-9]+,[0-9]% · Week 38: ([0-9]+,[0-9]%|—)")
+            if "Week 38: —" not in lines[3]:  # no chip when the previous period had nothing to divide by
+                self.assertRegex(lines[3], r"pp (naik|turun|tetap) dibanding Week 38$")
             self.assertNotIn("÷", " ".join(lines))
         for name in ("Submission", "SQL Value", "Deal Won Value"):
             self.assertEqual(len(cards[name]), 3, name)  # no rate line on the others
@@ -148,3 +150,38 @@ class MockupConformanceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DeltaChipTests(unittest.TestCase):
+    def chip(self, now, before, kind="count"):
+        import report_view
+        return BeautifulSoup(report_view.delta_chip(now, before, "Week 41", kind), "html.parser")
+
+    def test_up_is_green_with_an_arrow_the_difference_and_the_percent(self):
+        soup = self.chip(5, 2)
+        text = soup.get_text()
+        self.assertTrue(text.startswith("▲ 3 (150,0%)"))
+        self.assertIn("naik dibanding Week 41", text)
+        style = soup.select_one("span")["style"]
+        self.assertIn("#e6f5ed", style)
+        self.assertIn("#087450", style)
+
+    def test_down_is_red_and_flat_is_grey(self):
+        down = self.chip(58, 74)
+        self.assertTrue(down.get_text().startswith("▼ 16 (21,6%)"))
+        self.assertIn("#ac3d3d", down.select_one("span")["style"])
+        flat = self.chip(7, 7)
+        self.assertTrue(flat.get_text().startswith("→ 0 (0,0%)"))
+        self.assertIn("tetap dibanding Week 41", flat.get_text())
+        self.assertIn("#eef2f7", flat.select_one("span")["style"])
+
+    def test_money_uses_rupiah_and_rates_use_percentage_points_without_a_percent(self):
+        self.assertTrue(self.chip(256295000, 204620000, "money").get_text().startswith("▲ Rp 51.675.000 (25,3%)"))
+        pp = self.chip(63.79, 48.65, "pp").get_text()
+        self.assertTrue(pp.startswith("▲ 15,1 pp"))
+        self.assertNotIn("(", pp)
+
+    def test_a_previous_figure_of_zero_has_no_percent_and_a_missing_one_has_no_chip(self):
+        self.assertTrue(self.chip(4, 0).get_text().startswith("▲ 4 naik"))
+        self.assertNotIn("%", self.chip(4, 0).get_text())
+        self.assertEqual(str(self.chip(4, None)), "")
