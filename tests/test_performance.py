@@ -283,6 +283,21 @@ class PageTests(ViewerCase):
         self.assertIn(".pf-side{position:sticky;top:16px", " ".join(st.get_text() for st in soup.select("style")))
         self.assertEqual(soup.select_one("main")["style"], "max-width:1320px")
 
+    def test_only_the_campaign_filter_has_a_search_box_and_chosen_campaigns_are_grouped_on_top(self):
+        soup = self.soup("?bu=bu1&" + self.RANGE)
+        boxes = soup.select("details [data-find]")
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(boxes[0].find_parent("details").select_one(".fl").get_text(), "Campaign")
+        search = boxes[0].select_one("input[type=search]")
+        self.assertIsNone(search.get("name"))  # the search text is never sent as a filter
+        self.assertEqual(boxes[0].select_one(".pf-note").get_text(), "3 campaign")  # Camp A, Camp B and the (kosong) value
+        self.assertEqual(len(boxes[0].select(".pf-grp")), 0)  # no group headings while nothing is chosen
+        chosen = self.soup(raw="?bu=bu1&" + self.RANGE + "&campaign=Camp+B").select_one("details [data-find]")
+        self.assertEqual([g.get_text() for g in chosen.select(".pf-grp")], ["Dipilih", "Lainnya"])
+        self.assertEqual([o.select_one(".t").get_text() for o in chosen.select(".pf-opt")], ["Camp B", "Camp A", performance.EMPTY_LABEL])
+        self.assertTrue(chosen.select_one(".pf-opt input").has_attr("checked"))
+        self.assertEqual(len(self.soup("?bu=bu1&" + self.RANGE).select("input[type=search]")), 1)
+
     def test_chosen_filters_change_the_numbers_show_as_chips_and_can_be_removed_one_by_one(self):
         soup = self.soup(raw="?bu=bu1&" + self.RANGE + "&channel=Paid&source=Meta+Ads&source=Google+Ads")
         box = soup.select_one("[aria-label='Data yang sedang ditampilkan']")

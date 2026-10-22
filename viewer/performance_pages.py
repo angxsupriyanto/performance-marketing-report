@@ -34,6 +34,13 @@ CSS = f"""
 .pf-dd[open] summary::after{{transform:rotate(-135deg);margin-top:4px}}
 .pf-dd .fl{{font-weight:500;flex:1}}.pf-dd .fv{{color:{MUTED}}}
 .pf-panel{{margin-top:6px;border:1px solid {LINE};border-radius:6px;background:#fff;padding:4px 12px;max-height:260px;overflow-y:auto}}
+.pf-panel.s{{padding-top:0;max-height:none;overflow:visible}}
+.pf-find{{padding:8px 0 4px;background:#fff}}
+.pf-find input{{width:100%;height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:{INK};font:14px Inter,Arial,sans-serif}}
+.pf-find .pf-note{{margin-top:4px;color:{MUTED}}}
+.pf-scroll{{max-height:220px;overflow-y:auto}}
+.pf-grp{{margin-top:6px;padding-top:6px;border-top:1px solid {LINE};color:{MUTED};font-weight:600}}.pf-grp:first-child{{border-top:0;margin-top:0}}
+.pf-empty{{margin:8px 0;color:#394d65}}
 .pf-opt{{display:flex;align-items:center;gap:10px;min-height:44px;color:{INK};cursor:pointer}}
 .pf-opt input{{width:20px;height:20px;margin:0;flex:none}}
 .pf-opt .t{{flex:1;min-width:0;overflow-wrap:anywhere}}.pf-opt .n{{color:{MUTED}}}
@@ -165,6 +172,11 @@ SIDEBAR_JS = (
     "(function(){var f=document.getElementById('perf-form'),note=document.getElementById('pf-dirty');"
     "function count(d){var n=d.querySelectorAll('input[type=checkbox]:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';}"
     "f.addEventListener('change',function(e){var d=e.target.closest('details');if(d)count(d);if(note)note.hidden=false;});"
+    "document.querySelectorAll('[data-find]').forEach(function(box){var q=box.querySelector('input[type=search]'),note=box.querySelector('.pf-note'),none=box.querySelector('.pf-empty'),opts=box.querySelectorAll('.pf-opt'),total=opts.length;"
+    "function norm(t){return t.toLowerCase().replace(/\\s+/g,' ').trim();}"
+    "function run(){var v=norm(q.value),hit=0;opts.forEach(function(o){var on=o.querySelector('input').checked,m=!v||norm(o.querySelector('.t').textContent).indexOf(v)>=0;o.hidden=!(on||m);if(m&&!on)hit++;});"
+    "var k=box.querySelectorAll('.pf-opt input:checked').length;note.textContent=v?hit+' campaign cocok dari '+total+(k?'. '+k+' dipilih tetap tampil.':'.'):total+' campaign';none.hidden=!v||hit>0;}"
+    "q.addEventListener('input',run);q.addEventListener('keydown',function(e){if(e.key==='Enter')e.preventDefault();});box.addEventListener('change',run);});"
     "document.querySelectorAll('[data-auto]').forEach(function(el){el.addEventListener('change',function(){f.requestSubmit();});});})();"
 )
 
@@ -188,6 +200,17 @@ def sidebar(*, names: dict, bu: str, choices: list[str], params, state: str, opt
             f'<label class="pf-opt"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "") + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>'
             for r in rows
         ) or f'<div style="padding:12px 0;color:{MUTED}">Tidak ada nilai.</div>'
+        if key == "campaign" and rows:
+            picked = [r for r in rows if r["selected"]]
+            rest = [r for r in rows if not r["selected"]]
+            opt = lambda r: (f'<label class="pf-opt"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "")
+                             + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>')
+            groups = ((f'<div class="pf-grp">Dipilih</div>{"".join(opt(r) for r in picked)}<div class="pf-grp">Lainnya</div>' if picked else "") + "".join(opt(r) for r in rest))
+            dropdowns += (f'<details class="pf-dd"><summary><span class="fl">{escape(title)}</span><span class="fv">{f"{chosen} dipilih" if chosen else "Semua"}</span></summary>'
+                          f'<div class="pf-panel s" data-find><div class="pf-find"><label class="vw-sr" for="cari-campaign">Cari campaign</label>'
+                          f'<input id="cari-campaign" type="search" placeholder="Cari campaign" autocomplete="off"><div class="pf-note" role="status" aria-live="polite">{len(rows)} campaign</div></div>'
+                          f'<div class="pf-scroll">{groups}<p class="pf-empty" hidden>Tidak ada campaign yang cocok dengan kata kunci ini.</p></div></div></details>')
+            continue
         dropdowns += (f'<details class="pf-dd"><summary><span class="fl">{escape(title)}</span><span class="fv">{f"{chosen} dipilih" if chosen else "Semua"}</span></summary>'
                       f'<div class="pf-panel">{items}</div></details>')
     note = ""
