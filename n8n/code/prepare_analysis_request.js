@@ -16,8 +16,9 @@ const request = ref('Validate Request').first().json;
 const run = $input.first().json;
 if (!run.run_id) throw new Error(`Belum ada laporan numerik untuk ${request.bu} ${request.period}; jalankan Report Generate terlebih dahulu`);
 
-const userInput = { analysis_keys: run.analysis_keys, facts: run.facts };
+const userInput = { company_key: request.bu, analysis_keys: run.analysis_keys, facts: run.facts, actions: Array.isArray(request.actions) ? request.actions : [] };
 if (request.targets) userInput.targets = request.targets;
+if (request.budget) userInput.budget = request.budget;
 const userText = JSON.stringify(userInput);
 const body = PROVIDER === 'openai'
   ? { model: provider.model, max_tokens: MAX_TOKENS, messages: [{ role: 'system', content: SYSTEM_PROMPT }, { role: 'user', content: userText }] }

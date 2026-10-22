@@ -16,4 +16,21 @@ if (input.body && input.body.targets && typeof input.body.targets === 'object' &
   if (text.length > 20000) throw new Error('targets terlalu besar');
   targets = JSON.parse(text);
 }
-return [{ json: { bu, period, requested_by: requestedBy, targets } }];
+// What the team did in the period (typed in the viewer) and the budget figures. Text and numbers only, with size limits; anything else is dropped.
+const text = (value, max) => (typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, max) : '');
+const actions = [];
+if (input.body && Array.isArray(input.body.actions)) {
+  for (const entry of input.body.actions) {
+    if (actions.length >= 30) break;
+    if (!entry || typeof entry !== 'object') continue;
+    const action = text(entry.action, 300);
+    if (action) actions.push({ action, campaign: text(entry.campaign, 100), note: text(entry.note, 300) });
+  }
+}
+let budget = null;
+if (input.body && input.body.budget && typeof input.body.budget === 'object' && !Array.isArray(input.body.budget)) {
+  const budgetText = JSON.stringify(input.body.budget);
+  if (budgetText.length > 20000) throw new Error('budget terlalu besar');
+  budget = JSON.parse(budgetText);
+}
+return [{ json: { bu, period, requested_by: requestedBy, targets, actions, budget } }];

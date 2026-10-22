@@ -71,6 +71,8 @@ Daftar SQL dan Deal Won memuat **nama perusahaan** dan nilainya. Dokumen platfor
 
 Impor ulang membuat workflow baru dan membuat Anda memilih ulang credential dan mengisi placeholder lagi. Untuk perbaikan kode, cukup ganti isi satu Code node: buka node, hapus isinya, lalu tempel isi berkas yang sesuai di `n8n/workflows/code/` (mis. `Report_Generate_v1__Build_CSV.js`). Berkas itu sudah terender (daftar kolom dan prompt sudah terisi), dibuat oleh `build_workflows.py`, dan diuji agar selalu sama dengan isi JSON. Bila Anda mengubah `PROVIDER`, URL, atau model di node `Prepare Analysis Request`, ulangi perubahan itu setelah menempel.
 
+**Pembaruan analisis (prompt `analysis_v2`: action, budget, panel Next Action, catatan KPI):** di `Report_Analysis_Button_v1` ganti isi dua Code node, `Validate Request` (`Report_Analysis_Button_v1__Validate_Request.js`) dan `Prepare Analysis Request` (`Report_Analysis_Button_v1__Prepare_Analysis_Request.js`). Alamat router di node kedua harus dipasang lagi bila Anda pernah mengubahnya. Tidak perlu mengimpor ulang workflow atau memilih ulang credential. Panel **Next Action** hanya diisi untuk report yang dibuat setelah pembaruan ini: jalankan Report Generate lagi untuk periode yang ingin memilikinya, lalu buat analisisnya.
+
 Sheets API tidak mengirim sel kosong, jadi `Build CSV` menganggap suatu kolom hilang hanya bila **tidak ada satu baris pun** yang memilikinya. Kolom yang kosong di seluruh sheet tidak bisa dibedakan dari kolom yang tidak ada, dan akan dilaporkan sebagai hilang.
 
 ## Hal yang belum diverifikasi terhadap n8n sungguhan

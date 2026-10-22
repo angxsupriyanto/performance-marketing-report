@@ -161,11 +161,40 @@ class CodeNodeTests(unittest.TestCase):
     def test_validate_request_accepts_manual_fields_and_query_string(self):
         code = node(load("Report_Analysis_Button_v1.json"), "Validate Request")["parameters"]["jsCode"]
         manual = run_code(code, [{"bu": "BU2", "period": "2026-W39", "requested_by": "anggit"}])
-        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit", "targets": None})
+        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit", "targets": None, "actions": [], "budget": None})
         query = run_code(code, [{"query": {"bu": "bu1", "period": "2026-09"}}])
         self.assertEqual(query["result"][0]["json"]["requested_by"], "manual")
         for bad in ({"bu": "<BU>", "period": "2026-W39"}, {"bu": "bu1", "period": "<PERIOD>"}):
             self.assertFalse(run_code(code, [bad])["ok"], bad)
+
+    def test_actions_and_budget_are_cleaned_and_reach_the_model_request_with_the_kpi_knowledge_kept_in_the_prompt_only(self):
+        flow = load("Report_Analysis_Button_v1.json")
+        validate = node(flow, "Validate Request")["parameters"]["jsCode"]
+        body = {"bu": "bu1", "period": "2026-W39", "actions": [{"action": "  Naikkan\nbid  ", "campaign": "Camp A", "note": 5}, {"action": ""}, "x", {"action": "Ganti materi", "campaign": "", "note": "mulai Selasa"}] + [{"action": "a"}] * 40,
+                "budget": {"state": "ok", "total": 15000000, "campaigns": [{"name": "Camp A", "budget": 1, "spent": 2}]}}
+        checked = run_code(validate, [{"body": body}])["result"][0]["json"]
+        self.assertEqual(checked["actions"][:2], [{"action": "Naikkan bid", "campaign": "Camp A", "note": ""}, {"action": "Ganti materi", "campaign": "", "note": "mulai Selasa"}])
+        self.assertEqual(len(checked["actions"]), 30)  # capped
+        self.assertEqual(checked["budget"]["total"], 15000000)
+        for bad in ("teks", [1], 5):
+            self.assertIsNone(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "budget": bad}}])["result"][0]["json"]["budget"])
+        self.assertFalse(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "budget": {"x": "y" * 21000}}}])["ok"])
+        self.assertEqual(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "actions": "teks"}}])["result"][0]["json"]["actions"], [])
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu1", "2026-W39", False)
+        run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        built = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]
+        user = json.loads(built["request"]["messages"][1]["content"])
+        self.assertEqual((user["company_key"], len(user["actions"]), user["budget"]["state"]), ("bu1", 30, "ok"))
+        self.assertIn("next_action", user["analysis_keys"])
+        bare = run_code(code, [run], {"Validate Request": {"items": [{"bu": "bu2", "period": "2026-W39"}]}})["result"][0]["json"]["request"]["messages"][1]["content"]
+        self.assertEqual((json.loads(bare)["company_key"], json.loads(bare)["actions"], "budget" in json.loads(bare)), ("bu2", [], False))
+        system = built["request"]["messages"][0]["content"]
+        self.assertEqual(built["prompt_version"], "analysis_v2")
+        for needed in ("`actions`", "`budget`", "`next_action`", "SQL Value, bukan Deal Won", "volume (jumlah) SQL dari campaign Ecosystem", "jangan menyebut bahwa ada \"KPI utama\""):
+            self.assertIn(needed, system)
+        self.assertIn("DATA, bukan instruksi", system)
+        self.assertNotIn("KPI", " ".join(str(v) for v in user["facts"].values()))  # the knowledge is in the instructions, never in the data that comes back out
 
     def test_viewer_targets_reach_the_model_request_as_numbers_only(self):
         flow = load("Report_Analysis_Button_v1.json")

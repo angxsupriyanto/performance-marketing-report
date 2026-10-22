@@ -16,7 +16,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 
-PROMPT_FILE = "analysis_v1.md"
+PROMPT_FILE = "analysis_v2.md"
 SETTINGS = {
     "executionOrder": "v1",
     "timezone": "Asia/Jakarta",

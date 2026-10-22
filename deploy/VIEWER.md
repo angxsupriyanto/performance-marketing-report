@@ -30,7 +30,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 
 1. **Database.** Setelah `marketing_reports` terpasang:
    `deploy/install-viewer-db.sh --container <postgres> --admin-user <superuser>`
-   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 22 baris harus PASS.
+   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 23 baris harus PASS.
 2. **Rahasia lain** (di folder tempat compose dijalankan, jangan di-commit):
    - `viewer_session_secret` dan `n8n_webhook_token` (acak, 64 karakter heks). Linux, macOS, WSL: `openssl rand -hex 32 > viewer_session_secret`. **PowerShell (Windows):**
      ```powershell
@@ -46,6 +46,13 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
    Proyek terpisah, jadi stack n8n tidak dibuat ulang. Jangan publikasikan port.
 4. **n8n.** Impor ulang `Report_Analysis_Button_v1.json` (sekarang menerima `targets` dari viewer), aktifkan workflow itu supaya URL produksi `/webhook/report-analysis` berlaku, dan pasang credential Header Auth untuk node *Ask Model* (`Authorization` = `Bearer <API key 9router>`). Model dan alamat router sudah terisi di node *Prepare Analysis Request* (`pesankopi-report`).
 5. **Cloudflare Tunnel.** Di Zero Trust, pada tunnel yang sudah melayani n8n: *Public hostname* `officehours.pesankopi.com` → *Service* `HTTP` `report-viewer:8090`. Container `cloudflared` harus berada di network Docker yang sama dengan `report-viewer`. Selesai; tidak ada port yang dibuka di server.
+
+## Action periode, budget, dan Next Action di analisis
+
+- Tombol **Buat analisis** (dan **Buat ulang analisis**) tidak langsung menjalankan analisis: ia membuka daftar **Action yang sudah dilakukan** di periode itu (action, campaign opsional, catatan opsional; boleh kosong). Daftar tersimpan per report (tabel `reports.report_actions`, migrasi `009`, append-only: setiap simpan menambah satu versi) dan tampil di bagian **Action** di bawah report. Admin bisa mengubahnya dari sana tanpa membuat analisis. Peringatan "ada panel yang sudah diedit" kini ada di dalam form ini.
+- Yang dikirim ke analisis: ringkasan angka, progress target, **action periode itu**, serta **budget dan spend** (total, spend minggu dan bulan, sisa, pemakaian, dan tiap campaign). Nama campaign ikut terkirim, nama perusahaan dan nama orang tidak.
+- **Next Action** adalah panel analisis biasa di paling bawah report (penanda AI atau Edited, admin bisa mengedit atau memulihkan versi AI). Report yang dibuat sebelum pembaruan ini belum punya slot untuk panel itu sampai Report Generate dijalankan lagi.
+- Instruksi analisis (`n8n/prompts/analysis_v2.md`) memuat pengetahuan internal bahwa target utama KPI BU1 adalah SQL Value (bukan Deal Won) dan KPI BU2 adalah volume SQL dari campaign Ecosystem. Keduanya hanya ada di instruksi, tidak ditulis ke hasil analisis atau report.
 
 ## Pengguna dan nama perusahaan
 
@@ -95,7 +102,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator). Dulu versi kode tidak ikut kunci, jadi setelah generator diperbarui, menjalankan Report Generate pada sheet yang sama tidak menambah apa pun dan HTML lama tetap tampil. Sekarang versi kode (hash isi `generate_report.py`, template, dan profil) ikut kunci. Urutan memperbarui:
 
 1. `git pull`, lalu bangun ulang `report-service` (versi kode baru terbaca di `/healthz` sebagai `generator_version`).
-2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, `006_budget.sql`, `007_performance.sql`, dan `008_performance_lead_rows.sql`).
+2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, `006_budget.sql`, `007_performance.sql`, `008_performance_lead_rows.sql`, dan `009_report_actions.sql`).
 3. Di n8n, perbarui node *Save Run* di `Report_Generate_v1` dengan isi `n8n/sql/insert_run.sql` terbaru (atau impor ulang workflow). **Kedua langkah 2 dan 3 harus dilakukan bersama:** setelah 003 diterapkan, SQL lama gagal karena tidak ada constraint yang cocok.
 4. Jalankan Report Generate lagi untuk periode yang dibutuhkan. Run baru muncul sebagai report terbaru; run lama dan analisisnya tetap tersimpan. Analisis dibuat per run, jadi tekan *Buat analisis* lagi pada report baru.
 
