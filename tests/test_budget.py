@@ -191,6 +191,20 @@ class BudgetPageTests(ViewerCase):
         _, soup = self.get()
         self.assertEqual([o["data-pick-name"] for o in soup.select("#pick-list [data-pick-name]")], ["Camp A", "Solusi - Video Monitoring - CPC"])  # no blank name, no duplicate
 
+    def test_the_picker_has_channel_source_medium_filters_only_when_a_performa_snapshot_exists(self):
+        _, soup = self.get()
+        self.assertEqual(soup.select("#picker .pk-dd"), [])  # no snapshot: just the search box
+        self.store.performance["bu1"] = {"snapshot_id": "p", "generated_at": datetime.now(timezone.utc), "as_of": self.now,
+                                         "data": {"v": 2, "as_of": self.now.isoformat(), "dims": {"channel": ["Paid"], "source": ["Meta Ads"], "medium": ["cpc"], "campaign": ["Camp A", "Camp Z"], "category": [""], "hardware": [""]},
+                                                  "leads": [[738000, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0]]}}
+        _, soup = self.get()
+        self.assertEqual([d.select_one(".fl").get_text() for d in soup.select("#picker .pk-dd")], ["Channel", "Source", "Medium"])
+        self.assertEqual([o["data-label"] for o in soup.select('#picker [data-key="channel"]')], ["Paid"])
+        names = {o["data-label"] for o in soup.select('#pick-list [data-key="campaign"]')}
+        self.assertEqual(names, {"Camp A", "Camp Z"})  # Camp A only in the report, Camp Z only in the snapshot
+        script = " ".join(sc.get_text() for sc in soup.select("script") if "makeCascade" in sc.get_text())
+        self.assertIn('"combos":[[0,0,0,1]]', script)
+
     def test_saving_adds_a_version_and_the_page_shows_it_with_history(self):
         response, _ = self.call("POST", "/budget", self.form())
         self.assertEqual((response.status, response.getheader("Location")), (303, f"/budget?bu=bu1&month={self.month}&saved=1"))

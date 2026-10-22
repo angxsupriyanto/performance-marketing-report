@@ -298,6 +298,32 @@ class PageTests(ViewerCase):
         self.assertTrue(chosen.select_one(".pf-opt input").has_attr("checked"))
         self.assertEqual(len(self.soup("?bu=bu1&" + self.RANGE).select("input[type=search]")), 1)
 
+    def test_relations_list_which_channel_source_medium_and_campaign_values_occur_together(self):
+        data = performance.load(snapshot("bu1"))
+        rel = performance.relations(data)
+        self.assertEqual(set(rel["labels"]), {"channel", "source", "medium", "campaign"})
+        names = lambda combo: tuple(rel["labels"][k][i] for k, i in zip(("channel", "source", "medium", "campaign"), combo))
+        seen = {names(c) for c in rel["combos"]}
+        self.assertEqual(len(seen), len(rel["combos"]))  # each combination once
+        self.assertTrue(all(len(c) == 4 for c in rel["combos"]))
+        for lead in data.leads:
+            self.assertIn(names([lead.d[0], lead.d[1], lead.d[2], lead.d[3]]), seen)
+        empty = performance.relations(performance.Data(AS_OF, {k: [] for k, _ in performance.DIMENSIONS}, []))
+        self.assertEqual(empty["combos"], [])
+
+    def test_the_page_carries_the_relations_for_the_cascading_filters_and_hints_for_the_children(self):
+        soup = self.soup("?bu=bu1&" + self.RANGE)
+        block = soup.select_one("script#pf-rel")
+        self.assertEqual(block["type"], "application/json")
+        data = json.loads(block.get_text())
+        self.assertEqual(data["labels"]["channel"], ["Organic", "Paid"])
+        self.assertTrue(data["combos"])
+        self.assertEqual([h["data-hint"] for h in soup.select("[data-hint]")], ["source", "medium", "campaign"])
+        keys = {o["data-key"] for o in soup.select("[data-opt]")}
+        self.assertTrue({"channel", "source", "medium", "campaign"} <= keys)
+        self.assertIsNotNone(soup.select_one("#pf-drop"))
+        self.assertNotIn("</script><", block.decode_contents())
+
     def test_chosen_filters_change_the_numbers_show_as_chips_and_can_be_removed_one_by_one(self):
         soup = self.soup(raw="?bu=bu1&" + self.RANGE + "&channel=Paid&source=Meta+Ads&source=Google+Ads")
         box = soup.select_one("[aria-label='Data yang sedang ditampilkan']")
@@ -420,7 +446,7 @@ class PageTests(ViewerCase):
         self.assertEqual(user.select_one("input[type=hidden][name=bu]")["value"], "bu1")
         self.assertEqual(self.call("GET", "/performa?bu=bu2")[0].status, 403)
         self.assertEqual(self.call("GET", "/performa?bu=bu9")[0].status, 404)
-        self.assertEqual([a["href"] for a in user.select(".vw-menu a")], ["/performa"])
+        self.assertEqual([a["href"] for a in user.select(".vw-menu a")], ["/", "/performa"])
 
     def test_needs_a_session_and_never_shows_lead_names(self):
         self.cookie = ""

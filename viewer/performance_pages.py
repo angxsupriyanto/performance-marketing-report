@@ -6,7 +6,7 @@ from decimal import Decimal
 from html import escape
 from urllib.parse import urlencode
 
-from viewer import pages
+from viewer import cascade, pages
 from viewer.performance import DIMENSIONS, ERR_DAYS, ERR_ORDER, HEAT, MATRIX_COLUMNS, MATRIX_KEYS, UNITS, compact, nice_max
 
 W, H, LEFT, RIGHT, TOP, BOTTOM = 640, 240, 48, 620, 16, 200
@@ -37,7 +37,7 @@ CSS = f"""
 .pf-panel.s{{padding-top:0;max-height:none;overflow:visible}}
 .pf-find{{padding:8px 0 4px;background:#fff}}
 .pf-find input{{width:100%;height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:{INK};font:14px Inter,Arial,sans-serif}}
-.pf-find .pf-note{{margin-top:4px;color:{MUTED}}}
+.pf-note{{margin:4px 0;color:{MUTED}}}
 .pf-scroll{{max-height:220px;overflow-y:auto}}
 .pf-grp{{margin-top:6px;padding-top:6px;border-top:1px solid {LINE};color:{MUTED};font-weight:600}}.pf-grp:first-child{{border-top:0;margin-top:0}}
 .pf-empty{{margin:8px 0;color:#394d65}}
@@ -168,17 +168,39 @@ def matrix_section(params, matrix: dict | None, unit: str) -> str:
             f'<p style="margin:12px 0 0;color:{MUTED}">Sel kosong berarti tidak ada lead. Warna hanya membantu membaca; angka tetap tertulis di tiap sel. Kolom paling kanan adalah total baris: jumlah semua kolom di baris itu, termasuk Lebih lama.</p>{cut}</section>')
 
 
-SIDEBAR_JS = (
-    "(function(){var f=document.getElementById('perf-form'),note=document.getElementById('pf-dirty');"
-    "function count(d){var n=d.querySelectorAll('input[type=checkbox]:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';}"
-    "f.addEventListener('change',function(e){var d=e.target.closest('details');if(d)count(d);if(note)note.hidden=false;});"
-    "document.querySelectorAll('[data-find]').forEach(function(box){var q=box.querySelector('input[type=search]'),note=box.querySelector('.pf-note'),none=box.querySelector('.pf-empty'),opts=box.querySelectorAll('.pf-opt'),total=opts.length;"
-    "function norm(t){return t.toLowerCase().replace(/\\s+/g,' ').trim();}"
-    "function run(){var v=norm(q.value),hit=0;opts.forEach(function(o){var on=o.querySelector('input').checked,m=!v||norm(o.querySelector('.t').textContent).indexOf(v)>=0;o.hidden=!(on||m);if(m&&!on)hit++;});"
-    "var k=box.querySelectorAll('.pf-opt input:checked').length;note.textContent=v?hit+' campaign cocok dari '+total+(k?'. '+k+' dipilih tetap tampil.':'.'):total+' campaign';none.hidden=!v||hit>0;}"
-    "q.addEventListener('input',run);q.addEventListener('keydown',function(e){if(e.key==='Enter')e.preventDefault();});box.addEventListener('change',run);});"
-    "document.querySelectorAll('[data-auto]').forEach(function(el){el.addEventListener('change',function(){f.requestSubmit();});});})();"
-)
+SIDEBAR_JS = r"""
+(function(){
+  var f=document.getElementById('perf-form'),note=document.getElementById('pf-dirty'),dropBox=document.getElementById('pf-drop'),relEl=document.getElementById('pf-rel');
+  __CASCADE__
+  var casc=relEl?makeCascade(JSON.parse(relEl.textContent)):null;
+  var opts=[].slice.call(f.querySelectorAll('[data-opt]')).filter(function(o){return ['channel','source','medium','campaign'].indexOf(o.dataset.key)>=0;}),find=f.querySelector('[data-find]');
+  function norm(t){return t.toLowerCase().replace(/\s+/g,' ').trim();}
+  function count(d){var n=d.querySelectorAll('input[type=checkbox]:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';}
+  function refresh(){
+    var r=casc?casc(opts):{dropped:0,hints:{}};
+    f.querySelectorAll('[data-hint]').forEach(function(h){var t=r.hints[h.dataset.hint]||'';h.textContent=t;h.hidden=!t;});
+    var q=find?find.querySelector('input[type=search]'):null,v=q?norm(q.value):'',shown=0,hit=0,total=0;
+    opts.forEach(function(o){
+      var cut=o.dataset.cut==='1',on=o.querySelector('input').checked;
+      if(o.dataset.key!=='campaign'){o.hidden=cut;return;}
+      var m=!v||norm(o.querySelector('.t').textContent).indexOf(v)>=0;
+      o.hidden=cut||!(on||m);if(!cut){total++;if(m&&!on)hit++;}if(!o.hidden)shown++;
+    });
+    if(find){
+      var k=find.querySelectorAll('.pf-opt input:checked').length;
+      find.querySelector('.pf-note').textContent=v?hit+' campaign cocok dari '+total+(k?'. '+k+' dipilih tetap tampil.':'.'):total+' campaign';
+      find.querySelector('.pf-empty').hidden=!v||hit>0;
+    }
+    f.querySelectorAll('details').forEach(count);
+    if(dropBox){dropBox.hidden=!r.dropped;dropBox.textContent=r.dropped?r.dropped+' pilihan dilepas karena tidak cocok dengan Channel, Source, atau Medium yang dipilih.':'';}
+    return r;
+  }
+  f.addEventListener('change',function(e){if(e.target.closest('details')&&note)note.hidden=false;refresh();});
+  if(find){var q0=find.querySelector('input[type=search]');q0.addEventListener('input',refresh);q0.addEventListener('keydown',function(e){if(e.key==='Enter')e.preventDefault();});}
+  if(refresh().dropped&&note)note.hidden=false;
+  document.querySelectorAll('[data-auto]').forEach(function(el){el.addEventListener('change',function(){f.requestSubmit();});});
+})();
+"""
 
 
 def sidebar(*, names: dict, bu: str, choices: list[str], params, state: str, option_lists: dict | None) -> str:
@@ -192,27 +214,28 @@ def sidebar(*, names: dict, bu: str, choices: list[str], params, state: str, opt
     invalid = ' aria-invalid="true"' if params.error == ERR_ORDER else ""
     seg = "".join(f'<label><input type="radio" name="per" value="{p}"' + (" checked" if p == params.per else "") + f"><span>{p.capitalize()}</span></label>" for p in UNITS)
     can_filter = option_lists is not None
+    hint = lambda k: f'<div class="pf-note" data-hint="{k}" hidden></div>' if k in ("source", "medium", "campaign") else ""
     dropdowns = ""
     for key, title in DIMENSIONS:
         rows = (option_lists or {}).get(key, [])
         chosen = len(params.filters.get(key, []))
         items = "".join(
-            f'<label class="pf-opt"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "") + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>'
+            f'<label class="pf-opt" data-opt data-key="{key}" data-label="{escape(r["value"])}"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "") + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>'
             for r in rows
         ) or f'<div style="padding:12px 0;color:{MUTED}">Tidak ada nilai.</div>'
         if key == "campaign" and rows:
             picked = [r for r in rows if r["selected"]]
             rest = [r for r in rows if not r["selected"]]
-            opt = lambda r: (f'<label class="pf-opt"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "")
+            opt = lambda r: (f'<label class="pf-opt" data-opt data-key="{key}" data-label="{escape(r["value"])}"><input type="checkbox" name="{key}" value="{escape(r["value"])}"' + (" checked" if r["selected"] else "")
                              + f'><span class="t">{escape(r["value"])}</span><span class="n">{_n(r["count"])} lead</span></label>')
             groups = ((f'<div class="pf-grp">Dipilih</div>{"".join(opt(r) for r in picked)}<div class="pf-grp">Lainnya</div>' if picked else "") + "".join(opt(r) for r in rest))
             dropdowns += (f'<details class="pf-dd"><summary><span class="fl">{escape(title)}</span><span class="fv">{f"{chosen} dipilih" if chosen else "Semua"}</span></summary>'
                           f'<div class="pf-panel s" data-find><div class="pf-find"><label class="vw-sr" for="cari-campaign">Cari campaign</label>'
-                          f'<input id="cari-campaign" type="search" placeholder="Cari campaign" autocomplete="off"><div class="pf-note" role="status" aria-live="polite">{len(rows)} campaign</div></div>'
+                          f'<input id="cari-campaign" type="search" placeholder="Cari campaign" autocomplete="off"><div class="pf-note" role="status" aria-live="polite">{len(rows)} campaign</div>{hint(key)}</div>'
                           f'<div class="pf-scroll">{groups}<p class="pf-empty" hidden>Tidak ada campaign yang cocok dengan kata kunci ini.</p></div></div></details>')
             continue
         dropdowns += (f'<details class="pf-dd"><summary><span class="fl">{escape(title)}</span><span class="fv">{f"{chosen} dipilih" if chosen else "Semua"}</span></summary>'
-                      f'<div class="pf-panel">{items}</div></details>')
+                      f'<div class="pf-panel">{hint(key)}{items}</div></details>')
     note = ""
     if not can_filter:
         note = (f'<div role="status" style="padding:10px 12px;border-radius:6px;background:#edf4ff;color:{INK};margin-bottom:12px">Filter belum tersedia di data ini. '
@@ -226,7 +249,7 @@ def sidebar(*, names: dict, bu: str, choices: list[str], params, state: str, opt
         f'<div class="vw-field"><label for="sampai">Sampai</label><input id="sampai" name="to" type="date" value="{params.end.isoformat()}"{invalid}></div>'
         f'<div><div id="gran-label" style="font-weight:500;color:{INK};margin-bottom:6px">Per</div><div class="pf-seg" role="radiogroup" aria-labelledby="gran-label">{seg}</div></div></div>'
         + (f'<p role="alert" class="vw-alert" style="margin:12px 0 0">{escape(params.error)}</p>' if params.error else "")
-        + f'<h2 class="vw-h2" style="margin:24px 0 12px;padding-top:20px;border-top:1px solid {LINE}">Filter</h2>{note}'
+        + f'<h2 class="vw-h2" style="margin:24px 0 12px;padding-top:20px;border-top:1px solid {LINE}">Filter</h2>{note}<div id="pf-drop" role="status" aria-live="polite" hidden style="padding:10px 12px;border-radius:6px;background:#edf4ff;color:{INK};margin-bottom:12px"></div>'
         f'<fieldset style="border:0;margin:0;padding:0;min-width:0"{"" if can_filter else " disabled"}><legend class="vw-sr">Pilih nilai untuk tiap filter</legend>'
         f'<div style="display:flex;flex-direction:column;gap:8px">{dropdowns}</div></fieldset>'
         + ("" if state == "ok" else f'<input type="hidden" name="matriks" value="{params.matriks}">') +
@@ -250,7 +273,7 @@ def context_box(*, names: dict, bu: str, params) -> str:
 
 
 def performance_page(*, names: dict, bu: str, choices: list[str], params, state: str, snapshot: dict | None, points: list[dict], totals: dict | None,
-                     matrix: dict | None, option_lists: dict | None, csrf: str, nonce: str, me: dict) -> str:
+                     matrix: dict | None, option_lists: dict | None, relations: dict | None = None, csrf: str, nonce: str, me: dict) -> str:
     """state: ok, belum (no snapshot yet), lama (snapshot without lead rows), kosong (nothing in the range), kosong_filter (nothing matches the
     filters), error (date problem) or gagal (database did not answer)."""
     label = names.get(bu, bu)
@@ -301,5 +324,6 @@ def performance_page(*, names: dict, bu: str, choices: list[str], params, state:
         )
     layout = (f'<div class="pf-layout">{sidebar(names=names, bu=bu, choices=choices, params=params, state=state, option_lists=option_lists)}'
               f'<div class="pf-content">{context_box(names=names, bu=bu, params=params)}{freshness}{body}</div></div>')
-    script = f'<script nonce="{nonce}">{SIDEBAR_JS}</script>'
+    rel_block = f'<script type="application/json" id="pf-rel">{cascade.rel_json(relations)}</script>' if relations else ""
+    script = rel_block + f'<script nonce="{nonce}">{SIDEBAR_JS.replace("__CASCADE__", cascade.CASCADE_JS)}</script>'
     return pages.page("Performa", f"<style nonce=\"{nonce}\">{CSS}</style>" + head + layout + "</main>", nonce, csrf, pages.menu(csrf, me, "performa"), script)

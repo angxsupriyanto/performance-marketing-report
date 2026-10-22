@@ -621,9 +621,9 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke perusahaan ini.")
         today = self.now().date()
 
-        def render(status: int, params, state: str, snapshot=None, points=None, totals=None, matrix=None, option_lists=None) -> int:
+        def render(status: int, params, state: str, snapshot=None, points=None, totals=None, matrix=None, option_lists=None, relations=None) -> int:
             self.send(status, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points or [], totals=totals,
-                                                                 matrix=matrix, option_lists=option_lists, csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+                                                                 matrix=matrix, option_lists=option_lists, relations=relations, csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
             return status
 
         try:
@@ -637,14 +637,15 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return render(200, params, "lama", snapshot=snapshot)
         option_lists = performance.options(data, params)
+        rel = performance.relations(data)
         if params.error:
-            return render(200, params, "error", snapshot=snapshot, option_lists=option_lists)
+            return render(200, params, "error", snapshot=snapshot, option_lists=option_lists, relations=rel)
         leads = performance.filter_leads(data, params)
         points = performance.series(leads, params)
         if not performance.has_activity(points):
             unfiltered = params.active and performance.has_activity(performance.series(data.leads, params))
-            return render(200, params, "kosong_filter" if unfiltered else "kosong", snapshot=snapshot, option_lists=option_lists)
-        return render(200, params, "ok", snapshot=snapshot, points=points, totals=performance.summary(points), matrix=performance.matrix(leads, params), option_lists=option_lists)
+            return render(200, params, "kosong_filter" if unfiltered else "kosong", snapshot=snapshot, option_lists=option_lists, relations=rel)
+        return render(200, params, "ok", snapshot=snapshot, points=points, totals=performance.summary(points), matrix=performance.matrix(leads, params), option_lists=option_lists, relations=rel)
 
     # ---- budget
     def report_budget(self, report: dict, view: dict) -> dict:
@@ -686,8 +687,14 @@ class Handler(BaseHTTPRequestHandler):
             snapshot = store.latest_performance(bu)
         except Exception:  # noqa: BLE001 - the report's own list is still offered
             snapshot = None
+        rel = None
         if snapshot and isinstance(snapshot.get("data"), dict):
             tracker += [n for n in (snapshot["data"].get("dims") or {}).get("campaign", []) if isinstance(n, str) and n.strip()]
+            try:
+                loaded = performance.load(snapshot)
+                rel = performance.relations(loaded) if loaded else None
+            except Exception:  # noqa: BLE001 - the picker still works, only without the parent filters
+                rel = None
         if posted is not None:
             for index in budget.row_indexes(posted):
                 rows.append({"idx": index, "name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
@@ -708,7 +715,7 @@ class Handler(BaseHTTPRequestHandler):
         notice = ""
         if query.get("saved"):
             notice = f"Budget dan spend {names[bu]} {budget.month_label(month)} tersimpan."
-        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed), nonce=nonce)
+        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed, rel=rel), nonce=nonce)
         return status
 
     def safe_names(self) -> dict[str, str]:

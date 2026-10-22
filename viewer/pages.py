@@ -7,6 +7,9 @@ from html import escape
 
 from bs4 import BeautifulSoup
 
+from viewer import cascade
+from viewer.performance import EMPTY_LABEL
+
 WIB = timezone(timedelta(hours=7))
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 TITLE = "Digital Marketing Report"
@@ -18,10 +21,16 @@ BASE_CSS = """
 body{margin:0;background:#f4f7fb;color:#394d65;font:14px/1.5 Inter,Arial,sans-serif}
 a{color:#2159a9}a:hover{color:#17283e}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #2159a9;outline-offset:2px}
-.vw-top{background:#fff;border-bottom:1px solid #dfe7f0;padding:0 32px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.vw-top{background:#fff;border-bottom:1px solid #dfe7f0;padding:0 32px;min-height:56px;display:flex;align-items:center;justify-content:space-between}
 .vw-brand{font-weight:600;color:#17283e}
-.vw-menu{display:flex;align-items:center;gap:24px}
-.vw-menu a,.vw-link{display:inline-flex;align-items:center;min-height:44px}
+.vw-menu{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 32px;flex:1;margin-left:32px}
+.vw-menu-main,.vw-menu-user{display:flex;flex-wrap:wrap;align-items:center;gap:0 20px}
+.vw-mn{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;box-sizing:border-box;border-bottom:2px solid transparent;text-decoration:none}
+.vw-mn:hover{color:#17283e}
+.vw-mn[aria-current=page]{color:#17283e;font-weight:600;border-bottom-color:#2159a9}
+.vw-sep{width:1px;height:20px;background:#dfe7f0}
+.vw-menu-user form{display:flex;margin:0}
+.vw-link{display:inline-flex;align-items:center;min-height:44px}
 .vw-menu button{background:none;border:0;padding:0;color:#2159a9;font:inherit;cursor:pointer;min-height:44px}
 .vw-menu button:hover{color:#17283e}
 .vw-main{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 64px}
@@ -89,19 +98,23 @@ ROLE_TEXT = {"admin": "Admin", "user": "Pengguna"}
 
 
 def menu(csrf: str, user: dict | None, current: str = "") -> str:
+    """Daftar report and Performa for everyone, then admin-only groups (budget and targets, users and company names), as in the mockup."""
     def link(key: str, href: str, text: str) -> str:
-        here = ' aria-current="page" style="color:#17283e;font-weight:600"' if current == key else ""
-        return f'<a href="{href}"{here}>{text}</a>'
+        here = ' aria-current="page"' if current == key else ""
+        return f'<a class="vw-mn" href="{href}"{here}>{text}</a>'
 
-    links = ""
+    sep = '<span class="vw-sep" aria-hidden="true"></span>'
+    main = ""
+    who = ""
     if user is not None:
-        links = link("performa", "/performa", "Performa")
+        main = link("daftar", "/", "Daftar report") + link("performa", "/performa", "Performa")
         if user["role"] == "admin":
-            links += (link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("budget", "/budget", "Budget")
-                      + link("companies", "/companies", "Nama perusahaan"))
+            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target")
+                     + sep + link("users", "/users", "Pengguna") + link("companies", "/companies", "Nama perusahaan"))
+        who = f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>{sep}'
     return (
-        f'<nav class="vw-menu" aria-label="Menu">{f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>' if user is not None else ""}{links}'
-        f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></nav>'
+        f'<nav class="vw-menu" aria-label="Menu"><div class="vw-menu-main">{main}</div>'
+        f'<div class="vw-menu-user">{who}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></div></nav>'
     )
 
 
@@ -152,7 +165,7 @@ def report_list(rows: list[dict], csrf: str, nonce: str, user: dict | None, name
     body = (
         f'<main class="vw-main"><h1 class="vw-h1">Daftar report</h1><p class="vw-lead">Dibuat dari tab NEW Customers List lewat n8n. Yang terbaru di atas.</p>{content}</main>'
     )
-    return page("Daftar report", body, nonce, csrf, menu(csrf, user))
+    return page("Daftar report", body, nonce, csrf, menu(csrf, user, "daftar"))
 
 
 ANALYSIS_CSS = """
@@ -247,7 +260,7 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dic
     role = "alert" if state == "failed" else "status"
     return (
         f'<style nonce="{{nonce}}">{BASE_CSS}{ANALYSIS_CSS}</style>'
-        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf, user)}</header>'
+        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf, user, "daftar")}</header>'
         '<div class="vw-chrome"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span>'
         f'<span aria-current="page" style="color:#17283e">{escape(label)}</span></nav>'
         f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(name)}</h1>'
@@ -498,7 +511,7 @@ def _digits(value) -> str:
 
 
 def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str, str]], rows: list[dict], picker: list[str], weeks: list[tuple], total_text: str, as_of_text: str,
-                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "") -> str:
+                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "", rel: dict | None = None) -> str:
     """rows: one dict per campaign {idx, name, budget, month, weeks{key: text}} holding the texts to show in the inputs.
     picker: every campaign name that can be added; the ones already in rows are hidden in the list."""
     from viewer.budget import month_label
@@ -544,11 +557,18 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         f'<td data-label="Spend {key.split("-")[1]}" class="num cell">{money_input(f"w___I___{key}", "", f"Spend {key.split(chr(45))[1]} campaign baru", " disabled" if monday > today else "")}</td>' for key, monday, _ in weeks) + "</tr>"
     t_month = f'<tr data-row data-idx="__I__"><td data-label="Campaign" data-name></td><td data-label="Spend" class="num cell">{money_input("m___I__", "", "Spend bulanan campaign baru")}</td></tr>'
 
+    def parent_dd(key: str, title: str) -> str:
+        labels = sorted(rel["labels"][key], key=lambda v: (v == EMPTY_LABEL, v.casefold(), v))
+        items = "".join(f'<label class="pk-opt" data-opt data-key="{key}" data-label="{escape(v)}"><input type="checkbox" value="{escape(v)}" style="width:20px;height:20px;margin:0"><span>{escape(v)}</span></label>' for v in labels)
+        return (f'<details class="pk-dd"><summary><span class="fl">{title}</span><span class="fv">Semua</span></summary><div class="pk-panel">{items}</div></details>')
+
+    parents = (f'<div class="pk-parents" role="group" aria-label="Persempit daftar campaign">{parent_dd("channel", "Channel")}{parent_dd("source", "Source")}{parent_dd("medium", "Medium")}</div>'
+               '<div id="pk-drop" class="pk-note" role="status" aria-live="polite" hidden></div>') if rel else ""
     used = {r["name"].casefold() for r in rows}
     picker_rows = "".join(
-        f'<label class="pk-opt" data-pick-name="{escape(n)}"{" hidden" if n.casefold() in used else ""}><input type="checkbox" value="{escape(n)}" style="width:20px;height:20px;margin:0"><span>{escape(n)}</span></label>' for n in picker
+        f'<label class="pk-opt" data-opt data-key="campaign" data-label="{escape(n)}" data-pick-name="{escape(n)}"{" hidden" if n.casefold() in used else ""}><input type="checkbox" value="{escape(n)}" style="width:20px;height:20px;margin:0"><span>{escape(n)}</span></label>' for n in picker
     )
-    table_css = "[hidden]{display:none!important}.pk{border:1px solid #dfe7f0;border-radius:6px;background:#f4f7fb;padding:16px;margin-top:12px}.pk-list{max-height:264px;overflow-y:auto;background:#fff;border:1px solid #dfe7f0;border-radius:6px;padding:0 12px}.pk-opt{display:flex;align-items:center;gap:10px;min-height:44px;color:#17283e;cursor:pointer}.pk-note{margin:6px 0;color:#607188}.vw-linkbtn{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}.bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
+    table_css = "[hidden]{display:none!important}.pk{border:1px solid #dfe7f0;border-radius:6px;background:#f4f7fb;padding:16px;margin-top:12px}.pk-list{max-height:264px;overflow-y:auto;background:#fff;border:1px solid #dfe7f0;border-radius:6px;padding:0 12px}.pk-opt{display:flex;align-items:center;gap:10px;min-height:44px;color:#17283e;cursor:pointer}.pk-note{margin:6px 0;color:#607188}.pk-parents{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;align-items:start}.pk-dd summary{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;cursor:pointer;list-style:none}.pk-dd summary::-webkit-details-marker{display:none}.pk-dd summary::after{content:\"\";width:8px;height:8px;border-right:2px solid #607188;border-bottom:2px solid #607188;transform:rotate(45deg);margin:-4px 0 0 4px;flex:none}.pk-dd[open] summary::after{transform:rotate(-135deg);margin-top:4px}.pk-dd .fl{font-weight:500;flex:1}.pk-dd .fv{color:#607188}.pk-panel{margin-top:6px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;padding:4px 12px;max-height:240px;overflow-y:auto}.vw-linkbtn{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}.bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
     week_ths = "".join(week_head(*w) for w in weeks)
     sections = (
         f'<style nonce="{nonce}">{table_css}</style>'
@@ -565,8 +585,9 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         '<button type="button" id="buka" class="vw-btn alt" aria-expanded="false" aria-controls="picker">Tambah campaign</button></div>'
         '<div id="picker" class="pk" role="group" aria-labelledby="picker-title" hidden>'
         '<h3 id="picker-title" style="margin:0 0 4px;font:600 15px/1.4 Inter,Arial,sans-serif;color:#17283e">Pilih campaign yang mau ditambahkan</h3>'
-        '<p style="margin:0 0 12px;color:#394d65">Daftar ini berasal dari kolom Campaign di Google Sheet Campaign Tracker. Centang satu atau beberapa campaign, lalu tekan tombol biru di bawah.</p>'
-        '<div class="vw-field"><label for="cari">Ketik untuk mempersempit daftar</label><input id="cari" type="search" autocomplete="off" placeholder="Contoh: brand, gps, search"></div>'
+        '<p style="margin:0 0 12px;color:#394d65">Daftar ini berasal dari kolom Campaign di Google Sheet Campaign Tracker. Persempit dulu dengan Channel, Source, dan Medium bila perlu, lalu centang satu atau beberapa campaign dan tekan tombol biru di bawah.</p>'
+        + parents +
+        '<div class="vw-field"><label for="cari">Cari nama campaign</label><input id="cari" type="search" autocomplete="off" placeholder="Contoh: brand, gps, search"></div>'
         '<div id="pick-note" class="pk-note" role="status" aria-live="polite"></div>'
         f'<div class="pk-list" id="pick-list">{picker_rows}<p id="pick-empty" hidden style="margin:12px 0;color:#394d65"></p></div>'
         '<div style="display:flex;gap:12px;margin-top:12px"><button type="button" id="tambah" class="vw-btn" disabled>Tambahkan campaign terpilih</button><button type="button" id="batal" class="vw-btn alt">Batal</button></div>'
@@ -608,7 +629,7 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         f'<section aria-label="Riwayat budget"><h2 class="vw-h2">Riwayat budget {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
         + "".join(f'<template id="tpl-{name}">{html}</template>' for name, html in (("budget", t_budget), ("weeks", t_weeks), ("month", t_month)))
     )
-    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
+    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__CASCADE__", cascade.CASCADE_JS).replace("__REL__", cascade.rel_json(rel) if rel else "null").replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
     return page("Budget", sections + tail, nonce, csrf, menu(csrf, me, "budget"), script)
 
 
@@ -638,23 +659,31 @@ BUDGET_JS = r"""
   function norm(t){return t.toLowerCase().replace(/\s+/g,' ').trim();}
   function used(){var u={};form.querySelectorAll('#t-budget [data-name]').forEach(function(c){u[norm(c.textContent)]=1;});return u;}
   function picked(){return opts.filter(function(o){return o.querySelector('input').checked;});}
+  __CASCADE__
+  var rel=__REL__,casc=rel?makeCascade(rel):null,allOpts=[].slice.call(document.querySelectorAll('#picker [data-opt]')),drop=document.getElementById('pk-drop');
   function refresh(){
     var u=used(),v=norm(q.value),avail=0,shown=0;
-    opts.forEach(function(o){var n=o.dataset.pickName,free=!u[norm(n)];if(!free)o.querySelector('input').checked=false;
-      var match=free&&(!v||norm(n).indexOf(v)>=0);o.hidden=!match;if(free)avail++;if(match)shown++;});
+    opts.forEach(function(o){var n=o.dataset.pickName;if(u[norm(n)])o.querySelector('input').checked=false;});
+    var r=casc?casc(allOpts):{dropped:0};
+    opts.forEach(function(o){var n=o.dataset.pickName,free=!u[norm(n)],cut=o.dataset.cut==='1';
+      var match=free&&!cut&&(!v||norm(n).indexOf(v)>=0);o.hidden=!match;if(free)avail++;if(match)shown++;});
+    allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.hidden=o.dataset.cut==='1';});
+    document.querySelectorAll('#picker .pk-dd').forEach(function(d){var n=d.querySelectorAll('input:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';});
+    if(drop){drop.hidden=!r.dropped;drop.textContent=r.dropped?r.dropped+' pilihan dilepas karena tidak cocok dengan Channel, Source, atau Medium yang dipilih.':'';}
     var k=picked().length;
-    note.textContent=(v?'Menampilkan '+shown+' dari '+avail+' campaign. ':avail+' campaign tersedia. ')+(k?k+' dipilih'+(v?', termasuk yang sedang tidak tampil.':'.'):'Belum ada yang dipilih.');
-    empty.hidden=shown>0;empty.textContent=avail===0?'Semua campaign di Tracker sudah ditambahkan.':'Tidak ada campaign yang cocok dengan kata kunci ini.';
+    note.textContent=(v||shown<avail?'Menampilkan '+shown+' dari '+avail+' campaign. ':avail+' campaign tersedia. ')+(k?k+' dipilih.':'Belum ada yang dipilih.');
+    empty.hidden=shown>0;empty.textContent=avail===0?'Semua campaign di Tracker sudah ditambahkan.':'Tidak ada campaign yang cocok dengan filter dan kata kunci ini.';
     addBtn.disabled=k===0;addBtn.textContent=k?'Tambahkan '+k+' campaign terpilih':'Tambahkan campaign terpilih';
     hint.textContent=k?'Setelah ditambahkan, isi budget dan spend di tabel di bawah.':'Tombol aktif setelah ada campaign yang dicentang.';
   }
+  function resetParents(){allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.querySelector('input').checked=false;});}
   function show(){var has=form.querySelectorAll('#t-budget tr[data-row]').length>0;tables.hidden=!has;emptyBox.hidden=has;}
   function toggle(open){box.hidden=!open;opener.setAttribute('aria-expanded',open?'true':'false');if(open){refresh();q.focus();}}
   opener.addEventListener('click',function(){toggle(box.hidden);});
-  document.getElementById('batal').addEventListener('click',function(){q.value='';opts.forEach(function(o){o.querySelector('input').checked=false;});toggle(false);opener.focus();});
+  document.getElementById('batal').addEventListener('click',function(){q.value='';opts.forEach(function(o){o.querySelector('input').checked=false;});resetParents();refresh();toggle(false);opener.focus();});
   q.addEventListener('input',refresh);
   q.addEventListener('keydown',function(e){if(e.key==='Enter')e.preventDefault();});
-  document.getElementById('pick-list').addEventListener('change',refresh);
+  box.addEventListener('change',refresh);
   var next=0;form.querySelectorAll('#t-budget tr[data-row]').forEach(function(r){next=Math.max(next,parseInt(r.dataset.idx,10)+1);});
   function addRow(name){
     var i=next++;
@@ -668,7 +697,7 @@ BUDGET_JS = r"""
   }
   addBtn.addEventListener('click',function(){
     var chosen=picked().map(function(o){return o.dataset.pickName;});if(!chosen.length)return;
-    chosen.forEach(addRow);q.value='';toggle(false);show();sums();opener.focus();
+    chosen.forEach(addRow);q.value='';resetParents();refresh();toggle(false);show();sums();opener.focus();
   });
   form.addEventListener('click',function(e){
     var b=e.target.closest('[data-remove]');if(!b)return;

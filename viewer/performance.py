@@ -150,6 +150,18 @@ def options(data: Data, params: Params) -> dict[str, list[dict]]:
     return out
 
 
+PARENT_KEYS = ("channel", "source", "medium", "campaign")
+
+
+def relations(data: Data) -> dict:
+    """Which Channel, Source, Medium and Campaign values occur together on at least one lead, whatever the date range. The browser narrows Source,
+    Medium and Campaign lists with it while a parent is being ticked. `labels` are the values of each filter; `combos` hold positions in them."""
+    positions = [[key for key, _ in DIMENSIONS].index(k) for k in PARENT_KEYS]
+    labels = {k: [label(v) for v in data.dims[k]] for k in PARENT_KEYS}
+    combos = sorted({tuple(lead.d[i] for i in positions) for lead in data.leads})
+    return {"labels": labels, "combos": [list(c) for c in combos]}
+
+
 # ---- the chosen range, grouped
 def _label(start: date, gran: str, full: bool = False) -> str:
     if gran == "day":
