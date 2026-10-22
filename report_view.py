@@ -282,8 +282,7 @@ def cohort_toggle(label: str, what: str, own: str) -> str:
     """The switch above a list: off shows everything in the period, on only leads whose Inbound Date is also in the period."""
     return (
         '<div style="margin: 0 0 12px"><label style="display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: #17283e; font-weight: 500; cursor: pointer">'
-        f'<input type="checkbox" role="switch" data-cohort-toggle style="width: 20px; height: 20px; margin: 0">Hanya yang submission-nya di {e(label)}</label>'
-        f'<div style="color: {MUTED}">Mati: semua {e(what)} pada {e(label)}. Menyala: hanya {e(own)} yang Inbound Date-nya juga di {e(label)}. Untuk report bulanan memakai bulan yang sama.</div></div>'
+        f'<input type="checkbox" role="switch" data-cohort-toggle style="width: 20px; height: 20px; margin: 0">Hanya yang submission-nya di {e(label)}</label></div>'
     )
 
 

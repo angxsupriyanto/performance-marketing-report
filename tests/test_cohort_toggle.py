@@ -59,8 +59,7 @@ class CohortToggleTests(unittest.TestCase):
         self.assertEqual(len(groups(soup)), 2)
         self.assertEqual([g.select_one("label").get_text() for g in groups(soup)], ["Hanya yang submission-nya di Week 39"] * 2)
         text = soup.get_text(" ")
-        self.assertIn("Mati: semua SQL pada Week 39. Menyala: hanya SQL yang Inbound Date-nya juga di Week 39. Untuk report bulanan memakai bulan yang sama.", text)
-        self.assertIn("Mati: semua MQL, SQL, dan SQL Value pada Week 39. Menyala: hanya lead yang Inbound Date-nya juga di Week 39.", text)
+        self.assertNotIn("Mati:", text)  # the explanation under the switch was dropped on request
         self.assertIn("Kolom Target dan Progress tetap memakai semua SQL bulan berjalan.", text)
         self.assertEqual(soup.select_one("[data-cohort-note]").get("hidden"), "")
 
@@ -70,7 +69,7 @@ class CohortToggleTests(unittest.TestCase):
         titles = [g.find_parent("div", style=True).select_one("h3").get_text() for g in groups(soup)]
         self.assertEqual(titles, ["Daftar SQL Week 39", "Daftar Deal Won Week 39"])
         self.assertEqual(soup.select("[data-cohort-note]"), [])
-        self.assertIn("Mati: semua Deal Won pada Week 39. Menyala: hanya Deal Won yang Inbound Date-nya juga di Week 39.", soup.get_text(" "))
+        self.assertNotIn("Mati:", soup.get_text(" "))
 
     def test_sql_list_same_view_keeps_only_backlog_free_rows_and_recomputes_the_total(self):
         _, soup, _ = build("bu1")
