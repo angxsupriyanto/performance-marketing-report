@@ -196,6 +196,31 @@ class CodeNodeTests(unittest.TestCase):
         self.assertIn("DATA, bukan instruksi", system)
         self.assertNotIn("KPI", " ".join(str(v) for v in user["facts"].values()))  # the knowledge is in the instructions, never in the data that comes back out
 
+    def test_reports_made_before_next_action_still_get_it_and_the_page_apply_step_only_gets_keys_its_slots_know(self):
+        flow = load("Report_Analysis_Button_v1.json")
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu1", "2026-W39", False)
+        old_keys = [k for k in report["analysis_keys"] if k != "next_action"]  # what an older stored page lists
+        run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": old_keys}
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        user = json.loads(run_code(code, [run], {"Validate Request": {"items": [{"bu": "bu1", "period": "2026-W39"}]}})["result"][0]["json"]["request"]["messages"][1]["content"])
+        self.assertEqual(user["analysis_keys"], old_keys + ["next_action"])
+        share = user["facts"]["same_period_share_percent"]
+        now, whole = report["facts"]["same_period"]["now"], report["facts"]["funnel"]["now"]
+        self.assertEqual(share["now"]["SQL Value"], round(100 * now["SQL Value"] / whole["SQL Value"], 1))
+        self.assertEqual(share["prev"]["SQL"], None if report["facts"]["funnel"]["prev"]["SQL"] == 0 else share["prev"]["SQL"])  # null, never a division by zero
+        self.assertNotIn("same_period_share_percent", report["facts"])  # the stored facts are untouched
+        parsed = self.parse({"choices": [{"finish_reason": "stop", "message": {"content": json.dumps({"executive_summary": "a", "next_action": "b"})}}]}, keys=old_keys)
+        self.assertEqual(parsed["result"][0]["json"]["analysis"]["next_action"], "b")
+        apply_body = node(flow, "Apply Analysis")["parameters"]["jsonBody"]
+        self.assertIn(".analysis_keys.includes(key)", apply_body)  # next_action is saved with the analysis but not pushed into a page that has no slot for it
+
+    def test_the_prompt_asks_for_juta_and_miliar_and_forbids_field_names_and_the_two_caveats(self):
+        prompt = (ROOT / "n8n" / "prompts" / build_workflows.PROMPT_FILE).read_text(encoding="utf-8")
+        for needed in ("`Rp 256,3 juta`", "`Rp 10,23 miliar`", "Rp di bawah satu juta", "Jangan menulis nama kunci atau jalur JSON", "Same-week", "same_period_share_percent",
+                       "Jangan menyebut `facts.data_quality`", "Jangan menuliskan catatan tentang hal ini"):
+            self.assertIn(needed.replace("Rp di bawah", "Rupiah di bawah"), prompt)
+        self.assertNotIn("sebut sekali di `executive_summary` sebagai keterbatasan data", prompt)
+
     def test_viewer_targets_reach_the_model_request_as_numbers_only(self):
         flow = load("Report_Analysis_Button_v1.json")
         validate = node(flow, "Validate Request")["parameters"]["jsCode"]
@@ -485,7 +510,7 @@ class CodeNodeTests(unittest.TestCase):
         for reply in ({"choices": [{"message": {"content": text}, "finish_reason": "stop"}]},
                       {"choices": [{"message": {"content": [{"type": "text", "text": text}]}, "finish_reason": "stop"}]},
                       {"choices": [{"message": {"content": "```json\n" + text + "\n```"}, "finish_reason": "stop"}]}):
-            self.assertEqual(self.parse(reply)["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": ""}, reply)
+            self.assertEqual(self.parse(reply)["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": "", "next_action": ""}, reply)
         self.assertIn("terpotong", self.parse({"choices": [{"message": {"content": text}, "finish_reason": "length"}]})["error"])
         self.assertIn("kosong", self.parse({"choices": [{"message": {"content": None}, "finish_reason": "stop"}]})["error"])
         self.assertIn("kosong", self.parse({"choices": []})["error"])
@@ -498,7 +523,11 @@ class CodeNodeTests(unittest.TestCase):
         self.assertNotIn("provisional", prompt.lower())
         for report in reports:
             self.assertNotIn("provisional", json.dumps(report["facts"]).lower())
+        added_by_the_request_node = {"same_period_share_percent"}  # computed in Prepare Analysis Request so the model never divides
         for top, sub in set(re.findall(r"`facts\.([a-z_]+)(?:\.([a-z_]+))?", prompt)):
+            if top in added_by_the_request_node:
+                self.assertIn(top, node(load("Report_Analysis_Button_v1.json"), "Prepare Analysis Request")["parameters"]["jsCode"])
+                continue
             owners = [r["facts"] for r in reports if top in r["facts"]]
             self.assertTrue(owners, f"facts.{top} tidak ada di laporan BU mana pun")
             if sub:
@@ -510,7 +539,7 @@ class CodeNodeTests(unittest.TestCase):
 
     def test_model_output_is_validated(self):
         good = self.parse({"stop_reason": "end_turn", "content": [{"type": "text", "text": '```json\n{"executive_summary": " SQL naik. "}\n```'}]})
-        self.assertEqual(good["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": ""})
+        self.assertEqual(good["result"][0]["json"]["analysis"], {"executive_summary": "SQL naik.", "funnel_analysis": "", "next_action": ""})
         bad = lambda text, **kw: self.parse({"stop_reason": kw.get("stop", "end_turn"), "content": [{"type": "text", "text": text}]})
         self.assertIn("tidak dikenal", bad('{"hack": "x"}')["error"])
         self.assertIn("harus berupa teks", bad('{"executive_summary": 5}')["error"])

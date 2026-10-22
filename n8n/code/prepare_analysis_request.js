@@ -16,7 +16,19 @@ const request = ref('Validate Request').first().json;
 const run = $input.first().json;
 if (!run.run_id) throw new Error(`Belum ada laporan numerik untuk ${request.bu} ${request.period}; jalankan Report Generate terlebih dahulu`);
 
-const userInput = { company_key: request.bu, analysis_keys: run.analysis_keys, facts: run.facts, actions: Array.isArray(request.actions) ? request.actions : [] };
+// Reports made before the Next Action panel existed have no slot for it in their stored page; the analysis still answers it and the viewer shows it.
+const analysisKeys = [...new Set([...(run.analysis_keys || []), 'next_action'])];
+// Share of the Same-week (or Same-month) figures in the period total, computed here so the model never divides: percent with one decimal, null when the total is 0.
+const facts = JSON.parse(JSON.stringify(run.facts));
+const share = (window) => {
+  const part = (facts.same_period || {})[window];
+  const whole = (facts.funnel || {})[window];
+  if (!part || !whole) return null;
+  const percent = (a, b) => (b ? Math.round((1000 * a) / b) / 10 : null);
+  return { MQL: percent(part.MQL, whole.MQL), SQL: percent(part.SQL, whole.SQL), 'SQL Value': percent(part['SQL Value'], whole['SQL Value']) };
+};
+facts.same_period_share_percent = { now: share('now'), prev: share('prev') };
+const userInput = { company_key: request.bu, analysis_keys: analysisKeys, facts, actions: Array.isArray(request.actions) ? request.actions : [] };
 if (request.targets) userInput.targets = request.targets;
 if (request.budget) userInput.budget = request.budget;
 const userText = JSON.stringify(userInput);

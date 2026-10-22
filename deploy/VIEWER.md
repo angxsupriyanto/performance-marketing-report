@@ -51,7 +51,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 
 - Tombol **Buat analisis** (dan **Buat ulang analisis**) tidak langsung menjalankan analisis: ia membuka daftar **Action yang sudah dilakukan** di periode itu (action, campaign opsional, catatan opsional; boleh kosong). Daftar tersimpan per report (tabel `reports.report_actions`, migrasi `009`, append-only: setiap simpan menambah satu versi) dan tampil di bagian **Action** di bawah report. Admin bisa mengubahnya dari sana tanpa membuat analisis. Peringatan "ada panel yang sudah diedit" kini ada di dalam form ini.
 - Yang dikirim ke analisis: ringkasan angka, progress target, **action periode itu**, serta **budget dan spend** (total, spend minggu dan bulan, sisa, pemakaian, dan tiap campaign). Nama campaign ikut terkirim, nama perusahaan dan nama orang tidak.
-- **Next Action** adalah panel analisis biasa di paling bawah report (penanda AI atau Edited, admin bisa mengedit atau memulihkan versi AI). Report yang dibuat sebelum pembaruan ini belum punya slot untuk panel itu sampai Report Generate dijalankan lagi.
+- **Next Action** adalah panel analisis biasa di paling bawah report (penanda AI atau Edited, admin bisa mengedit atau memulihkan versi AI). Report lama juga mendapat Next Action: ia disimpan bersama analisis dan ditampilkan viewer walaupun halaman tersimpannya belum punya slot untuk panel itu.
 - Instruksi analisis (`n8n/prompts/analysis_v2.md`) memuat pengetahuan internal bahwa target utama KPI BU1 adalah SQL Value (bukan Deal Won) dan KPI BU2 adalah volume SQL dari campaign Ecosystem. Keduanya hanya ada di instruksi, tidak ditulis ke hasil analisis atau report.
 
 ## Simpan sebagai PDF

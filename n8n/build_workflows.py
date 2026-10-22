@@ -221,7 +221,7 @@ def analysis_flow() -> Flow:
         "method": "POST", "url": f"{SERVICE_URL}/v1/analysis/apply",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
         "sendBody": True, "contentType": "json", "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ report_html: $('Load Latest Run').first().json.numeric_html, analysis: $json.analysis }) }}",
+        "jsonBody": "={{ JSON.stringify({ report_html: $('Load Latest Run').first().json.numeric_html, analysis: Object.fromEntries(Object.entries($json.analysis).filter(([key]) => $('Load Latest Run').first().json.analysis_keys.includes(key))) }) }}",
         "options": {"timeout": 120000},
     }, (1440, 0))
     code_node(flow, "Prepare Save", "prepare_save_analysis.js", (1680, 0))

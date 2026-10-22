@@ -39,7 +39,7 @@ let analysis;
 try { analysis = JSON.parse(text.slice(start, end + 1)); } catch (e) { throw new Error('Jawaban model bukan JSON yang valid'); }
 if (analysis === null || typeof analysis !== 'object' || Array.isArray(analysis)) throw new Error('Jawaban model harus berupa objek JSON');
 
-const allowed = new Set(ref('Load Latest Run').first().json.analysis_keys);
+const allowed = new Set([...ref('Load Latest Run').first().json.analysis_keys, 'next_action']); // the stored page of an older report has no slot for it; the analysis keeps it anyway
 const clean = {};
 for (const key of allowed) clean[key] = '';
 for (const [key, value] of Object.entries(analysis)) {
