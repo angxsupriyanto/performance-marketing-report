@@ -95,10 +95,8 @@ def link_target() -> str:
     return '<a href="/targets" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur target</a>'
 
 
-def card(label: str, value: str, compare: str, share: str | None = None, formula: str | None = None) -> str:
+def card(label: str, value: str, compare: str, share: str | None = None) -> str:
     extra = f'<div style="color: {TEXT}">{e(share)}</div>' if share else ""
-    if formula:
-        extra += f'<div style="color: {MUTED}; font-size: 12.5px">{e(formula)}</div>'
     return (
         f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="color: {MUTED}">{e(label)}</div>'
         f'<div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div><div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
@@ -529,7 +527,7 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         if base is None:
             return card(n, value, compare)
         now_rate, prev_rate = percent(m[n], m[base]), percent(prev[n], prev[base])
-        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}", f"{n} ÷ {base}")
+        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}")
 
     cards = "".join(rate_card(n) for n in names)
     same, same_prev = view["same"], view["same_prev"]
