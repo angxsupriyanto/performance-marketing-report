@@ -95,12 +95,17 @@ def link_target() -> str:
     return '<a href="/targets" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur target</a>'
 
 
-def card(label: str, value: str, compare: str, share: str | None = None) -> str:
+def card(label: str, value: str, compare: str, share: str | None = None, formula: str | None = None) -> str:
     extra = f'<div style="color: {TEXT}">{e(share)}</div>' if share else ""
+    if formula:
+        extra += f'<div style="color: {MUTED}; font-size: 12.5px">{e(formula)}</div>'
     return (
         f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="color: {MUTED}">{e(label)}</div>'
         f'<div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div><div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
     )
+
+
+RATES = {"MQL": "Submission", "SQL": "MQL", "Deal Won": "SQL"}  # card -> the stage its rate divides by, see METRIC_RULES.md
 
 
 def h3(text: str) -> str:
@@ -518,7 +523,15 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
-    cards = "".join(card(n, idr(m[n]) if "Value" in n else dotted(m[n]), f"{pl}: " + (idr(prev[n]) if "Value" in n else dotted(prev[n]))) for n in names)
+    def rate_card(n: str) -> str:
+        value, compare = idr(m[n]) if "Value" in n else dotted(m[n]), f"{pl}: " + (idr(prev[n]) if "Value" in n else dotted(prev[n]))
+        base = RATES.get(n)
+        if base is None:
+            return card(n, value, compare)
+        now_rate, prev_rate = percent(m[n], m[base]), percent(prev[n], prev[base])
+        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}", f"{n} ÷ {base}")
+
+    cards = "".join(rate_card(n) for n in names)
     same, same_prev = view["same"], view["same_prev"]
     totals = {"MQL": (m["MQL"], f"MQL {view['label']}"), "SQL": (m["SQL"], f"SQL {view['label']}"), "SQL Value": (m["SQL Value"], f"SQL Value {view['label']}")}
     same_cards = ""

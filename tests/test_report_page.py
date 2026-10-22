@@ -52,6 +52,14 @@ class MockupConformanceTests(unittest.TestCase):
         self.assertEqual([c.select_one("div").get_text() for c in soup.select(".cards")[1].find_all("div", recursive=False)],
                          ["Same-week MQL", "Same-week SQL", "Same-week SQL Value"])
         self.assertEqual(len(soup.select(".cards")), 2)
+        cards = {c.select_one("div").get_text(): [d.get_text() for d in c.find_all("div", recursive=False)] for c in soup.select(".cards")[0].find_all("div", recursive=False)}
+        for name, base in (("MQL", "Submission"), ("SQL", "MQL"), ("Deal Won", "SQL")):  # the mockup's rate line and its formula
+            lines = cards[name]
+            self.assertEqual(len(lines), 5, name)
+            self.assertRegex(lines[3], rf"^{name} Rate [0-9]+,[0-9]% · Week 38: ([0-9]+,[0-9]%|—)$")
+            self.assertEqual(lines[4], f"{name} ÷ {base}")
+        for name in ("Submission", "SQL Value", "Deal Won Value"):
+            self.assertEqual(len(cards[name]), 3, name)  # no rate line on the others
         for text in LEFTOVERS:
             self.assertNotIn(text, html, text)
 
