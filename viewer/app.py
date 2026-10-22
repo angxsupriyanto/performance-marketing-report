@@ -681,7 +681,13 @@ class Handler(BaseHTTPRequestHandler):
         today = self.now().date()
         digits = lambda v: "" if v in (None, "") else f"{int(v):,}".replace(",", ".")
         rows: list[dict] = []
-        tracker = (report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else []
+        tracker = list((report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else [])
+        try:  # the Performa snapshot is refreshed on its own, so it can know campaigns the newest report was built before
+            snapshot = store.latest_performance(bu)
+        except Exception:  # noqa: BLE001 - the report's own list is still offered
+            snapshot = None
+        if snapshot and isinstance(snapshot.get("data"), dict):
+            tracker += [n for n in (snapshot["data"].get("dims") or {}).get("campaign", []) if isinstance(n, str) and n.strip()]
         if posted is not None:
             for index in budget.row_indexes(posted):
                 rows.append({"idx": index, "name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),

@@ -185,6 +185,12 @@ class BudgetPageTests(ViewerCase):
         self.assertEqual(soup.select_one('input[name="base"]')["value"], "")
         self.assertEqual(len(soup.select("template")), 3)
 
+    def test_the_picker_also_offers_campaigns_only_the_newer_performa_snapshot_knows(self):
+        self.store.performance["bu1"] = {"snapshot_id": "p", "generated_at": datetime.now(timezone.utc), "as_of": self.now,
+                                         "data": {"v": 2, "dims": {"campaign": ["", "Camp A", "Solusi - Video Monitoring - CPC"]}, "leads": []}}
+        _, soup = self.get()
+        self.assertEqual([o["data-pick-name"] for o in soup.select("#pick-list [data-pick-name]")], ["Camp A", "Solusi - Video Monitoring - CPC"])  # no blank name, no duplicate
+
     def test_saving_adds_a_version_and_the_page_shows_it_with_history(self):
         response, _ = self.call("POST", "/budget", self.form())
         self.assertEqual((response.status, response.getheader("Location")), (303, f"/budget?bu=bu1&month={self.month}&saved=1"))
