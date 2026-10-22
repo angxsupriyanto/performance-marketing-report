@@ -23,6 +23,22 @@ class ReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             report.parse_date("17/09/2026", "x")
 
+    def test_period_parsing(self):
+        week = report.parse_period("2026-W39")
+        self.assertEqual((week.start.isoformat(), week.end.isoformat(), week.prev_start.isoformat()), ("2026-09-21", "2026-09-27", "2026-09-14"))
+        self.assertEqual((week.short, week.prev_short), ("W39", "W38"))
+        january = report.parse_period("2027-01")
+        self.assertEqual((january.start.isoformat(), january.end.isoformat()), ("2027-01-01", "2027-01-31"))
+        self.assertEqual((january.prev_start.isoformat(), january.prev_end.isoformat()), ("2026-12-01", "2026-12-31"))
+        self.assertEqual(report.parse_period("2028-03").prev_end.isoformat(), "2028-02-29")
+        for bad in ("2026-13", "2026-W5", "september"):
+            with self.assertRaises(ValueError):
+                report.parse_period(bad)
+
+    def test_unknown_profile_is_rejected(self):
+        with self.assertRaises(ValueError):
+            report.load_profile("bu-tidak-ada")
+
     def test_generated_numbers_and_empty_analysis(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -53,10 +69,29 @@ class ReportTests(unittest.TestCase):
             self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1350000)
             self.assertEqual(audit["same_week"]["SQL"], 0)
             soup = BeautifulSoup(out.read_text(), "html.parser")
-            self.assertEqual(len(soup.select(".sql-list tbody tr")), 1)
-            self.assertIn("Backlog", soup.select_one(".sql-list tbody").get_text())
+            sql_table = [t for t in soup.select("table") if "Daftar SQL Week 39" in t.select_one("caption").get_text()][0]
+            self.assertEqual(len(sql_table.select("tbody tr")), 1)
+            self.assertIn("Backlog", sql_table.select_one("tbody").get_text())
             self.assertNotIn("<script>alert(1)</script>", out.read_text())
-            self.assertTrue(all(not x.get_text(strip=True) for x in soup.select(".executive-prose,.analysis-body,.hardware-analysis-summary p,.product-analysis p")))
+            panels = soup.select("[data-analysis]")
+            self.assertEqual(sorted(p["data-analysis"] for p in panels), sorted(["executive_summary", "hardware_summary"] + ["hardware_" + n for n in ("dashcam", "gps_tracker", "fuel", "mdvr", "obd")]))
+            self.assertTrue(all(p.get_text() == "Kosong sampai analisis dibuat." for p in panels))
+
+            monthly = root / "monthly.html"
+            cmd[cmd.index("--week") + 1] = "2026-09"
+            cmd[cmd.index("--output") + 1] = str(monthly)
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            audit = json.loads(monthly.with_suffix(".audit.json").read_text())
+            self.assertEqual(audit["period_kind"], "month")
+            self.assertEqual(audit["metrics"]["now"]["Submission"], 2)
+            self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1350000)
+            self.assertEqual(audit["metrics"]["now"]["Deal Won"], 1)
+            html = monthly.read_text()
+            self.assertIn("Sep 2026 (1 sampai 30 Sep 2026) vs Agu 2026 (1 sampai 31 Agu 2026)", html)
+            self.assertNotIn("Week —", html)
+            self.assertNotIn("W—", html)
+            self.assertNotIn("minggu", html)
 
 
 if __name__ == "__main__":

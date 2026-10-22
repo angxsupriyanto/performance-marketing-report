@@ -1,0 +1,52 @@
+{
+  "name": "BU1",
+  "tag": "BU1 · DATA AKTUAL",
+  "source_label": "BU1 Campaign Tracker",
+  "bu_column": "BU",
+  "record_key_column": "Record Key",
+  "products": [
+    "Dashcam",
+    "GPS Tracker",
+    "Fuel",
+    "MDVR",
+    "OBD"
+  ],
+  "product_aliases": {
+    "GPS": "GPS Tracker"
+  },
+  "product_typo_fixes": [
+    {
+      "raw": "OND",
+      "campaign_contains": "OBD",
+      "to": "OBD"
+    }
+  ],
+  "stage_date_columns": {
+    "Submission": "Inbound Date",
+    "MQL": "MQL Date",
+    "SQL": "Proposal Price Quote Date",
+    "Deal Won": "Deal Won Date"
+  },
+  "sql_value_column": "SUM of ARR + OTF (Tanpa PPN)",
+  "sql_value_label": "ARR + OTF tanpa PPN",
+  "won_value_column": "SUM of Total Contract Deal Won",
+  "value_column_aliases": {
+    "SUM of ARR + OTF (Tanpa PPN)": [
+      "ARR + OTF (Tanpa PPN)"
+    ],
+    "SUM of Total Contract Deal Won": [
+      "Total Contract Deal Won"
+    ]
+  },
+  "money_decimals": false,
+  "common_columns": [
+    "Company",
+    "Channel",
+    "Source",
+    "Campaign",
+    "Campaign Hardware",
+    "Industry"
+  ],
+  "hardware_report": true,
+  "target_unit": "idr"
+}

@@ -1,6 +1,6 @@
 # Aturan metrik BU1 weekly dashboard
 
-Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan data. Satu baris pada ekspor stage dihitung sebagai satu event stage. Empat file harus berasal dari snapshot tracker yang sama. Semua periode memakai ISO week Senin–Minggu berdasarkan **tanggal event**, meskipun kolom `... Week` dalam CSV berbeda.
+Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan data. Satu baris pada ekspor stage dihitung sebagai satu event stage. Empat file harus berasal dari snapshot tracker yang sama. Periode mingguan memakai ISO week Senin–Minggu; periode bulanan memakai bulan kalender penuh dibanding bulan kalender sebelumnya. Keduanya berdasarkan **tanggal event**, meskipun kolom `... Week` dalam CSV berbeda. Semua rumus di bawah berlaku sama untuk kedua jenis periode; "minggu" dibaca "periode".
 
 | Output | Sumber dan rumus |
 |---|---|
@@ -25,7 +25,29 @@ Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan da
 | Campaign Detail MQL Rate | Baris Submission pada campaign/minggu yang sudah memiliki MQL Date **pada snapshot CSV**, walaupun tanggal MQL jatuh pada minggu sesudahnya, ÷ Submission campaign/minggu. Ini berbeda dari Same-week MQL dan dari Cross-stage MQL Rate. Hanya campaign hardware yang memiliki Submission di minggu terbaru ditampilkan. |
 | Highlight | Top SQL Value campaign; campaign dengan Submission terbanyak namun 0 SQL event; campaign dengan jumlah Remark `Junk leads` terbanyak. Seri diputuskan alfabetis. Jika tidak ada kandidat, tampilkan `—`. |
 
-## Header wajib
+## Perbedaan per BU
+
+Rumus sama untuk semua BU; yang berbeda hanya kolom, dan itu ditetapkan di `profiles/<bu>.json`.
+
+| | BU1 | BU2 |
+|---|---|---|
+| Tanggal event SQL | `Proposal Price Quote Date` | `SQL Date` |
+| SQL Value | `ARR + OTF (Tanpa PPN)` | `Total Contract SQL` |
+| Produk (Campaign Hardware) | Dashcam, GPS Tracker, Fuel, MDVR, OBD | sama, ditambah Ecosystem |
+
+Ecosystem adalah campaign BU2 yang menargetkan existing user BU1. Ia hanya dikenali dari nilai `Ecosystem` pada kolom `Campaign Hardware` yang diisi manual; generator tidak mencocokkan nama perusahaan dengan daftar customer BU1.
+
+Pada sumber satu tabel (`--table`), baris difilter menurut kolom `BU`, lalu tiap stage = baris dengan tanggal stage tersebut terisi. `Record Key` ganda dalam satu BU ditolak.
+
+## Nilai uang dan status metrik
+
+- BU1: nilai harus bilangan bulat Rupiah. BU2 (`money_decimals: true` di profil): desimal sampai 2 digit diterima karena nilai Core V2 BU2 berdesimal (mis. `12033683238.62`). Bentuk yang dikenali: `12033683238.62`, `1.234.567,89`, `1,234,567.89`. Satu pemisah diikuti tepat tiga digit dibaca sebagai pemisah ribuan. Penjumlahan memakai desimal eksak; tampilan dibulatkan ke Rupiah penuh (setengah ke atas).
+- **Deal Won dan Deal Value** bersumber dari Google Sheet Campaign Tracker (keputusan pemilik laporan): `Deal Won Date` dan `Total Contract Deal Won`. Catatan: dokumen platform inbound (`METRIC_DICTIONARY`) masih menandai definisi Deal Won sebagai belum disahkan, jadi angka ini tidak otomatis sama dengan angka resmi di sana.
+- Baris Tracker dengan BU kosong atau tidak dikenal tidak masuk laporan BU mana pun; jumlahnya tercatat di audit (`rows_without_bu`) dan di ringkasan Telegram.
+
+## Header wajib (BU1, empat CSV stage)
+
+Untuk BU2 ganti `Proposal Price Quote Date` dan `SUM of ARR + OTF (Tanpa PPN)` dengan `SQL Date` dan `Total Contract SQL`. Awalan `SUM of` pada kolom nilai bersifat opsional.
 
 Header dibaca setelah spasi berulang dan spasi di ujung dinormalisasi. Ejaan inti tetap harus cocok. `SUM of  ARR + OTF (Tanpa PPN) ` dalam ekspor akan menjadi `SUM of ARR + OTF (Tanpa PPN)`; `SUM of  Total Contract Deal Won` akan menjadi `SUM of Total Contract Deal Won`.
 
@@ -36,4 +58,12 @@ Header dibaca setelah spasi berulang dan spasi di ujung dinormalisasi. Ejaan int
 | Raw SQL | `Company`, `Channel`, `Source`, `Campaign`, `Campaign Hardware`, `Industry`, `Inbound Date`, `Proposal Price Quote Date`, `SUM of ARR + OTF (Tanpa PPN)` |
 | Raw Deal Won | `Company`, `Channel`, `Source`, `Campaign`, `Campaign Hardware`, `Industry`, `Inbound Date`, `Deal Won Date`, `SUM of Total Contract Deal Won` |
 
-Tanggal diterima dalam `M/D/YYYY` seperti ekspor CSV atau ISO `YYYY-MM-DD`. Nilai uang harus bilangan bulat Rupiah dengan atau tanpa pemisah ribuan; format desimal ditolak agar tidak salah skala. Denominator 0 pada rate ditampilkan N/A. Tidak ada deduplikasi nama perusahaan otomatis dan tidak ada join lintas empat file berdasarkan nama/telepon; perubahan definisi tersebut membutuhkan identifier stabil dan review terpisah.
+Tanggal diterima dalam `M/D/YYYY` seperti ekspor CSV atau ISO `YYYY-MM-DD`, boleh diikuti jam (mis. `2026-01-19 00:00:00`, `1/19/2026 5:30 PM`, `2026-01-19T08:15:00+07:00`). Bagian jam diabaikan dan tidak pernah dikonversi antar zona waktu: tanggal diambil seperti tertulis di sel, sama dengan cara pivot Google Sheet mengelompokkan sel tanggal-jam. Bentuk yang ambigu seperti `19/01/2026` atau `20260119` tetap ditolak. Semua baris bermasalah dilaporkan sekaligus, dikelompokkan per kolom dengan satu contoh. Nilai uang harus bilangan bulat Rupiah dengan atau tanpa pemisah ribuan; format desimal ditolak agar tidak salah skala. Denominator 0 pada rate ditampilkan N/A. Tidak ada deduplikasi nama perusahaan otomatis dan tidak ada join lintas empat file berdasarkan nama/telepon; perubahan definisi tersebut membutuhkan identifier stabil dan review terpisah.
+
+## Target, progress, dan penetapan bulan
+
+- Bulan, semester, dan tahun sebuah minggu ISO ditentukan oleh hari **Kamis** di minggu itu. Akumulasi bulan, semester, atau tahun menjumlahkan minggu ISO utuh yang termasuk bucket itu, dari awalnya sampai minggu report (`facts.progress.windows`). Untuk report bulanan memakai batas kalender.
+- Progress = aktual ÷ target. Aktual memakai definisi SQL profil BU (tanggal SQL dan nilai SQL), bukan definisi terpisah.
+- BU1: target SQL Value bulanan per hardware (Campaign Hardware bertanda), serta target SQL Value semester dan 1 tahun untuk seluruh SQL BU1. BU2: target jumlah SQL campaign Ecosystem untuk semester dan 1 tahun.
+- Target 1 tahun hanya ada bila kedua semester terisi. Target 0 berarti tidak ada target.
+

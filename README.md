@@ -1,6 +1,6 @@
-# BU1 Weekly Performance Dashboard
+# Performance Marketing Dashboard (weekly & monthly, per BU)
 
-Template HTML 960 px dan generator laporan mingguan BU1. Proses angka **deterministik**: empat CSV Campaign Tracker masuk, minggu ISO ditentukan secara eksplisit, dan satu HTML mandiri serta berkas audit dihasilkan. Script tidak memakai AI, tidak mencari data di internet, dan tidak menulis analisis deskriptif.
+Template HTML 960 px dan generator laporan mingguan atau bulanan per BU. Profil yang tersedia: **BU1** dan **BU2** (lihat `profiles/`). Proses angka **deterministik**: empat CSV Campaign Tracker masuk, minggu ISO ditentukan secara eksplisit, dan satu HTML mandiri serta berkas audit dihasilkan. Script tidak memakai AI, tidak mencari data di internet, dan tidak menulis analisis deskriptif.
 
 Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis kosong**. Repo GitHub saat ini bersifat publik. Jangan commit CSV lead, HTML laporan terisi, audit run, atau JSON analisis berisi informasi internal. `.gitignore` mengecualikan berkas tersebut secara default.
 
@@ -8,7 +8,9 @@ Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis 
 
 | File | Fungsi |
 |---|---|
-| `dashboard_template.html` | Tampilan kosong dengan layout dan panel analisis kosong. Bisa dibuka langsung sebagai preview desain. |
+| `report_view.py` | Tampilan report, persis mengikuti mockup yang disetujui: hanya bagian dan tabel yang ada di mockup. Dipakai generator (report numerik) dan viewer (menambahkan target dan analisis). |
+| `profiles/bu1.json`, `profiles/bu2.json` | Profil BU: nama, produk hardware, kolom tanggal SQL, kolom nilai, kolom wajib. |
+| `skill/SKILL.md` | Draf skill Claude yang memanggil generator ini (menggantikan skill lama berbasis pandas). |
 | `generate_report.py` | Membaca dan memvalidasi empat CSV, menghitung angka, lalu menghasilkan HTML. |
 | `METRIC_RULES.md` | Sumber aturan hitung dan pengecualian. Ubah ini bersama kode bila definisi bisnis berubah. |
 | `apply_analysis.py` | Langkah opsional terpisah untuk memasukkan teks setelah angka disetujui. |
@@ -80,9 +82,83 @@ python generate_report.py \
 
 Generator berhenti dengan pesan kesalahan bila header wajib tidak ada, tanggal atau uang tidak valid, atau minggu terpilih tidak memiliki Submission. Baris `Grand Total` tanpa tanggal event diabaikan; baris data lain tanpa tanggal event wajib akan ditolak.
 
+## Laporan bulanan dan opsi praktis
+
+`--period` menerima `YYYY-Www` (mingguan) atau `YYYY-MM` (bulanan). Bulanan memakai rumus, layout, dan template yang sama: bulan kalender penuh dibanding bulan kalender sebelumnya, tetap berdasarkan **tanggal event**. Label "Week/W" menjadi nama bulan, "Same-week" menjadi "Same-month". `--week` masih diterima sebagai alias lama.
+
+Dua cara memendekkan perintah:
+
+- `--input-dir input/BU1` membaca empat CSV di folder itu. Nama file harus memuat `submission`, `mql`, `sql`, dan `deal won` (tepat satu per kata kunci; kalau ambigu, generator berhenti).
+- `--output` boleh dihilangkan; default-nya `output/<BU>_<periode>.html`.
+
+```bash
+python generate_report.py --input-dir input/BU1 --period 2026-09   # bulanan
+python generate_report.py --input-dir input/BU1 --period 2026-W39  # mingguan
+```
+
+Audit JSON kini memuat `bu`, `period`, `period_kind`, dan `comparison_end`. Kunci `same_week` tetap bernama itu untuk kompatibilitas; pada laporan bulanan artinya "inbound dan event dalam bulan yang sama".
+
+## Sumber satu tabel: NEW Customers List (`--table`)
+
+Bila semua data ada di satu tabel dengan satu baris per lead (tab *NEW Customers List*), ekspor tab itu ke CSV dan jalankan:
+
+```bash
+python generate_report.py --table input/customers.csv --bu bu2 --period 2026-W39
+```
+
+Generator memfilter baris menurut kolom `BU` (nilai harus sama dengan nama profil, mis. `BU2`, spasi dan huruf besar-kecil diabaikan; nilai lain bisa didaftarkan di `bu_values` pada profil), lalu membentuk empat tampilan stage dari kolom tanggal masing-masing. Hasilnya identik dengan memakai empat CSV stage untuk lead yang sama; ini diuji. Aturan tambahan:
+
+- `Record Key` ganda dalam satu BU **ditolak**, karena akan menghitung lead dua kali. Pakai `--allow-duplicate-keys` hanya bila ganda itu disengaja.
+- Bila tidak ada baris untuk BU yang diminta, pesan error menampilkan nilai kolom `BU` yang ditemukan.
+- Header `ARR + OTF (Tanpa PPN)` dan `Total Contract Deal Won` (tanpa awalan "SUM of") dikenali lewat `value_column_aliases` di profil.
+- Tanggal harus `M/D/YYYY` atau `YYYY-MM-DD`. Jika sheet berformat D/M/YYYY, tanggal seperti `3/4/2026` akan terbaca salah tanpa error; pastikan format ekspor sebelum dipakai.
+- Audit mencatat `rows_total`, `rows_in_bu`, `rows_without_bu`, jumlah baris per stage, dan SHA-256 file.
+
+## Perbedaan BU1 dan BU2
+
+| | BU1 | BU2 |
+|---|---|---|
+| Tanggal SQL | `Proposal Price Quote Date` | `SQL Date` |
+| SQL Value | `ARR + OTF (Tanpa PPN)` | `Total Contract SQL` |
+| Produk | Dashcam, GPS Tracker, Fuel, MDVR, OBD | sama, ditambah **Ecosystem** |
+
+Ecosystem diambil dari nilai `Ecosystem` pada kolom `Campaign Hardware` (diisi manual). Slot analisis produk dan tombol filter dibentuk dari daftar produk profil; untuk BU2 salin `analysis.bu2.example.json` yang memiliki kunci `hardware_ecosystem`. Kunci JSON yang tidak ada di laporan ditolak.
+
+## Menambah BU baru
+
+1. Ambil **hanya baris header** tabel dan bandingkan dengan `profiles/bu1.json`.
+2. Salin profil terdekat menjadi `profiles/<bu>.json`, lalu ubah nama, produk, `stage_date_columns`, kolom nilai, dan alias.
+3. Jika definisi stage atau rumus berbeda lebih dari kolom dan label, ubah `METRIC_RULES.md` **dulu**, baru kode. Profil mengatur nama kolom dan label, bukan rumus.
+4. Tambahkan uji untuk profil tersebut di `tests/test_table_mode.py` dan jalankan dengan `--bu <bu>`.
+
+## Penerapan: Docker, n8n, dan PostgreSQL (dipicu manual)
+
+Jalur tanpa mengekspor CSV sendiri, **tanpa penjadwalan** (Anda yang memicu, dengan periode eksplisit): n8n membaca tab *NEW Customers List*, mengirim **hanya kolom yang dibutuhkan** ke `service/` (layanan HTTP kecil di Docker yang membungkus generator ini), lalu menyimpan HTML, audit, dan `facts` ke database `marketing_reports`. Tombol analisis mengirim `facts` agregat (tanpa nama customer) ke Claude dan menyimpan hasilnya sebagai baris baru. Angka tetap hanya dihitung oleh generator Python; Claude tidak pernah menghitung angka.
+
+- `service/server.py`: `POST /v1/reports?bu=&period=` (isi: CSV), `POST /v1/analysis/apply`, `GET /healthz`. Wajib token Bearer; tidak mau start tanpa token; isi request tidak pernah masuk log.
+- `Dockerfile`, `deploy/docker-compose.report-service.example.yml`: pengemasan, tanpa port publik, filesystem read-only, tanpa root.
+- `database/`: skrip pembuatan database, role (writer hanya INSERT, reader hanya SELECT), dan tabel append-only. Input identik tidak menambah baris.
+- `n8n/`: tiga workflow siap impor dan panduan pemasangannya, termasuk daftar hal yang belum terverifikasi terhadap n8n sungguhan.
+- Keluaran generator kini juga `<output>.facts.json` (agregat per stage, source, produk, campaign; tanpa nama perusahaan).
+
+Pengujian: `python -m unittest discover -s tests`. Test database membutuhkan server PostgreSQL sekali pakai: `REPORTS_TEST_ADMIN="host=127.0.0.1 port=5432 user=postgres" python -m unittest tests.test_database` (dengan `pip install -r requirements-dev.txt`). Test itu menolak berjalan bila database `marketing_reports` atau role `report_*` sudah ada.
+
+## Viewer web dan target
+
+`viewer/` adalah web internal untuk melihat report dari database, menekan tombol analisis, dan mengatur target, dengan akun per orang (admin atau pengguna lihat-saja, akses per perusahaan). Pasang dengan `deploy/VIEWER.md`; keputusan desainnya:
+
+- **Target tidak ada di report.** Generator hanya menulis angka aktual dan slot kosong (`Target`, `Progress`, kartu progress). Viewer mengisinya saat report dibuka dari tabel `target_entries`, jadi target bisa diubah kapan saja tanpa membuat report baru.
+- **Tabel target append-only.** Menyimpan target menambah baris; tidak ada UPDATE atau DELETE. Mengosongkan target berarti menyimpan 0. Target bulanan per hardware (BU1, Rupiah) berlaku mulai bulan yang dipilih dan seterusnya sampai ada baris baru. Target semester berlaku per semester; target 1 tahun adalah jumlah dua semester. BU2 hanya memakai target semester dan tahun, dalam jumlah SQL campaign Ecosystem.
+- **Bulan sebuah minggu = bulan yang memuat hari Kamis minggu itu** (juga untuk semester dan tahun), aturan yang sama dengan penomoran minggu ISO. Progress bulan berjalan menjumlahkan minggu-minggu ISO utuh milik bulan itu sampai minggu report, jadi minggu yang melewati pergantian bulan tidak terbelah.
+- **BU1** menampilkan tabel Campaign Hardware (Submission, MQL, SQL, SQL Value, Target, Progress), funnel per hardware dengan bar progress target, dan panel analisis per hardware. **BU2** tidak punya panel hardware; ia menampilkan progress SQL Ecosystem terhadap target semester dan tahun, daftar SQL Ecosystem periode itu (kosong bila tidak ada), dan daftar Deal Won.
+- **Pengguna dan nama perusahaan** ada di database (`reports.viewer_users`, `reports.company_names`). "BU1" dan "BU2" hanya identitas internal; yang tampil adalah nama yang diatur admin (contoh McEasy dan LOL), atau "Perusahaan 1" dan "Perusahaan 2" bila belum diatur.
+- **Performa** (grafik per hari, minggu, bulan, filter enam dimensi, dan matriks cohort) membaca snapshot `reports.performance_snapshots`: satu baris anonim per lead (tanpa nama, kontak, atau ID) yang diisi workflow n8n terpisah *Performa Generate* (manual). Lihat `deploy/VIEWER.md`.
+- **Budget dan spend** juga di database (`reports.budget_snapshots`, append-only, satu versi lengkap per simpan) dan digabung ke report saat dibuka; spend mingguan dan bulanan sengaja diisi terpisah. Lihat `deploy/VIEWER.md`.
+- Analisis menerima `targets` (angka progress hasil hitung viewer) di samping `facts`. Model tetap tidak melihat nama perusahaan.
+
 ## Analisis deskriptif: langkah kedua setelah angka benar
 
-Salin `analysis.example.json` menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.
+Salin `analysis.example.json` (BU2: `analysis.bu2.example.json`) menjadi `analysis.json`, isi hanya setelah HTML numerik dan audit diverifikasi. Boleh dikerjakan manual atau melalui proses review terpisah; generator angka tidak membacanya.
 
 **PowerShell**
 

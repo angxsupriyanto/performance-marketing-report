@@ -1,0 +1,12 @@
+.git
+.venv
+input
+output
+tests
+skill
+n8n
+database
+docs
+*.audit.json
+*.facts.json
+analysis.json

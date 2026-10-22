@@ -8,3 +8,15 @@ analysis.json
 .venv/
 __pycache__/
 *.pyc
+*.facts.json
+report_service_token*.txt
+*.token
+reports_db_secrets/
+report_service_token*.txt
+*.local.yml
+
+# Viewer deployment (secrets and local compose)
+viewer_password_hash
+viewer_session_secret
+n8n_webhook_token
+docker-compose.report-viewer.local.yml
