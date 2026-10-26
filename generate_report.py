@@ -223,12 +223,35 @@ def check_stage_rows(rows: list[tuple[int, dict[str, str]]], label: str, stage: 
     return kept
 
 
+def add_years(day: date, years: int) -> date:
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:  # 29 Feb has no counterpart in a non-leap year
+        return day.replace(year=day.year + years, day=28)
+
+
+def drop_expired_sql(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    """A SQL counts only when its date is at most `sql_max_age_years` calendar years after the Inbound Date (inclusive).
+    A row without an Inbound Date cannot be proven expired and stays. Other stages are not affected."""
+    years = PROFILE.get("sql_max_age_years")
+    if not years:
+        return rows, 0
+    kept = []
+    for row in rows:
+        inbound = parse_date(row.get("Inbound Date", ""), "Inbound Date")
+        if inbound and parse_date(row[STAGES["SQL"]], STAGES["SQL"]) > add_years(inbound, years):
+            continue
+        kept.append(row)
+    return kept, len(rows) - len(kept)
+
+
 def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
     fields, rows = read_csv_rows(path, set(REQUIRED[stage]))
     missing = set(REQUIRED[stage]) - set(fields)
     if missing:
         raise ValueError(f"{path}: kolom wajib {stage} tidak ada: {', '.join(sorted(missing))}")
-    return check_stage_rows(rows, path.name, stage)
+    kept = check_stage_rows(rows, path.name, stage)
+    return drop_expired_sql(kept)[0] if stage == "SQL" else kept
 
 
 def bu_key(value: str) -> str:
@@ -266,12 +289,15 @@ def read_table(path: Path, allow_duplicate_keys: bool = False) -> tuple[dict[str
             problems.append(str(exc))
     if problems:
         raise ValueError(" || ".join(problems))
+    data["SQL"], sql_expired = drop_expired_sql(data["SQL"])
     info = {
         "rows_total": len(rows),
         "rows_in_bu": len(in_bu),
         "rows_without_bu": sum(1 for _, r in rows if not r.get(bu_column) and any(r.values())),
         "duplicate_record_keys": len(duplicates),
     }
+    if PROFILE.get("sql_max_age_years"):
+        info["sql_expired"] = sql_expired
     return data, info
 
 
@@ -551,8 +577,12 @@ def performance(data: dict[str, list[dict[str, str]]], as_of: date) -> dict:
         for row in data[stage]:
             unique.setdefault(id(row), row)
 
+    sql_ids = {id(row) for row in data["SQL"]}  # the same row also sits in other stage lists after its SQL was dropped as expired
+
     def day(row: dict[str, str], stage: str) -> int:
         cell = row.get(STAGES[stage], "")
+        if stage == "SQL" and id(row) not in sql_ids:
+            return 0
         return parse_date(cell, STAGES[stage]).toordinal() if cell else 0
 
     def amount(row: dict[str, str], stage: str, when: int):

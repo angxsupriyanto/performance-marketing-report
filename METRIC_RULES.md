@@ -7,7 +7,7 @@ Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan da
 | Submission | Jumlah baris Raw Submission dengan `Inbound Date` di minggu tersebut. |
 | MQL | Jumlah baris Raw MQL dengan `MQL Date` di minggu tersebut. |
 | MQL Rate KPI | MQL event minggu tersebut ÷ Submission event minggu tersebut. |
-| SQL | Jumlah baris Raw SQL dengan `Proposal Price Quote Date` di minggu tersebut. |
+| SQL | Jumlah baris Raw SQL dengan `Proposal Price Quote Date` di minggu tersebut. Khusus BU1, baris hanya dihitung bila tanggal SQL paling lambat 1 tahun kalender setelah `Inbound Date` (inklusif; 29 Feb dihitung 28 Feb; tanpa `Inbound Date` tetap dihitung). Baris yang lewat dikeluarkan dari semua angka SQL dan SQL Value, termasuk Same-week, tabel, Top Contributor, Performa, dan progress Target. Submission, MQL, dan Deal Won tidak terpengaruh. Jumlahnya tercatat di audit sebagai `sql_expired`. |
 | SQL Rate KPI | SQL event minggu tersebut ÷ MQL event minggu tersebut. |
 | SQL Value | Jumlah `SUM of ARR + OTF (Tanpa PPN)` pada baris Raw SQL tersebut. `Rp -` dan kosong menjadi 0. |
 | Deal Won | Jumlah baris Raw Deal Won dengan `Deal Won Date` di minggu tersebut. |

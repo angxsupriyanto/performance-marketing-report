@@ -237,3 +237,63 @@ class TableModeTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SqlAgeRuleTests(unittest.TestCase):
+    """BU1: a SQL counts only when its date is at most one calendar year after the Inbound Date. BU2 has no such rule."""
+
+    def setUp(self):
+        from datetime import date
+        self.date = date
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        report.use_profile(report.load_profile("bu1"))
+        self.addCleanup(lambda: report.use_profile(report.load_profile("bu1")))
+
+    def rows(self, *leads):
+        path = self.root / "t.csv"
+        write_table(path, list(leads))
+        return report.read_table(path)
+
+    def test_exactly_one_year_is_kept_and_one_day_later_is_dropped(self):
+        data, info = self.rows(
+            lead("1", "BU1", "GPS", "9/24/2025", ppq="9/24/2026", arr="Rp 100"),
+            lead("2", "BU1", "GPS", "9/24/2025", ppq="9/25/2026", arr="Rp 200"),
+            lead("3", "BU1", "GPS", "9/20/2026", ppq="9/21/2026", arr="Rp 300"))
+        self.assertEqual(sorted(r["Record Key"] for r in data["SQL"]), ["1", "3"])
+        self.assertEqual(info["sql_expired"], 1)
+        self.assertEqual(len(data["Submission"]), 3)  # other stages are untouched
+
+    def test_missing_inbound_date_stays_and_leap_day_uses_28_feb(self):
+        self.assertEqual(report.add_years(self.date(2024, 2, 29), 1), self.date(2025, 2, 28))
+        data, _ = self.rows(lead("1", "BU1", "GPS", "", ppq="9/24/2026", arr="Rp 100"))
+        self.assertEqual(len(data["SQL"]), 1)
+
+    def test_expired_sql_is_not_in_performa_but_the_lead_is(self):
+        data, _ = self.rows(lead("1", "BU1", "GPS", "1/5/2025", mql="1/6/2025", ppq="9/24/2026", arr="Rp 500"))
+        result = report.performance(data, self.date(2026, 9, 27))
+        self.assertEqual(len(result["leads"]), 1)
+        sub, mql, sql, won, sql_value, won_value = result["leads"][0][:6]
+        self.assertGreater(sub, 0)
+        self.assertGreater(mql, 0)
+        self.assertEqual((sql, sql_value), (0, 0))
+
+    def test_report_excludes_expired_sql_from_count_and_value(self):
+        path = self.root / "t.csv"
+        write_table(path, [
+            lead("1", "BU1", "GPS", "9/21/2026", mql="9/22/2026", ppq="9/24/2026", arr="Rp 1.000.000"),
+            lead("2", "BU1", "GPS", "1/5/2025", ppq="9/24/2026", arr="Rp 9.000.000")])
+        out = self.root / "o.html"
+        result = run("--table", path, "--bu", "bu1", "--period", "2026-W39", "--output", out)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        audit = json.loads(out.with_suffix(".audit.json").read_text())
+        self.assertEqual(audit["metrics"]["now"]["SQL"], 1)
+        self.assertEqual(audit["metrics"]["now"]["SQL Value"], 1000000)
+        self.assertEqual(audit["inputs"]["table"]["sql_expired"], 1)
+
+    def test_bu2_has_no_age_rule(self):
+        report.use_profile(report.load_profile("bu2"))
+        data, info = self.rows(lead("1", "BU2", "Ecosystem", "1/5/2025", sql_date="9/24/2026", contract="Rp 100"))
+        self.assertEqual(len(data["SQL"]), 1)
+        self.assertNotIn("sql_expired", info)
