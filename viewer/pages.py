@@ -290,11 +290,12 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
 
 
 def action_form(label: str, items: list[dict], campaigns: list[str], budget_note: str) -> str:
-    """The admin-only form for the actions of the period; the viewer's script opens it from the analysis button or from the Action section."""
+    """The admin-only form for the actions of the period; the viewer's script opens it from the analysis button or from the Action section.
+    campaigns: the rows saved in Budget for the report's month, so the list is short and matches what the analysis is given as spend."""
     names = list(dict.fromkeys(c for c in campaigns if c))
     for item in items:
         if item.get("campaign") and item["campaign"] not in names:
-            names.append(item["campaign"])  # a saved name that left the tracker must not silently vanish from its row
+            names.append(item["campaign"])  # a saved name that is no longer in Budget must not silently vanish from its row
 
     def row(item: dict) -> str:
         options = '<option value="">Tidak spesifik</option>' + "".join(f'<option value="{escape(c)}"{" selected" if c == item.get("campaign") else ""}>{escape(c)}</option>' for c in names)

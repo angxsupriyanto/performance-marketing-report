@@ -482,7 +482,9 @@ class Handler(BaseHTTPRequestHandler):
                 spend = self.report_budget(report, view)
                 note = (f"Budget dan spend {spend['month_label']} ikut dikirim sebagai pertimbangan analisis." if spend.get("state") == "ok"
                         else f"Budget {spend['month_label']} belum diatur, jadi analisis berjalan tanpa data budget dan spend.")
-                form_html = pages.action_form(view["label"], items, view.get("campaign_names", []), note)
+                if not spend.get("names"):
+                    note += " Belum ada campaign yang dipilih di Budget, jadi kolom Campaign hanya berisi Tidak spesifik."
+                form_html = pages.action_form(view["label"], items, spend.get("names", []), note)
         chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited, form_html)
         if view is None:
             note = (
@@ -760,9 +762,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             snaps = self.cfg.store.budget_snapshots(bu, budget.months_needed(kind, start))
             result = budget.report_budget(kind, start, report["period_end"], report["period"], snaps)
+            names = sorted(budget.campaigns_of(budget.newest(snaps.get(month, []))), key=str.casefold)
         except Exception:  # noqa: BLE001 - a budget problem must not hide the report
             result = {"state": "gagal", "month_label": budget.month_label(month), "kind": kind}
-        result.update(bu=bu, month=month, admin=access.is_admin(self.user), prev_week_label=view.get("prev_label", ""))
+            names = []
+        result.update(names=names, bu=bu, month=month, admin=access.is_admin(self.user), prev_week_label=view.get("prev_label", ""))
         return result
 
     def budget_months(self) -> list[tuple[str, str]]:

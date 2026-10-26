@@ -70,6 +70,17 @@ class ActionPageTests(ViewerCase):
         self.assertIsNone(soup.select_one("#vw-confirm"))
         self.assertEqual(soup.select_one("#vw-analysis")["data-state"], "none")
 
+    def test_the_campaign_list_in_the_form_is_what_budget_holds_for_the_month(self):
+        options = lambda soup: [o.get_text() for o in soup.select("#vw-form [data-role=rows] [data-row] select option")]
+        empty = self.page()
+        self.assertEqual(options(empty), ["Tidak spesifik"])
+        self.assertIn("Belum ada campaign yang dipilih di Budget", empty.select_one("#vw-form").get_text())
+        data = {"campaigns": {"Email Nurturing": {"budget": 100}, "Brand search": {"budget": 50}}}
+        self.assertTrue(self.store.add_budget_snapshot("bu1", "2026-09", "", 1000, None, data, "admin"))
+        filled = self.page()
+        self.assertEqual(options(filled), ["Tidak spesifik", "Brand search", "Email Nurturing"])
+        self.assertNotIn("Belum ada campaign yang dipilih di Budget", filled.select_one("#vw-form").get_text())
+
     def test_saving_actions_keeps_every_version_shows_the_newest_and_fills_the_form_again(self):
         items = [{"action": "Naikkan bid <b>brand</b>", "campaign": "Camp A", "note": "mulai Selasa"}, {"action": "Ganti materi", "campaign": "", "note": ""}]
         response, _ = self.post("/api/actions", items=json.dumps(items))
