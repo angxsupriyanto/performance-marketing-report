@@ -240,7 +240,7 @@ if __name__ == "__main__":
 
 
 class SqlAgeRuleTests(unittest.TestCase):
-    """BU1: a SQL counts only when its date is at most one calendar year after the Inbound Date. BU2 has no such rule."""
+    """BU1: a SQL counts only when its date is at most six calendar months after the Inbound Date. BU2 has no such rule."""
 
     def setUp(self):
         from datetime import date
@@ -256,17 +256,21 @@ class SqlAgeRuleTests(unittest.TestCase):
         write_table(path, list(leads))
         return report.read_table(path)
 
-    def test_exactly_one_year_is_kept_and_one_day_later_is_dropped(self):
+    def test_exactly_six_months_is_kept_and_one_day_later_is_dropped(self):
         data, info = self.rows(
-            lead("1", "BU1", "GPS", "9/24/2025", ppq="9/24/2026", arr="Rp 100"),
-            lead("2", "BU1", "GPS", "9/24/2025", ppq="9/25/2026", arr="Rp 200"),
-            lead("3", "BU1", "GPS", "9/20/2026", ppq="9/21/2026", arr="Rp 300"))
+            lead("1", "BU1", "GPS", "3/24/2026", ppq="9/24/2026", arr="Rp 100"),
+            lead("2", "BU1", "GPS", "3/24/2026", ppq="9/25/2026", arr="Rp 200"),
+            lead("3", "BU1", "GPS", "9/20/2026", ppq="9/21/2026", arr="Rp 300"),
+            lead("4", "BU1", "GPS", "11/27/2025", ppq="10/21/2026", arr="Rp 400"))
         self.assertEqual(sorted(r["Record Key"] for r in data["SQL"]), ["1", "3"])
-        self.assertEqual(info["sql_expired"], 1)
-        self.assertEqual(len(data["Submission"]), 3)  # other stages are untouched
+        self.assertEqual(info["sql_expired"], 2)
+        self.assertEqual(len(data["Submission"]), 4)  # other stages are untouched
 
-    def test_missing_inbound_date_stays_and_leap_day_uses_28_feb(self):
-        self.assertEqual(report.add_years(self.date(2024, 2, 29), 1), self.date(2025, 2, 28))
+    def test_missing_inbound_date_stays_and_short_months_use_their_last_day(self):
+        self.assertEqual(report.add_months(self.date(2026, 8, 31), 6), self.date(2027, 2, 28))
+        self.assertEqual(report.add_months(self.date(2027, 8, 31), 6), self.date(2028, 2, 29))
+        self.assertEqual(report.add_months(self.date(2026, 7, 15), 6), self.date(2027, 1, 15))
+        self.assertEqual(report.add_months(self.date(2026, 12, 31), 6), self.date(2027, 6, 30))
         data, _ = self.rows(lead("1", "BU1", "GPS", "", ppq="9/24/2026", arr="Rp 100"))
         self.assertEqual(len(data["SQL"]), 1)
 

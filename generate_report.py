@@ -223,23 +223,24 @@ def check_stage_rows(rows: list[tuple[int, dict[str, str]]], label: str, stage: 
     return kept
 
 
-def add_years(day: date, years: int) -> date:
-    try:
-        return day.replace(year=day.year + years)
-    except ValueError:  # 29 Feb has no counterpart in a non-leap year
-        return day.replace(year=day.year + years, day=28)
+def add_months(day: date, months: int) -> date:
+    index = day.year * 12 + day.month - 1 + months
+    year, month = divmod(index, 12)
+    month += 1
+    last = (date(year + (month == 12), month % 12 + 1, 1) - timedelta(days=1)).day
+    return date(year, month, min(day.day, last))  # 31 Aug + 6 months has no 31 Feb: use the month's last day
 
 
 def drop_expired_sql(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
-    """A SQL counts only when its date is at most `sql_max_age_years` calendar years after the Inbound Date (inclusive).
+    """A SQL counts only when its date is at most `sql_max_age_months` calendar months after the Inbound Date (inclusive).
     A row without an Inbound Date cannot be proven expired and stays. Other stages are not affected."""
-    years = PROFILE.get("sql_max_age_years")
-    if not years:
+    months = PROFILE.get("sql_max_age_months")
+    if not months:
         return rows, 0
     kept = []
     for row in rows:
         inbound = parse_date(row.get("Inbound Date", ""), "Inbound Date")
-        if inbound and parse_date(row[STAGES["SQL"]], STAGES["SQL"]) > add_years(inbound, years):
+        if inbound and parse_date(row[STAGES["SQL"]], STAGES["SQL"]) > add_months(inbound, months):
             continue
         kept.append(row)
     return kept, len(rows) - len(kept)
@@ -296,7 +297,7 @@ def read_table(path: Path, allow_duplicate_keys: bool = False) -> tuple[dict[str
         "rows_without_bu": sum(1 for _, r in rows if not r.get(bu_column) and any(r.values())),
         "duplicate_record_keys": len(duplicates),
     }
-    if PROFILE.get("sql_max_age_years"):
+    if PROFILE.get("sql_max_age_months"):
         info["sql_expired"] = sql_expired
     return data, info
 

@@ -29,7 +29,7 @@
   },
   "sql_value_column": "SUM of ARR + OTF (Tanpa PPN)",
   "sql_value_label": "ARR + OTF tanpa PPN",
-  "sql_max_age_years": 1,
+  "sql_max_age_months": 6,
   "won_value_column": "SUM of Total Contract Deal Won",
   "value_column_aliases": {
     "SUM of ARR + OTF (Tanpa PPN)": [
