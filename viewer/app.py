@@ -814,16 +814,15 @@ class Handler(BaseHTTPRequestHandler):
                              "weeks": {k: digits((c.get("weeks") or {}).get(k)) for k, _, _ in weeks}})
             total_text = digits(current["total_budget"]) if current else ""
             as_of_text = current["spend_as_of"].isoformat() if current and current["spend_as_of"] else ""
-        rel, groups, hidden = performance.nurturing_groups(rel)
-        universe = {n.casefold(): n for n in tracker if n.casefold() not in hidden}
-        universe.update({g.casefold(): g for g in groups})
+        grouped = performance.nurturing_groups(rel)
+        universe = {n.casefold(): n for n in tracker}
         universe.update({r["name"].casefold(): r["name"] for r in rows if r["name"]})  # a saved name missing from the tracker can still be added back
         picker = sorted(universe.values(), key=str.casefold)
         base_id = str(current["snapshot_id"]) if current else ""
         notice = ""
         if query.get("saved"):
             notice = f"Budget dan spend {names[bu]} {budget.month_label(month)} tersimpan."
-        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed, rel=rel), nonce=nonce)
+        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed, rel=rel, grouped=grouped), nonce=nonce)
         return status
 
     def safe_names(self) -> dict[str, str]:

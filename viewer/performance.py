@@ -162,32 +162,24 @@ def relations(data: Data) -> dict:
     return {"labels": labels, "combos": [list(c) for c in combos]}
 
 
-def nurturing_groups(rel: dict | None) -> tuple[dict | None, list[str], set[str]]:
-    """Budget cannot take one row per Nurturing campaign: there are too many. Every Medium under a Source that holds "Nurturing" becomes one
-    group ("Email Nurturing"), added to the campaign labels with the same Channel, Source and Medium so the parent filters still find it.
-    Returns the relation with the groups added, the group names, and the campaigns that only ever occur under such a Source (to hide)."""
+def nurturing_groups(rel: dict | None) -> dict[str, str]:
+    """Budget cannot take one row per Nurturing campaign: there are too many. Every campaign that only ever runs under a Source holding
+    "Nurturing" is mapped to one group per Medium ("Email Nurturing"), so choosing the campaign adds the group. Keys are lower-cased
+    campaign names. A campaign that also runs under another Source stays on its own."""
     if not rel:
-        return rel, [], set()
-    labels = {k: list(v) for k, v in rel["labels"].items()}
-    combos = [list(c) for c in rel["combos"]]
+        return {}
+    labels = rel["labels"]
     nurturing = {i for i, name in enumerate(labels["source"]) if "nurturing" in name.casefold()}
     if not nurturing:
-        return rel, [], set()
-    inside: dict[int, bool] = {}
-    groups: dict[str, list[list[int]]] = {}
-    for channel, source, medium, campaign in combos:
-        inside[campaign] = inside.get(campaign, True) and source in nurturing
+        return {}
+    only: dict[int, bool] = {}
+    group: dict[int, str] = {}
+    for _, source, medium, campaign in rel["combos"]:
+        only[campaign] = only.get(campaign, True) and source in nurturing
         if source in nurturing:
             medium_name = labels["medium"][medium]
-            name = labels["source"][source] if medium_name in ("", EMPTY_LABEL) else f"{medium_name} {labels['source'][source]}"
-            groups.setdefault(name, []).append([channel, source, medium])
-    hidden = {labels["campaign"][c].casefold() for c, only in inside.items() if only}
-    for name, parents in sorted(groups.items()):
-        if name not in labels["campaign"]:
-            labels["campaign"].append(name)
-        position = labels["campaign"].index(name)
-        combos += [[*parent, position] for parent in parents]
-    return {"labels": labels, "combos": combos}, sorted(groups, key=str.casefold), hidden
+            group.setdefault(campaign, labels["source"][source] if medium_name in ("", EMPTY_LABEL) else f"{medium_name} {labels['source'][source]}")
+    return {labels["campaign"][c].casefold(): group[c] for c, alone in only.items() if alone and c in group}
 
 
 # ---- the chosen range, grouped

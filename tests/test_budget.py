@@ -378,22 +378,40 @@ if __name__ == "__main__":
 class NurturingGroupTests(unittest.TestCase):
     def rel(self):
         labels = {"channel": ["Paid", "Owned"], "source": ["Google Ads", "Nurturing"], "medium": ["CPC", "Email", "WhatsApp", "(kosong)"],
-                  "campaign": ["Solusi - CPC", "Promo A", "Promo B", "Promo W", "Mixed"]}
-        combos = [[0, 0, 0, 0], [1, 1, 1, 1], [1, 1, 1, 2], [1, 1, 2, 3], [0, 0, 0, 4], [1, 1, 1, 4]]
+                  "campaign": ["Solusi - CPC", "Promo A", "Promo B", "Promo W", "Mixed", "Tanpa medium"]}
+        combos = [[0, 0, 0, 0], [1, 1, 1, 1], [1, 1, 1, 2], [1, 1, 2, 3], [0, 0, 0, 4], [1, 1, 1, 4], [1, 1, 3, 5]]
         return {"labels": labels, "combos": combos}
 
-    def test_each_medium_under_nurturing_becomes_one_group_and_its_campaigns_hide(self):
+    def test_a_campaign_only_under_nurturing_maps_to_its_medium_group(self):
         from viewer import performance
-        rel, groups, hidden = performance.nurturing_groups(self.rel())
-        self.assertEqual(groups, ["Email Nurturing", "WhatsApp Nurturing"])
-        self.assertEqual(hidden, {"promo a", "promo b", "promo w"})  # "Mixed" also runs outside Nurturing, so it stays
-        names = rel["labels"]["campaign"]
-        email = names.index("Email Nurturing")
-        self.assertIn([1, 1, 1, email], rel["combos"])
-        self.assertNotIn("Email Nurturing", self.rel()["labels"]["campaign"])  # the input is not changed
+        self.assertEqual(performance.nurturing_groups(self.rel()),
+                         {"promo a": "Email Nurturing", "promo b": "Email Nurturing", "promo w": "WhatsApp Nurturing", "tanpa medium": "Nurturing"})
+        # "Mixed" also runs under Google Ads, so it keeps its own name
 
-    def test_without_a_nurturing_source_nothing_changes(self):
+    def test_without_a_nurturing_source_nothing_is_grouped(self):
         from viewer import performance
         rel = {"labels": {"channel": ["Paid"], "source": ["Google Ads"], "medium": ["CPC"], "campaign": ["A"]}, "combos": [[0, 0, 0, 0]]}
-        self.assertEqual(performance.nurturing_groups(rel), (rel, [], set()))
-        self.assertEqual(performance.nurturing_groups(None), (None, [], set()))
+        self.assertEqual(performance.nurturing_groups(rel), {})
+        self.assertEqual(performance.nurturing_groups(None), {})
+
+
+class NurturingPickerMarkupTests(unittest.TestCase):
+    def page(self, rows=()):
+        from datetime import date
+        from viewer import pages
+        grouped = {"welcome series": "Email Nurturing", "promo wa": "WhatsApp Nurturing"}
+        return pages.budget_page("bu1", {"bu1": "McEasy"}, "2026-10", [("2026-10", "Oktober 2026")], list(rows), ["Brand search", "Promo WA", "Welcome series"],
+                                 [], "", "", "", date(2026, 10, 26), {}, [], "csrf", "nonce", {"username": "admin", "role": "admin"}, grouped=grouped)
+
+    def test_a_grouped_campaign_keeps_its_name_shows_the_group_and_adds_the_group(self):
+        html = self.page()
+        self.assertIn('data-label="Welcome series" data-pick-name="Email Nurturing" data-group="Email Nurturing"', html)
+        self.assertIn("Grup: Email Nurturing", html)
+        self.assertIn('data-label="Brand search" data-pick-name="Brand search" data-group=""', html)
+        self.assertIn('var groupNames=["Email Nurturing", "WhatsApp Nurturing"]', html)
+
+    def test_a_saved_group_row_carries_the_group_tag_but_a_plain_row_does_not(self):
+        row = lambda name, i: {"idx": i, "name": name, "budget": "", "month": "", "weeks": {}}
+        html = self.page([row("Email Nurturing", 0), row("Brand search", 1)])
+        self.assertIn('Email Nurturing <span class="pk-tag">Grup</span>', html)
+        self.assertNotIn('Brand search <span class="pk-tag">', html)

@@ -584,11 +584,14 @@ def _digits(value) -> str:
 
 
 def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str, str]], rows: list[dict], picker: list[str], weeks: list[tuple], total_text: str, as_of_text: str,
-                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "", rel: dict | None = None) -> str:
+                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "", rel: dict | None = None, grouped: dict | None = None) -> str:
     """rows: one dict per campaign {idx, name, budget, month, weeks{key: text}} holding the texts to show in the inputs.
-    picker: every campaign name that can be added; the ones already in rows are hidden in the list."""
+    picker: every campaign name that can be added; the ones already in rows are hidden in the list.
+    grouped: lower-cased campaign name -> group name. Choosing such a campaign adds the group row, never the campaign itself."""
     from viewer.budget import month_label
 
+    grouped = grouped or {}
+    group_names = sorted(set(grouped.values()))
     label = names.get(bu, bu)
     company_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
     month_choices = "".join(f'<option value="{k}"{" selected" if k == month else ""}>{escape(t)}</option>' for k, t in month_options)
@@ -606,7 +609,8 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
 
     def name_cell(r, i, hidden=True):
         keep = f'<input type="hidden" name="n_{i}" value="{escape(r["name"])}">' if hidden else ""
-        return f'<td data-label="Campaign" data-name>{escape(r["name"])}{keep}</td>'
+        tag = ' <span class="pk-tag">Grup</span>' if r["name"] in group_names else ""
+        return f'<td data-label="Campaign" data-name>{escape(r["name"])}{tag}{keep}</td>'
 
     def remove_cell(label: str) -> str:
         return f'<td class="num"><button type="button" class="vw-linkbtn" data-remove aria-label="Hapus {escape(label)} dari daftar">Hapus</button></td>'
@@ -638,10 +642,15 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
     parents = (f'<div class="pk-parents" role="group" aria-label="Persempit daftar campaign">{parent_dd("channel", "Channel")}{parent_dd("source", "Source")}{parent_dd("medium", "Medium")}</div>'
                '<div id="pk-drop" class="pk-note" role="status" aria-live="polite" hidden></div>') if rel else ""
     used = {r["name"].casefold() for r in rows}
-    picker_rows = "".join(
-        f'<label class="pk-opt" data-opt data-key="campaign" data-label="{escape(n)}" data-pick-name="{escape(n)}"{" hidden" if n.casefold() in used else ""}><input type="checkbox" value="{escape(n)}" style="width:20px;height:20px;margin:0"><span>{escape(n)}</span></label>' for n in picker
-    )
-    table_css = "[hidden]{display:none!important}.pk{border:1px solid #dfe7f0;border-radius:6px;background:#f4f7fb;padding:16px;margin-top:12px}.pk-list{max-height:264px;overflow-y:auto;background:#fff;border:1px solid #dfe7f0;border-radius:6px;padding:0 12px}.pk-opt{display:flex;align-items:center;gap:10px;min-height:44px;color:#17283e;cursor:pointer}.pk-note{margin:6px 0;color:#607188}.pk-parents{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;align-items:start}.pk-dd summary{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;cursor:pointer;list-style:none}.pk-dd summary::-webkit-details-marker{display:none}.pk-dd summary::after{content:\"\";width:8px;height:8px;border-right:2px solid #607188;border-bottom:2px solid #607188;transform:rotate(45deg);margin:-4px 0 0 4px;flex:none}.pk-dd[open] summary::after{transform:rotate(-135deg);margin-top:4px}.pk-dd .fl{font-weight:500;flex:1}.pk-dd .fv{color:#607188}.pk-panel{margin-top:6px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;padding:4px 12px;max-height:240px;overflow-y:auto}.vw-linkbtn{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}.bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
+    def picker_row(n: str) -> str:
+        group = grouped.get(n.casefold(), "")
+        key = group or n
+        tag = f'<span class="pk-grp" data-grp>Grup: {escape(group)}</span>' if group else ""
+        return (f'<label class="pk-opt" data-opt data-key="campaign" data-label="{escape(n)}" data-pick-name="{escape(key)}" data-group="{escape(group)}"'
+                f'{" hidden" if key.casefold() in used and not group else ""}><input type="checkbox" value="{escape(n)}" style="width:20px;height:20px;margin:0"><span>{escape(n)}</span>{tag}</label>')
+
+    picker_rows = "".join(picker_row(n) for n in picker)
+    table_css = "[hidden]{display:none!important}.pk{border:1px solid #dfe7f0;border-radius:6px;background:#f4f7fb;padding:16px;margin-top:12px}.pk-list{max-height:264px;overflow-y:auto;background:#fff;border:1px solid #dfe7f0;border-radius:6px;padding:0 12px}.pk-opt{display:flex;align-items:center;gap:10px;min-height:44px;color:#17283e;cursor:pointer}.pk-note{margin:6px 0;color:#607188}.pk-grp,.pk-tag{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:#eef2f7;color:#394d65;font-size:13px;white-space:nowrap}.pk-tag{margin-left:8px}.pk-opt.done{cursor:default;color:#607188}.pk-preview{margin:12px 0 0;padding:10px 12px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;color:#17283e}.pk-parents{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;align-items:start}.pk-dd summary{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;cursor:pointer;list-style:none}.pk-dd summary::-webkit-details-marker{display:none}.pk-dd summary::after{content:\"\";width:8px;height:8px;border-right:2px solid #607188;border-bottom:2px solid #607188;transform:rotate(45deg);margin:-4px 0 0 4px;flex:none}.pk-dd[open] summary::after{transform:rotate(-135deg);margin-top:4px}.pk-dd .fl{font-weight:500;flex:1}.pk-dd .fv{color:#607188}.pk-panel{margin-top:6px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;padding:4px 12px;max-height:240px;overflow-y:auto}.vw-linkbtn{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}.bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
     week_ths = "".join(week_head(*w) for w in weeks)
     sections = (
         f'<style nonce="{nonce}">{table_css}</style>'
@@ -658,12 +667,13 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         '<button type="button" id="buka" class="vw-btn alt" aria-expanded="false" aria-controls="picker">Tambah campaign</button></div>'
         '<div id="picker" class="pk" role="group" aria-labelledby="picker-title" hidden>'
         '<h3 id="picker-title" style="margin:0 0 4px;font:600 15px/1.4 Inter,Arial,sans-serif;color:#17283e">Pilih campaign yang mau ditambahkan</h3>'
-        '<p style="margin:0 0 12px;color:#394d65">Daftar ini berasal dari kolom Campaign di Google Sheet Campaign Tracker. Persempit dulu dengan Channel, Source, dan Medium bila perlu, lalu centang satu atau beberapa campaign dan tekan tombol biru di bawah.</p>'
+        '<p style="margin:0 0 12px;color:#394d65">Daftar ini berasal dari kolom Campaign di Google Sheet Campaign Tracker. Persempit dulu dengan Channel, Source, dan Medium bila perlu, lalu centang satu atau beberapa campaign dan tekan tombol biru di bawah. Campaign dari Source Nurturing diberi keterangan grupnya: bila dicentang, yang masuk ke budget adalah grupnya, satu baris untuk semua campaign di grup itu.</p>'
         + parents +
         '<div class="vw-field"><label for="cari">Cari nama campaign</label><input id="cari" type="search" autocomplete="off" placeholder="Contoh: brand, gps, search"></div>'
         '<div id="pick-note" class="pk-note" role="status" aria-live="polite"></div>'
         f'<div class="pk-list" id="pick-list">{picker_rows}<p id="pick-empty" hidden style="margin:12px 0;color:#394d65"></p></div>'
-        '<div style="display:flex;gap:12px;margin-top:12px"><button type="button" id="tambah" class="vw-btn" disabled>Tambahkan campaign terpilih</button><button type="button" id="batal" class="vw-btn alt">Batal</button></div>'
+        '<p id="pick-preview" class="pk-preview" role="status" aria-live="polite" hidden></p>'
+        '<div style="display:flex;gap:12px;margin-top:12px"><button type="button" id="tambah" class="vw-btn" disabled>Tambahkan ke budget</button><button type="button" id="batal" class="vw-btn alt">Batal</button></div>'
         '<p id="pick-hint" class="pk-note" style="margin:8px 0 0"></p></div>'
         f'<div id="empty-box" class="vw-box"{" hidden" if rows else ""} style="padding:24px;margin-top:12px"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Belum ada campaign di budget ini</div>'
         '<div>Pilih Tambah campaign untuk memilih dari daftar Tracker. Budget, spend mingguan, dan spend bulanan muncul setelah ada campaign.</div></div>'
@@ -671,7 +681,7 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         '<h3 style="margin:16px 0 8px;font:600 14px/1.4 Inter,Arial,sans-serif;color:#17283e">Budget per campaign</h3>'
         f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-budget"><caption class="vw-sr">Budget per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Budget (Rp)</th><th scope="col" class="num"><span class="vw-sr">Aksi</span></th></tr></thead>'
         f'<tbody>{budget_rows}</tbody><tfoot><tr><td data-label="Campaign">Jumlah per campaign</td><td data-label="Budget (Rp)" class="num" data-sum="b">Rp 0</td><td></td></tr></tfoot></table></div>'
-        '<p style="margin:8px 0 0;color:#607188">Hapus mengeluarkan campaign dari budget bulan ini saat disimpan. Lead dan report campaign itu tidak berubah, dan versi lama tetap ada di riwayat.</p>'
+        '<p style="margin:8px 0 0;color:#607188">Baris bertanda Grup mewakili semua campaign Source Nurturing dengan Medium itu, jadi spend diisi sekali untuk grupnya. Hapus mengeluarkan baris dari budget bulan ini saat disimpan. Lead dan report campaign itu tidak berubah, dan versi lama tetap ada di riwayat.</p>'
         '<h2 class="vw-h2" style="margin-top:32px">Spend per minggu</h2>'
         '<p style="margin:0 0 12px;color:#607188">Isi spend tiap minggu penuh, Senin sampai Minggu, termasuk minggu yang melewati pergantian bulan: W44 adalah 26 Okt sampai 1 Nov dan W45 lanjut dari 2 Nov. Angka ini dipakai kolom Spend Week di report. Minggu yang belum berjalan belum bisa diisi.</p>'
         f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-weeks" style="min-width:860px"><caption class="vw-sr">Spend per campaign per minggu</caption><thead><tr><th scope="col">Campaign</th>{week_ths}</tr></thead>'
@@ -702,7 +712,7 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         f'<section aria-label="Riwayat budget"><h2 class="vw-h2">Riwayat budget {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
         + "".join(f'<template id="tpl-{name}">{html}</template>' for name, html in (("budget", t_budget), ("weeks", t_weeks), ("month", t_month)))
     )
-    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__CASCADE__", cascade.CASCADE_JS).replace("__REL__", cascade.rel_json(rel) if rel else "null").replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
+    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__CASCADE__", cascade.CASCADE_JS).replace("__REL__", cascade.rel_json(rel) if rel else "null").replace("__GROUPS__", json.dumps(group_names)).replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
     return page("Budget", sections + tail, nonce, csrf, menu(csrf, me, "budget"), script)
 
 
@@ -727,26 +737,34 @@ BUDGET_JS = r"""
   }
   form.addEventListener('input',function(e){if(e.target.matches('.cell input'))sums();});
   var opener=document.getElementById('buka'),box=document.getElementById('picker'),q=document.getElementById('cari'),note=document.getElementById('pick-note'),
-      empty=document.getElementById('pick-empty'),addBtn=document.getElementById('tambah'),hint=document.getElementById('pick-hint'),tables=document.getElementById('tables'),emptyBox=document.getElementById('empty-box');
+      empty=document.getElementById('pick-empty'),addBtn=document.getElementById('tambah'),hint=document.getElementById('pick-hint'),preview=document.getElementById('pick-preview'),tables=document.getElementById('tables'),emptyBox=document.getElementById('empty-box');
   var opts=Array.prototype.slice.call(document.querySelectorAll('#pick-list [data-pick-name]'));
   function norm(t){return t.toLowerCase().replace(/\s+/g,' ').trim();}
-  function used(){var u={};form.querySelectorAll('#t-budget [data-name]').forEach(function(c){u[norm(c.textContent)]=1;});return u;}
+  function used(){var u={};form.querySelectorAll('#t-budget input[name^=n_]').forEach(function(c){u[norm(c.value)]=1;});return u;}
+  var groupNames=__GROUPS__;
   function picked(){return opts.filter(function(o){return o.querySelector('input').checked;});}
   __CASCADE__
   var rel=__REL__,casc=rel?makeCascade(rel):null,allOpts=[].slice.call(document.querySelectorAll('#picker [data-opt]')),drop=document.getElementById('pk-drop');
+  function keys(){var seen={},out=[];picked().forEach(function(o){var n=o.dataset.pickName;if(!seen[n]){seen[n]=1;out.push(n);}});return out;}
   function refresh(){
     var u=used(),v=norm(q.value),avail=0,shown=0;
     opts.forEach(function(o){var n=o.dataset.pickName;if(u[norm(n)])o.querySelector('input').checked=false;});
     var r=casc?casc(allOpts):{dropped:0};
-    opts.forEach(function(o){var n=o.dataset.pickName,free=!u[norm(n)],cut=o.dataset.cut==='1';
-      var match=free&&!cut&&(!v||norm(n).indexOf(v)>=0);o.hidden=!match;if(free)avail++;if(match)shown++;});
+    opts.forEach(function(o){var n=o.dataset.pickName,g=o.dataset.group,free=!u[norm(n)],cut=o.dataset.cut==='1',input=o.querySelector('input');
+      var text=norm(o.dataset.label)+(g?' '+norm(g):'');
+      var match=!cut&&(!v||text.indexOf(v)>=0)&&(free||g);
+      input.disabled=!free;o.classList.toggle('done',!free);
+      var tag=o.querySelector('[data-grp]');if(tag)tag.textContent='Grup: '+g+(free?'':' (sudah di budget)');
+      o.hidden=!match;if(free)avail++;if(match&&free)shown++;});
     allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.hidden=o.dataset.cut==='1';});
     document.querySelectorAll('#picker .pk-dd').forEach(function(d){var n=d.querySelectorAll('input:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';});
     if(drop){drop.hidden=!r.dropped;drop.textContent=r.dropped?r.dropped+' pilihan dilepas karena tidak cocok dengan Channel, Source, atau Medium yang dipilih.':'';}
-    var k=picked().length;
+    var k=picked().length,rows=keys();
     note.textContent=(v||shown<avail?'Menampilkan '+shown+' dari '+avail+' campaign. ':avail+' campaign tersedia. ')+(k?k+' dipilih.':'Belum ada yang dipilih.');
     empty.hidden=shown>0;empty.textContent=avail===0?'Semua campaign di Tracker sudah ditambahkan.':'Tidak ada campaign yang cocok dengan filter dan kata kunci ini.';
-    addBtn.disabled=k===0;addBtn.textContent=k?'Tambahkan '+k+' campaign terpilih':'Tambahkan campaign terpilih';
+    addBtn.disabled=k===0;addBtn.textContent=k?'Tambahkan '+rows.length+' baris ke budget':'Tambahkan ke budget';
+    var parts=rows.map(function(n){var c=picked().filter(function(o){return o.dataset.pickName===n;}).length;return groupNames.indexOf(n)>=0?n+' (grup, mewakili '+c+' campaign yang dicentang)':n;});
+    preview.hidden=k===0;preview.textContent=k?'Yang masuk ke tabel budget: '+parts.join(', ')+'.':'';
     hint.textContent=k?'Setelah ditambahkan, isi budget dan spend di tabel di bawah.':'Tombol aktif setelah ada campaign yang dicentang.';
   }
   function resetParents(){allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.querySelector('input').checked=false;});}
@@ -764,12 +782,13 @@ BUDGET_JS = r"""
       var html=document.getElementById('tpl-'+p[0]).innerHTML.split('__I__').join(String(i));
       var tb=form.querySelector(p[1]+' tbody');tb.insertAdjacentHTML('beforeend',html);
       var row=tb.lastElementChild,cell=row.querySelector('[data-name]');cell.insertBefore(document.createTextNode(name),cell.firstChild);
+      if(groupNames.indexOf(name)>=0){var tg=document.createElement('span');tg.className='pk-tag';tg.textContent='Grup';var sp=document.createTextNode(' '),hid=cell.querySelector('input');cell.insertBefore(sp,hid);cell.insertBefore(tg,hid);}
       var hidden=row.querySelector('input[type=hidden]');if(hidden)hidden.value=name;
       row.querySelectorAll('input,button').forEach(function(el){var a=el.getAttribute('aria-label');if(a)el.setAttribute('aria-label',a.replace('campaign baru',name));});
     });
   }
   addBtn.addEventListener('click',function(){
-    var chosen=picked().map(function(o){return o.dataset.pickName;});if(!chosen.length)return;
+    var chosen=keys();if(!chosen.length)return;
     chosen.forEach(addRow);q.value='';resetParents();refresh();toggle(false);show();sums();opener.focus();
   });
   form.addEventListener('click',function(e){
