@@ -814,7 +814,9 @@ class Handler(BaseHTTPRequestHandler):
                              "weeks": {k: digits((c.get("weeks") or {}).get(k)) for k, _, _ in weeks}})
             total_text = digits(current["total_budget"]) if current else ""
             as_of_text = current["spend_as_of"].isoformat() if current and current["spend_as_of"] else ""
-        universe = {n.casefold(): n for n in tracker}
+        rel, groups, hidden = performance.nurturing_groups(rel)
+        universe = {n.casefold(): n for n in tracker if n.casefold() not in hidden}
+        universe.update({g.casefold(): g for g in groups})
         universe.update({r["name"].casefold(): r["name"] for r in rows if r["name"]})  # a saved name missing from the tracker can still be added back
         picker = sorted(universe.values(), key=str.casefold)
         base_id = str(current["snapshot_id"]) if current else ""

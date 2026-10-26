@@ -373,3 +373,27 @@ class ReportSectionTests(ViewerCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NurturingGroupTests(unittest.TestCase):
+    def rel(self):
+        labels = {"channel": ["Paid", "Owned"], "source": ["Google Ads", "Nurturing"], "medium": ["CPC", "Email", "WhatsApp", "(kosong)"],
+                  "campaign": ["Solusi - CPC", "Promo A", "Promo B", "Promo W", "Mixed"]}
+        combos = [[0, 0, 0, 0], [1, 1, 1, 1], [1, 1, 1, 2], [1, 1, 2, 3], [0, 0, 0, 4], [1, 1, 1, 4]]
+        return {"labels": labels, "combos": combos}
+
+    def test_each_medium_under_nurturing_becomes_one_group_and_its_campaigns_hide(self):
+        from viewer import performance
+        rel, groups, hidden = performance.nurturing_groups(self.rel())
+        self.assertEqual(groups, ["Email Nurturing", "WhatsApp Nurturing"])
+        self.assertEqual(hidden, {"promo a", "promo b", "promo w"})  # "Mixed" also runs outside Nurturing, so it stays
+        names = rel["labels"]["campaign"]
+        email = names.index("Email Nurturing")
+        self.assertIn([1, 1, 1, email], rel["combos"])
+        self.assertNotIn("Email Nurturing", self.rel()["labels"]["campaign"])  # the input is not changed
+
+    def test_without_a_nurturing_source_nothing_changes(self):
+        from viewer import performance
+        rel = {"labels": {"channel": ["Paid"], "source": ["Google Ads"], "medium": ["CPC"], "campaign": ["A"]}, "combos": [[0, 0, 0, 0]]}
+        self.assertEqual(performance.nurturing_groups(rel), (rel, [], set()))
+        self.assertEqual(performance.nurturing_groups(None), (None, [], set()))

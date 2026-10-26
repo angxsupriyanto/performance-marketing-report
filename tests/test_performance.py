@@ -212,7 +212,7 @@ class SeriesAndMatrixTests(unittest.TestCase):
         self.assertIsNone(performance.matrix(self.data.leads, params(per="hari", **{"from": "2026-10-01", "to": "2026-10-10"})))
 
     def test_columns_beyond_the_tenth_fold_into_older_and_the_total_counts_everything(self):
-        data = load(leads=[with_dims(lead("1", "BU1", "GPS", "1/5/2026", mql="1/6/2026", sql_date="10/13/2026", ppq="10/13/2026", arr="Rp 1.000.000"), "Paid", "G", "cpc", "C", "B", "GPS")], headers=DIM_HEADERS)
+        data = load(leads=[with_dims(lead("1", "BU1", "GPS", "6/1/2026", mql="6/2/2026", sql_date="10/13/2026", ppq="10/13/2026", arr="Rp 1.000.000"), "Paid", "G", "cpc", "C", "B", "GPS")], headers=DIM_HEADERS)
         row = performance.matrix(data.leads, params(**{"from": "2026-10-12", "to": "2026-10-18"}))["rows"][0]
         self.assertEqual((row["older"], row["total"], sum(c["n"] for c in row["cells"])), (1, 1, 0))
 
