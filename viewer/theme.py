@@ -7,10 +7,10 @@ import re
 
 # name: (light, dark). Light values are the colours the pages already use. Dark pairs are checked at 4.5:1 for text, 3:1 for control borders.
 PALETTE = {
-    "bg": ("#f4f7fb", "#0f1722"), "surface": ("#ffffff", "#17212e"), "text": ("#17283e", "#e6edf5"), "text2": ("#394d65", "#c3cfdd"),
-    "muted": ("#607188", "#98a8bc"), "border": ("#dfe7f0", "#2b3a4d"), "ctrl": ("#6f8199", "#7b8ea6"), "link": ("#2159a9", "#8bb8f2"),
-    "primary": ("#2159a9", "#2f6fc4"), "focus": ("#2159a9", "#8bb8f2"), "good-bg": ("#e6f5ed", "#12362a"), "good": ("#087450", "#7fd9ac"),
-    "bad-bg": ("#fcecec", "#3b1d1f"), "bad": ("#ac3d3d", "#f4a9a9"), "neu-bg": ("#eef2f7", "#243244"), "accent-bg": ("#edf4ff", "#1b2b42"),
+    "bg": ("#f4f7fb", "#191919"), "surface": ("#ffffff", "#1f1f1f"), "text": ("#17283e", "#ececec"), "text2": ("#394d65", "#cbcbcb"),
+    "muted": ("#607188", "#9d9d9d"), "border": ("#dfe7f0", "#333333"), "ctrl": ("#6f8199", "#808080"), "link": ("#2159a9", "#8bb8f2"),
+    "primary": ("#2159a9", "#2f6fc4"), "focus": ("#2159a9", "#8bb8f2"), "good-bg": ("#e6f5ed", "#183326"), "good": ("#087450", "#7fd9ac"),
+    "bad-bg": ("#fcecec", "#3a2020"), "bad": ("#ac3d3d", "#f4a9a9"), "neu-bg": ("#eef2f7", "#2b2b2b"), "accent-bg": ("#edf4ff", "#232d3b"),
 }
 # hex -> variable, for the colours whose role does not depend on where they are written
 FIXED = {"#17283e": "text", "#394d65": "text2", "#607188": "muted", "#6f8199": "ctrl", "#dfe7f0": "border", "#e3e9f1": "border", "#4a5b70": "text2",
