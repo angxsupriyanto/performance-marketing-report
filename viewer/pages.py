@@ -7,7 +7,7 @@ from html import escape
 
 from bs4 import BeautifulSoup
 
-from viewer import cascade
+from viewer import cascade, theme
 from viewer.performance import EMPTY_LABEL
 
 WIB = timezone(timedelta(hours=7))
@@ -23,8 +23,9 @@ a{color:#2159a9}a:hover{color:#17283e}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #2159a9;outline-offset:2px}
 .vw-top{background:#fff;border-bottom:1px solid #dfe7f0;padding:0 32px;min-height:56px;display:flex;align-items:center;justify-content:space-between}
 .vw-brand{font-weight:600;color:#17283e}
-.vw-menu{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 32px;flex:1;margin-left:32px}
-.vw-menu-main,.vw-menu-user{display:flex;flex-wrap:wrap;align-items:center;gap:0 20px}
+.vw-menu{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 16px;flex:1;margin-left:16px}
+.vw-menu-main,.vw-menu-user{display:flex;flex-wrap:wrap;align-items:center;gap:0 14px}
+.vw-mn,.vw-menu-user span,.vw-menu button{white-space:nowrap}
 .vw-mn{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;box-sizing:border-box;border-bottom:2px solid transparent;text-decoration:none}
 .vw-mn:hover{color:#17283e}
 .vw-mn[aria-current=page]{color:#17283e;font-weight:600;border-bottom-color:#2159a9}
@@ -114,7 +115,7 @@ def menu(csrf: str, user: dict | None, current: str = "") -> str:
         who = f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>{sep}'
     return (
         f'<nav class="vw-menu" aria-label="Menu"><div class="vw-menu-main">{main}</div>'
-        f'<div class="vw-menu-user">{who}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></div></nav>'
+        f'<div class="vw-menu-user">{theme.switch_html()}{who}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></div></nav>'
     )
 
 

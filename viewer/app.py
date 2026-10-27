@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets  # noqa: E402
+from viewer import access, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -211,6 +211,8 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def send(self, status: int, body: str | bytes, content_type: str = "text/html; charset=utf-8", nonce: str = "", extra: dict | None = None) -> None:
+        if isinstance(body, str) and content_type.startswith("text/html"):
+            body = theme.apply(body, nonce)
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", content_type)

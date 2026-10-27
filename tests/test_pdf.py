@@ -135,6 +135,12 @@ class PrintDocumentTests(ViewerCase):
         self.assertIn("@page", html)
         self.assertEqual(len(soup.select("[data-cohort-view=all]")), 2)  # the full-period lists stay
 
+    def test_the_pdf_never_gets_the_dark_mode_variables_or_switch(self):
+        _, _, html = self.captured()
+        self.assertNotIn("--c-", html)
+        self.assertNotIn("data-theme", html)
+        self.assertNotIn("prefers-color-scheme", html)
+
     def test_edited_text_is_what_prints(self):
         report = self.store.get_report("bu1", "2026-W39")
         self.call("POST", "/api/analysis/edit", {"bu": "bu1", "period": "2026-W39", "key": "next_action", "text": "Fokus ke GPS Tracker."}, {"X-CSRF-Token": self.csrf()})

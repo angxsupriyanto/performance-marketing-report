@@ -11,6 +11,7 @@ from viewer.performance import DIMENSIONS, ERR_DAYS, ERR_ORDER, HEAT, MATRIX_COL
 
 W, H, LEFT, RIGHT, TOP, BOTTOM = 640, 240, 48, 620, 16, 200
 INK, MUTED, LINE, BLUE = "#17283e", "#607188", "#dfe7f0", "#2159a9"
+HEAT_INK = "#16283d"  # not one of the themed colours: the heat cells stay light in dark mode too, so their text must stay dark
 SERIES_STYLE = {  # key: (label, colour, marker shape), the same four marks as the mockup
     "sub": ("Submission", "#6f8199", "circle"), "mql": ("MQL", BLUE, "square"), "sql": ("SQL", "#087450", "diamond"), "won": ("Deal Won", INK, "triangle"),
     "sqlv": ("SQL Value", "#087450", "diamond"), "wonv": ("Deal Won Value", INK, "triangle"),
@@ -152,7 +153,7 @@ def matrix_section(params, matrix: dict | None, unit: str) -> str:
     body = ""
     for row in matrix["rows"]:
         cells = "".join(
-            f'<td data-label="{escape(col)}" class="num"' + (f' style="background:{c["bg"]};color:#17283e;font-weight:500"' if c["n"] else "") + f'>{c["n"] if c["n"] else ""}</td>'
+            f'<td data-label="{escape(col)}" class="num"' + (f' style="background:{c["bg"]};color:{HEAT_INK};font-weight:500"' if c["n"] else "") + f'>{c["n"] if c["n"] else ""}</td>'
             for col, c in zip(matrix["columns"], row["cells"])
         )
         body += (f'<tr><th scope="row" class="stick-l" style="font-weight:400;color:#17283e;text-align:left;padding:12px 16px;border-top:1px solid {LINE}">{escape(row["label"])}</th>{cells}'
