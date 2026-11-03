@@ -27,10 +27,14 @@ if (input.body && Array.isArray(input.body.actions)) {
     if (action) actions.push({ action, campaign: text(entry.campaign, 100), note: text(entry.note, 300) });
   }
 }
+// Free text from the admin (context the numbers do not show). Control characters become spaces except line breaks; length is capped.
+const teamNote = (input.body && typeof input.body.team_note === 'string')
+  ? input.body.team_note.replace(/\r\n?/g, '\n').replace(/[\u0000-\u0009\u000b-\u001f\u007f]/g, ' ').trim().slice(0, 1000)
+  : '';
 let budget = null;
 if (input.body && input.body.budget && typeof input.body.budget === 'object' && !Array.isArray(input.body.budget)) {
   const budgetText = JSON.stringify(input.body.budget);
   if (budgetText.length > 20000) throw new Error('budget terlalu besar');
   budget = JSON.parse(budgetText);
 }
-return [{ json: { bu, period, requested_by: requestedBy, targets, actions, budget } }];
+return [{ json: { bu, period, requested_by: requestedBy, targets, actions, budget, team_note: teamNote } }];

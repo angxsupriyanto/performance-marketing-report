@@ -203,11 +203,11 @@ ANALYSIS_JS = """
         show('error','Analisis gagal',s.error||'Analisis tidak selesai. Report numerik tidak berubah.','#ac3d3d');
       }).catch(function(){timer=setTimeout(poll,8000);});
   }
-  function start(items){
+  function start(items,info){
     if(form)form.hidden=true;
     btn.disabled=true;btn.textContent='Menganalisis';
     show('status','Menganalisis','Mengirim ringkasan angka ke Claude dan menyisipkan hasilnya ke report. Jangan tutup halaman ini.');
-    post('/api/analysis',{bu:bu,period:period,items:JSON.stringify(items)}).then(function(res){
+    post('/api/analysis',{bu:bu,period:period,items:JSON.stringify(items),info:info}).then(function(res){
         if(!res.ok){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal',res.body.error||'Permintaan ditolak.','#ac3d3d');return;}
         poll();
       }).catch(function(){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal','Tidak bisa menghubungi server. Coba lagi.','#ac3d3d');});
@@ -236,6 +236,7 @@ ANALYSIS_JS = """
     mode=kind;formError.hidden=true;
     form.querySelector('[data-act=form-submit]').textContent=kind==='edit'?'Simpan action':(box.dataset.state==='done'?'Buat ulang analisis':'Buat analisis');
     form.querySelector('[data-role=warn]').hidden=!(kind==='generate'&&Number(box.dataset.edited)>0);
+    var iw=form.querySelector('[data-role=info-wrap]');if(iw)iw.hidden=kind!=='generate';
     if(!rowsBox.querySelector('[data-row]'))addRow();
     form.hidden=false;form.querySelector('input[data-f=action]').focus();
     if(kind==='edit')form.scrollIntoView({block:'center'});
@@ -248,7 +249,7 @@ ANALYSIS_JS = """
       if(act==='row-remove'){var row=el.closest('[data-row]');row.remove();if(!rowsBox.querySelector('[data-row]'))addRow();renumber();return;}
       if(act==='form-cancel'){closeForm();if(btn)btn.focus();return;}
       if(act==='form-submit'){
-        if(mode==='generate'){start(items());return;}
+        if(mode==='generate'){var inf=document.getElementById('vw-info');start(items(),inf?inf.value:'');return;}
         el.disabled=true;
         post('/api/actions',{bu:bu,period:period,items:JSON.stringify(items())}).then(function(res){
           if(res.ok){location.reload();return;}
@@ -259,7 +260,7 @@ ANALYSIS_JS = """
     document.addEventListener('click',function(ev){if(ev.target.closest('[data-act=actions-open]'))openForm('edit');});
   }
   if(btn){
-    btn.addEventListener('click',function(){if(form)openForm('generate');else start([]);});
+    btn.addEventListener('click',function(){if(form)openForm('generate');else start([],'');});
     if(box.dataset.state==='running'){btn.disabled=true;btn.textContent='Menganalisis';poll();}
   }
   function parts(el){var panel=el.closest('[data-panel]');return {panel:panel,key:el.dataset.key,
@@ -290,7 +291,7 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
     return "done" if has_analysis else "none"
 
 
-def action_form(label: str, items: list[dict], campaigns: list[str], budget_note: str) -> str:
+def action_form(label: str, items: list[dict], campaigns: list[str], budget_note: str, extra_note: str = "") -> str:
     """The admin-only form for the actions of the period; the viewer's script opens it from the analysis button or from the Action section.
     campaigns: the rows saved in Budget for the report's month, so the list is short and matches what the analysis is given as spend."""
     names = list(dict.fromkeys(c for c in campaigns if c))
@@ -314,6 +315,10 @@ def action_form(label: str, items: list[dict], campaigns: list[str], budget_note
         '<div class="vw-arow vw-arow-head" aria-hidden="true"><span>Action</span><span>Campaign (opsional)</span><span>Catatan (opsional)</span><span></span></div>'
         f'<div data-role="rows">{rows}</div><template id="vw-row-tpl">{row({})}</template>'
         '<button type="button" class="vw-linkbtn" data-act="row-add" style="justify-content:flex-start">+ Tambah action</button>'
+        '<div data-role="info-wrap" style="margin:16px 0 0"><label for="vw-info" style="display:block;font-weight:600;color:#17283e;margin-bottom:4px">Informasi tambahan untuk analisis (opsional)</label>'
+        '<p id="vw-info-hint" style="margin:0 0 8px;color:#607188">Tulis konteks yang tidak ada di angka, misalnya promo, libur, iklan dihentikan, atau gangguan tracking. Dikirim ke AI sebagai pertimbangan dan tersimpan di riwayat analisis. Tidak tampil di report. Jangan menulis nama perusahaan lead atau data pribadi.</p>'
+        f'<textarea id="vw-info" class="vw-in" rows="4" maxlength="1000" aria-describedby="vw-info-hint vw-info-count" placeholder="Contoh: Minggu ini ada promo Dashcam sampai 16 Okt; budget Meta dikurangi mulai 14 Okt." style="height:auto;padding:10px 12px;line-height:1.5;resize:vertical">{escape(extra_note)}</textarea>'
+        f'<div id="vw-info-count" style="margin-top:4px;color:#607188;text-align:right">{len(extra_note)} / 1000 karakter</div></div>'
         f'<p style="margin:8px 0 12px;color:#607188">{escape(budget_note)}</p>'
         '<p data-role="form-error" role="alert" hidden class="vw-alert" style="margin:0 0 12px"></p>'
         '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" class="vw-btn" data-act="form-submit">Buat analisis</button>'

@@ -49,6 +49,7 @@ class FakeStore:
         self.names = {}
         self.edits = []
         self.actions = []
+        self.notes = []
         self.snaps = []
         self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
@@ -146,6 +147,16 @@ class FakeStore:
         if self.fail_writes:
             raise RuntimeError("write failed")
         self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_analysis_note(self, bu, period):
+        self._check()
+        saved = [n for n in self.notes if (n["bu"], n["period"]) == (bu, period)]
+        return {"note": saved[-1]["note"], "saved_by": saved[-1]["saved_by"], "saved_at": saved[-1]["saved_at"]} if saved else None
+
+    def add_analysis_note(self, bu, period, note, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.notes.append({"bu": bu, "period": period, "note": note, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
 
     # ---- users and company names, same rules as the real Store
     def ensure_bootstrap_admin(self, password_hash):

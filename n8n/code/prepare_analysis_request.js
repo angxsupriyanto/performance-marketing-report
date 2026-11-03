@@ -29,6 +29,7 @@ const share = (window) => {
 };
 facts.same_period_share_percent = { now: share('now'), prev: share('prev') };
 const userInput = { company_key: request.bu, analysis_keys: analysisKeys, facts, actions: Array.isArray(request.actions) ? request.actions : [] };
+if (request.team_note) userInput.team_note = request.team_note;
 if (request.targets) userInput.targets = request.targets;
 if (request.budget) userInput.budget = request.budget;
 const userText = JSON.stringify(userInput);

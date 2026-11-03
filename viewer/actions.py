@@ -47,3 +47,20 @@ def clean_items(raw) -> list[dict]:
     if len(items) > MAX_ITEMS:
         raise ValueError(f"Maksimal {MAX_ITEMS} action.")
     return items
+
+
+MAX_NOTE_TEXT = 1000
+
+
+def clean_note(raw) -> str:
+    """The free text typed next to the actions when an analysis is requested. Line breaks are kept; every other control character is refused."""
+    if raw is None:
+        return ""
+    if not isinstance(raw, str):
+        raise ValueError("Informasi tambahan tidak terbaca.")
+    text = raw.replace("\r\n", "\n").replace("\r", "\n").strip()
+    if len(text) > MAX_NOTE_TEXT:
+        raise ValueError(f"Informasi tambahan maksimal {MAX_NOTE_TEXT} karakter.")
+    if any(not (ch.isprintable() or ch == "\n") for ch in text):
+        raise ValueError("Informasi tambahan tidak boleh berisi karakter kontrol.")
+    return "\n".join(line.rstrip() for line in text.split("\n"))

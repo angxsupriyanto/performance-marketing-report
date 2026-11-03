@@ -486,7 +486,11 @@ class Handler(BaseHTTPRequestHandler):
                         else f"Budget {spend['month_label']} belum diatur, jadi analisis berjalan tanpa data budget dan spend.")
                 if not spend.get("names"):
                     note += " Belum ada campaign yang dipilih di Budget, jadi kolom Campaign hanya berisi Tidak spesifik."
-                form_html = pages.action_form(view["label"], items, spend.get("names", []), note)
+                try:
+                    saved_note = self.cfg.store.latest_analysis_note(bu, period)
+                except Exception:  # noqa: BLE001 - without the table the form simply opens empty
+                    saved_note = None
+                form_html = pages.action_form(view["label"], items, spend.get("names", []), note, saved_note["note"] if saved_note else "")
         chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited, form_html)
         if view is None:
             note = (
@@ -556,6 +560,12 @@ class Handler(BaseHTTPRequestHandler):
         report = self.cfg.store.get_report(bu, period)
         if report is None:
             raise HttpError(404, "belum ada report numerik; jalankan Report Generate di n8n dahulu")
+        note = None
+        if "info" in form:  # the form sent the free text: check it before anything starts
+            try:
+                note = actions.clean_note(form["info"])
+            except ValueError as exc:
+                raise HttpError(400, str(exc))
         items = None
         if "items" in form:  # the form sent the list: check it before anything starts, then keep it as the period's list
             try:
@@ -570,13 +580,18 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 saved = self.cfg.store.latest_actions(bu, period)
                 items = list(saved["items"]) if saved else []
+            if note is not None:
+                self.cfg.store.add_analysis_note(bu, period, note, self.user["username"])
+            else:
+                saved_note = self.cfg.store.latest_analysis_note(bu, period)
+                note = saved_note["note"] if saved_note else ""
             view = report_view.extract_view(report["html"])
             budget_ctx = budget.analysis_context(self.report_budget(report, view or {}))
             context = targets.context_for_analysis(facts_of(report), self.cfg.store.latest_targets(bu))
         except Exception:  # noqa: BLE001 - release the job, otherwise this report could never be analysed again
             self.jobs.finish((bu, period), "Action atau data pendukung tidak bisa disimpan atau dimuat. Coba lagi.")
             raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba lagi.")
-        extra = {"actions": items, "budget": budget_ctx}
+        extra = {"actions": items, "budget": budget_ctx, "team_note": note}
         threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202

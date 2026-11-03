@@ -83,5 +83,10 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'INSERT')
                       AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'DELETE')
                                OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'TRUNCATE')), false)
+  UNION ALL SELECT 24, 'analysis_notes exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.analysis_notes') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

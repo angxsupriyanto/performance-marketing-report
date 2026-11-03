@@ -41,6 +41,19 @@ class CleanItemsTests(unittest.TestCase):
                 actions.clean_items(raw)
 
 
+class CleanNoteTests(unittest.TestCase):
+    def test_text_is_trimmed_and_line_breaks_are_kept(self):
+        self.assertEqual(actions.clean_note("  Promo sampai 16 Okt  \r\n  Meta dikurangi \n"), "Promo sampai 16 Okt\n  Meta dikurangi")
+        self.assertEqual(actions.clean_note(None), "")
+        self.assertEqual(actions.clean_note("   "), "")
+
+    def test_each_rule_has_a_message(self):
+        for name, raw in {"too long": "x" * 1001, "control": "a\u0007b", "not text": 5, "tab": "a\tb"}.items():
+            with self.assertRaises(ValueError, msg=name):
+                actions.clean_note(raw)
+        self.assertEqual(len(actions.clean_note("x" * 1000)), 1000)
+
+
 class ActionPageTests(ViewerCase):
     def setUp(self):
         super().setUp()
@@ -154,6 +167,45 @@ class ActionPageTests(ViewerCase):
         self.wait_done()
         self.assertEqual(FakeN8n.calls[0]["body"]["actions"], [{"action": "Pause iklan lama", "campaign": "", "note": ""}])
         self.assertEqual(len(self.store.actions), 1)  # nothing new was saved
+
+    def test_the_extra_information_is_saved_per_request_prefills_the_form_and_goes_to_n8n_but_not_into_the_report(self):
+        FakeN8n.on_call = lambda _: self.store.analysis_at.update(bu1=datetime.now(UTC))
+        self.assertEqual(self.page().find("textarea", id="vw-info").get_text(), "")
+        response, _ = self.post("/api/analysis", items="[]", info="Promo Dashcam sampai 16 Okt\r\nMeta dikurangi")
+        self.assertEqual(response.status, 202)
+        self.wait_done()
+        self.assertEqual(FakeN8n.calls[0]["body"]["team_note"], "Promo Dashcam sampai 16 Okt\nMeta dikurangi")
+        self.assertEqual(self.store.latest_analysis_note("bu1", "2026-W39")["note"], "Promo Dashcam sampai 16 Okt\nMeta dikurangi")
+        soup = self.page()
+        self.assertEqual(soup.find("textarea", id="vw-info").get_text().strip(), "Promo Dashcam sampai 16 Okt\nMeta dikurangi")
+        self.assertEqual(soup.find(id="vw-info-count").get_text(), "42 / 1000 karakter")
+        self.assertEqual(len(soup.select("[data-role=info-wrap]")), 1)  # only inside the admin form
+        page_text = str(soup)
+        soup.find("textarea", id="vw-info").decompose()
+        self.assertNotIn("Promo Dashcam", str(soup))  # the text is only in the form, never in the report body
+        self.assertIn("Promo Dashcam", page_text)
+        FakeN8n.calls.clear()
+        self.assertEqual(self.post("/api/analysis")[0].status, 202)  # no field in the request: the saved text is reused, nothing new is saved
+        self.wait_done()
+        self.assertEqual(FakeN8n.calls[0]["body"]["team_note"], "Promo Dashcam sampai 16 Okt\nMeta dikurangi")
+        self.assertEqual(len(self.store.notes), 1)
+        FakeN8n.calls.clear()
+        self.assertEqual(self.post("/api/analysis", items="[]", info="")[0].status, 202)  # clearing it is a save too
+        self.wait_done()
+        self.assertEqual((FakeN8n.calls[0]["body"]["team_note"], len(self.store.notes)), ("", 2))
+
+    def test_a_bad_extra_information_blocks_the_analysis_and_a_failed_save_releases_the_job(self):
+        for bad in ("x" * 1001, "a\u0007b"):
+            response, body = self.post("/api/analysis", items="[]", info=bad)
+            self.assertEqual(response.status, 400, bad[:5])
+            self.assertIn("Informasi tambahan", json.loads(body)["error"])
+        self.assertEqual(FakeN8n.calls, [])
+        self.store.fail_writes = True
+        self.assertEqual(self.post("/api/analysis", items="[]", info="catatan")[0].status, 503)
+        self.store.fail_writes = False
+        FakeN8n.on_call = lambda _: self.store.analysis_at.update(bu1=datetime.now(UTC))
+        self.assertEqual(self.post("/api/analysis", items="[]", info="catatan")[0].status, 202)
+        self.wait_done()
 
     def test_a_bad_list_blocks_the_analysis_before_anything_starts(self):
         response, body = self.post("/api/analysis", items=json.dumps([{"action": "", "campaign": "Camp A", "note": ""}]))

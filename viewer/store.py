@@ -146,6 +146,17 @@ class Store:
         with self._connect() as conn:
             conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
 
+    # ---- extra information typed when an analysis is requested
+    def latest_analysis_note(self, bu: str, period: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT note, saved_by, saved_at FROM reports.analysis_notes WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_analysis_note(self, bu: str, period: str, note: str, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.analysis_notes (bu, period, note, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, note, saved_by))
+
     # ---- manual edits of analysis panels
     def latest_edits(self, run_id) -> list[dict]:
         """Newest edit row per panel of one run. body None means the AI version was restored."""

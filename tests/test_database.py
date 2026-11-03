@@ -74,6 +74,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -389,6 +391,27 @@ class DatabaseTests(unittest.TestCase):
         for bad in (("bu1", "2026-W99x", []), ("BU 1", "2026-W42", []), ("bu1", "2026-W42", {"action": "x"}), ("bu1", "2026-W42", [{"action": "x", "campaign": "", "note": ""}] * 31)):
             with self.assertRaises(pe.CheckViolation):
                 store.add_actions(bad[0], bad[1], bad[2], "admin")
+
+    def test_analysis_notes_are_append_only_per_period_and_the_newest_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_analysis_note("bu1", "2026-W42"))
+        store.add_analysis_note("bu1", "2026-W42", "Promo Dashcam", "admin")
+        store.add_analysis_note("bu1", "2026-W42", "Promo Dashcam\nMeta dikurangi", "andi")
+        store.add_analysis_note("bu1", "2026-W42", "", "admin")  # clearing is a save
+        self.assertEqual(store.latest_analysis_note("bu1", "2026-W42")["note"], "")
+        self.assertIsNone(store.latest_analysis_note("bu2", "2026-W42"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.analysis_notes").fetchone()[0], 3)
+            for statement in ("UPDATE reports.analysis_notes SET saved_by = 'x'", "DELETE FROM reports.analysis_notes", "TRUNCATE reports.analysis_notes"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.analysis_notes (bu, period, note, saved_by) VALUES ('bu1', '2026-W42', 'x', 'x')")
+        for bad in (("bu1", "2026-W99x", "x"), ("BU 1", "2026-W42", "x"), ("bu1", "2026-W42", "x" * 1001)):
+            with self.assertRaises(pe.CheckViolation):
+                store.add_analysis_note(bad[0], bad[1], bad[2], "admin")
 
     def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
         import psycopg.errors as pe

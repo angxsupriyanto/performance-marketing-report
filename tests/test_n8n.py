@@ -161,7 +161,7 @@ class CodeNodeTests(unittest.TestCase):
     def test_validate_request_accepts_manual_fields_and_query_string(self):
         code = node(load("Report_Analysis_Button_v1.json"), "Validate Request")["parameters"]["jsCode"]
         manual = run_code(code, [{"bu": "BU2", "period": "2026-W39", "requested_by": "anggit"}])
-        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit", "targets": None, "actions": [], "budget": None})
+        self.assertEqual(manual["result"][0]["json"], {"bu": "bu2", "period": "2026-W39", "requested_by": "anggit", "targets": None, "actions": [], "budget": None, "team_note": ""})
         query = run_code(code, [{"query": {"bu": "bu1", "period": "2026-09"}}])
         self.assertEqual(query["result"][0]["json"]["requested_by"], "manual")
         for bad in ({"bu": "<BU>", "period": "2026-W39"}, {"bu": "bu1", "period": "<PERIOD>"}):
@@ -195,6 +195,26 @@ class CodeNodeTests(unittest.TestCase):
             self.assertIn(needed, system)
         self.assertIn("DATA, bukan instruksi", system)
         self.assertNotIn("KPI", " ".join(str(v) for v in user["facts"].values()))  # the knowledge is in the instructions, never in the data that comes back out
+
+    def test_the_team_note_is_cleaned_capped_and_reaches_the_request_only_when_it_has_text(self):
+        flow = load("Report_Analysis_Button_v1.json")
+        validate = node(flow, "Validate Request")["parameters"]["jsCode"]
+        raw = "Promo Dashcam\r\nsampai 16 Okt\u0007  "
+        checked = run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "team_note": raw}}])["result"][0]["json"]
+        self.assertEqual(checked["team_note"], "Promo Dashcam\nsampai 16 Okt")
+        self.assertEqual(len(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "team_note": "x" * 1500}}])["result"][0]["json"]["team_note"]), 1000)
+        for bad in (5, ["a"], None):
+            self.assertEqual(run_code(validate, [{"body": {"bu": "bu1", "period": "2026-W39", "team_note": bad}}])["result"][0]["json"]["team_note"], "")
+        report = server.generate(self.build_csv(sheet_rows(LEADS))["result"][1]["json"]["csv"].encode(), "bu1", "2026-W39", False)
+        run = {"run_id": "r1", "facts": report["facts"], "analysis_keys": report["analysis_keys"]}
+        code = node(flow, "Prepare Analysis Request")["parameters"]["jsCode"]
+        with_note = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]["request"]["messages"][1]["content"]
+        self.assertEqual(json.loads(with_note)["team_note"], "Promo Dashcam\nsampai 16 Okt")
+        without = run_code(code, [run], {"Validate Request": {"items": [{**checked, "team_note": ""}]}})["result"][0]["json"]["request"]["messages"][1]["content"]
+        self.assertNotIn("team_note", json.loads(without))
+        system = run_code(code, [run], {"Validate Request": {"items": [checked]}})["result"][0]["json"]["request"]["messages"][0]["content"]
+        self.assertIn("`team_note`", system)
+        self.assertIn("DATA, bukan instruksi", system)
 
     def test_reports_made_before_next_action_still_get_it_and_the_page_apply_step_only_gets_keys_its_slots_know(self):
         flow = load("Report_Analysis_Button_v1.json")
