@@ -30,7 +30,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 
 1. **Database.** Setelah `marketing_reports` terpasang:
    `deploy/install-viewer-db.sh --container <postgres> --admin-user <superuser>`
-   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 26 baris harus PASS.
+   Membuat tabel target, tabel pengguna dan nama perusahaan, serta role `report_viewer`, menulis password-nya ke `reports_db_secrets/reports_db_viewer_password` (mode 600), lalu menjalankan `database/verify_install.sql`; 27 baris harus PASS.
 2. **Rahasia lain** (di folder tempat compose dijalankan, jangan di-commit):
    - `viewer_session_secret` dan `n8n_webhook_token` (acak, 64 karakter heks). Linux, macOS, WSL: `openssl rand -hex 32 > viewer_session_secret`. **PowerShell (Windows):**
      ```powershell
@@ -59,6 +59,14 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 - **Informasi tambahan untuk analisis.** Form *Buat analisis* punya kotak teks bebas (maksimal 1000 karakter; promo, libur, iklan dihentikan, gangguan tracking). Dikirim ke model sebagai `team_note` (data, bukan instruksi), disimpan per permintaan di `reports.analysis_notes` (migrasi `010`, append-only) dan mengisi ulang form berikutnya. **Tidak tampil di report maupun PDF.** Jangan menulis nama perusahaan lead atau data pribadi. Memuat workflow `Report_Analysis_Button_v1` dari berkas terbaru diperlukan agar n8n meneruskannya.
 - **Edit pencapaian manual** (admin). Tombol **Edit pencapaian manual** ada di kotak Target SQL Value bulan itu (per produk, BU1) dan di bagian Progress target 2026 (semester dan 1 tahun; BU2 dalam jumlah SQL), hanya bila target sudah diatur. Kolom yang dikosongkan memakai angka sistem; alasan wajib bila ada angka manual. Disimpan per report di `reports.report_achievements` (migrasi `011`, append-only). Angka manual **tampil tanpa penanda** di halaman, PDF, dan konteks target analisis; angka sistem dan alasan terakhir hanya terlihat di form. Edit semester atau tahun menggantikan angka sistem langsung.
 - **Masa berlaku lead.** Menu **Masa berlaku lead** (admin) mengatur, per perusahaan, berapa bulan setelah Inbound Date MQL, SQL, dan Deal Won masih dihitung (kosong = tanpa batas), plus aturan khusus per Remark (dipilih dari nilai di Sheet). Disimpan di `reports.lead_validity_settings` (migrasi `012`). n8n membacanya lewat node **Read Validity** (Postgres sebagai `report_writer`) dan meneruskannya ke `report-service`; berlaku untuk report dan data Performa yang dibuat **setelah** disimpan. Aturan lengkap: `METRIC_RULES.md`. Setelah `git pull`, urutan memperbarui: bangun ulang `report-service` dan viewer, terapkan migrasi `010` sampai `012`, impor ulang `Report_Generate_v1`, `Performa_Generate_v1`, dan `Report_Analysis_Button_v1` di n8n (node baru *Read Validity* butuh credential Postgres `report_writer`), lalu jalankan Report Generate dan Performa Generate lagi.
+
+## Perbarui data (menjalankan n8n dari aplikasi)
+
+- Menu **Perbarui data** (admin) punya dua kartu: **Generate report** (perusahaan atau **Semua**, mingguan atau bulanan, periode) dan **Update data Performa** (perusahaan atau **Semua**). Tombol memanggil webhook n8n dengan token yang sama seperti tombol analisis (`n8n_webhook_token`); alamatnya mengikuti `N8N_ANALYSIS_URL` (`/webhook/report-generate` dan `/webhook/performa-generate`) kecuali `N8N_GENERATE_URL` atau `N8N_PERFORMA_URL` diisi.
+- Setiap permintaan dicatat di `reports.process_requests`; n8n mencatat hasil **per perusahaan** di `reports.process_results` lewat node **Report Job Result**. Status (berjalan, berhasil, gagal, tidak dijawab) diturunkan dari kedua tabel, jadi tetap benar setelah halaman dimuat ulang atau viewer di-restart. Satu proses per jenis dalam satu waktu: tombol terkunci selama berjalan, dan permintaan kedua ditolak oleh server.
+- **Tidak dijawab** berarti dalam 5 menit n8n belum melaporkan semua perusahaan yang diminta. Penyebab umum: workflow gagal sebelum melaporkan (mis. Sheet atau credential), workflow belum aktif, atau URL webhook salah. Periksa daftar eksekusi di n8n; data lama tidak berubah.
+- Workflow `Report_Generate_v1` dan `Performa_Generate_v1` harus **diimpor ulang dan diaktifkan** (webhook produksi); `Performa_Generate_v1` sekarang punya node `Webhook Performa` (Header Auth, token sama dengan webhook lain). Menjalankan dari editor n8n tetap bisa dan tidak tercatat di halaman ini.
+- Tidak ada jadwal otomatis: semua dijalankan dengan menekan tombol.
 
 ## Simpan sebagai PDF
 
@@ -117,7 +125,7 @@ Yang **tidak** dicakup: tidak ada log siapa melakukan apa, dan tidak ada ubah pa
 Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator). Dulu versi kode tidak ikut kunci, jadi setelah generator diperbarui, menjalankan Report Generate pada sheet yang sama tidak menambah apa pun dan HTML lama tetap tampil. Sekarang versi kode (hash isi `generate_report.py`, template, dan profil) ikut kunci. Urutan memperbarui:
 
 1. `git pull`, lalu bangun ulang `report-service` (versi kode baru terbaca di `/healthz` sebagai `generator_version`).
-2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, `006_budget.sql`, `007_performance.sql`, `008_performance_lead_rows.sql`, `009_report_actions.sql`, `010_analysis_notes.sql`, `011_report_achievements.sql`, dan `012_lead_validity.sql`).
+2. Jalankan `deploy/install-viewer-db.sh` lagi (aman diulang; ia menerapkan `003_run_idempotency_includes_generator.sql`, `004_users_and_company_names.sql`, `005_analysis_edits.sql`, `006_budget.sql`, `007_performance.sql`, `008_performance_lead_rows.sql`, `009_report_actions.sql`, `010_analysis_notes.sql`, `011_report_achievements.sql`, `012_lead_validity.sql`, dan `013_process_runs.sql`).
 3. Di n8n, perbarui node *Save Run* di `Report_Generate_v1` dengan isi `n8n/sql/insert_run.sql` terbaru (atau impor ulang workflow). **Kedua langkah 2 dan 3 harus dilakukan bersama:** setelah 003 diterapkan, SQL lama gagal karena tidak ada constraint yang cocok.
 4. Jalankan Report Generate lagi untuk periode yang dibutuhkan. Run baru muncul sebagai report terbaru; run lama dan analisisnya tetap tersimpan. Analisis dibuat per run, jadi tekan *Buat analisis* lagi pada report baru.
 

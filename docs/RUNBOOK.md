@@ -35,6 +35,27 @@ Periksa: `docker ps --filter name=report-service`, `docker ps --filter name=repo
 
 Image `report-service` tidak butuh Chromium: bangun dengan `--build-arg INSTALL_CHROMIUM=false` bila ingin lebih kecil.
 
+## Memperbarui ke versi dengan masa berlaku lead, pencapaian manual, informasi tambahan, dan Perbarui data (migrasi 010 sampai 013)
+
+Urutan yang aman (jalankan dari folder repo; ganti `<container-postgres>` dan `<admin>` dengan milik Anda):
+
+```powershell
+git pull origin claude/vigilant-sagan-e0ttx8
+foreach ($f in "010_analysis_notes","011_report_achievements","012_lead_validity","013_process_runs") {
+  Get-Content -Raw "database\$f.sql" | docker exec -i <container-postgres> psql -X -v ON_ERROR_STOP=1 -U <admin> -d marketing_reports
+}
+Get-Content -Raw database\verify_install.sql | docker exec -i <container-postgres> psql -X -At -U <admin> -d marketing_reports
+docker compose -p report-service -f deploy/docker-compose.report-service.local.yml up -d --build
+docker compose -p report-viewer -f deploy/docker-compose.report-viewer.local.yml up -d --build
+```
+
+Hasil `verify_install.sql` harus 27 baris `PASS` (tanpa `FAIL`). Lalu di n8n:
+
+1. **Impor ulang** `Report_Generate_v1`, `Performa_Generate_v1`, dan `Report_Analysis_Button_v1` dari `n8n/workflows/` (ada node baru: *Read Validity*, *Report Job Result*, *Webhook Performa*, dan perubahan pada node lain). Pasang credential Postgres `report_writer` pada *Read Validity* dan *Report Job Result*, serta Header Auth pada *Webhook Performa* (token yang sama dengan webhook lain boleh dipakai).
+2. **Aktifkan** ketiga workflow supaya webhook produksi berjalan. Viewer menurunkan alamat `/webhook/report-generate` dan `/webhook/performa-generate` dari `N8N_ANALYSIS_URL`; isi `N8N_GENERATE_URL` dan `N8N_PERFORMA_URL` di compose viewer hanya bila alamat Anda berbeda.
+3. Urutan migrasi dan impor **harus lengkap sebelum** menjalankan Report Generate: node *Read Validity* sengaja gagal bila tabel `lead_validity_settings` belum ada, supaya angka tidak berubah diam-diam.
+4. Buka menu **Masa berlaku lead** dan **Perbarui data**, lalu jalankan Report Generate dan Update data Performa dari sana. Daftar Remark di *Masa berlaku lead* baru terisi setelah satu report dibuat dengan generator baru.
+
 ## Jebakan yang pernah terjadi
 
 | Gejala | Penyebab dan perbaikan |

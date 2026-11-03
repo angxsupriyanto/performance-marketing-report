@@ -6,7 +6,7 @@ Tiga workflow siap impor (n8n 2.x). Semuanya **dihasilkan** oleh `n8n/build_work
 |---|---|
 | `Report_Generate_v1` | Membaca tab *NEW Customers List*, mengirim hanya kolom yang dibutuhkan ke layanan laporan, menyimpan hasilnya ke PostgreSQL, lalu mengirim ringkasan agregat ke Telegram. |
 | `Report_Analysis_Button_v1` | Membaca run terbaru untuk BU dan periode yang dipilih, mengirim **hanya `facts` agregat** ke model (bawaan: combo `pesankopi-report` di 9router), memvalidasi JSON balasan, menyisipkannya ke laporan, dan menyimpan hasilnya. |
-| `Performa_Generate_v1` | Membaca tab *NEW Customers List*, meminta `report-service` menghitung agregat per hari dan cohort, dan menyimpannya sebagai snapshot untuk halaman Performa. Manual saja, tanpa webhook dan tanpa Telegram. Lihat `deploy/VIEWER.md`. |
+| `Performa_Generate_v1` | Membaca tab *NEW Customers List*, meminta `report-service` menghitung agregat per hari dan cohort, dan menyimpannya sebagai snapshot untuk halaman Performa. Dijalankan manual dari editor atau lewat `POST /webhook/performa-generate` (tombol *Perbarui data* di viewer); tanpa jadwal dan tanpa Telegram. Lihat `deploy/VIEWER.md`. |
 
 **Tidak ada penjadwalan.** Semua dijalankan manual, dan periode selalu disebut eksplisit (tidak ada tebakan "minggu lalu"). Dua cara memicu `Generate` dan `Analysis`:
 
@@ -34,8 +34,8 @@ Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `
    | Read Tracker | Google Sheets OAuth2, cukup scope read-only |
    | Generate Report, Apply Analysis | Header Auth: `Authorization` = `Bearer <isi report_service_token.txt>` |
    | Ask Model | Header Auth: `Authorization` = `Bearer <API key 9router>` (untuk `PROVIDER = 'openai'`, bawaan). Untuk `PROVIDER = 'anthropic'`: `x-api-key` = kunci API Anthropic |
-   | Save Run, Save Analysis, Load Latest Run, Save Snapshot, Read Validity | Postgres sebagai `report_writer` |
-   | Webhook Generate, Webhook Analysis | Header Auth (token pemanggil) |
+   | Save Run, Save Analysis, Load Latest Run, Save Snapshot, Read Validity, Report Job Result | Postgres sebagai `report_writer` |
+   | Webhook Generate, Webhook Analysis, Webhook Performa | Header Auth (token pemanggil; boleh sama dengan yang dipakai viewer) |
    | Notify, Notify Error | Telegram |
 
 4. **Isi placeholder** (ada di JSON sebagai teks `<...>`): `<SPREADSHEET_ID>` dan `<TELEGRAM_CHAT_ID>` pada node terkait, `<BU>` dan `<PERIOD>` pada node *Manual Parameters* setiap kali menjalankan manual. Model tidak lagi berupa placeholder: node *Prepare Analysis Request* memakai `PROVIDER = 'openai'` ke `https://9router.pesankopi.com/v1/chat/completions` dengan model (combo) `pesankopi-report`. Untuk memakai alamat internal Docker router, ubah `url` di baris `openai`; untuk kembali ke Claude, ubah `PROVIDER` menjadi `'anthropic'` dan pasang credential `x-api-key`.

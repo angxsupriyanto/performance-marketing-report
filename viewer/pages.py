@@ -110,7 +110,7 @@ def menu(csrf: str, user: dict | None, current: str = "") -> str:
     if user is not None:
         main = link("daftar", "/", "Daftar report") + link("performa", "/performa", "Performa")
         if user["role"] == "admin":
-            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target") + link("validity", "/validity", "Masa berlaku lead")
+            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target") + link("validity", "/validity", "Masa berlaku lead") + link("refresh", "/refresh", "Perbarui data")
                      + sep + link("users", "/users", "Pengguna") + link("companies", "/companies", "Nama perusahaan"))
         who = f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>{sep}'
     return (
@@ -216,6 +216,8 @@ ANALYSIS_JS = """
   var bu=box.dataset.bu,period=box.dataset.period,timer=null;
   var title=box.querySelector('[data-role=title]'),text=box.querySelector('[data-role=text]'),btn=box.querySelector('button');
   var form=document.getElementById('vw-form'),mode='generate';
+  var infoBox=document.getElementById('vw-info'),infoCount=document.getElementById('vw-info-count');
+  if(infoBox&&infoCount)infoBox.addEventListener('input',function(){infoCount.textContent=infoBox.value.length+' / 1000 karakter';});
   function show(kind,head,body,color){title.textContent=head;title.style.color=color||'#17283e';text.textContent=body;
     box.setAttribute('role',kind==='error'?'alert':'status');}
   function post(url,payload){
@@ -612,7 +614,7 @@ def validity_page(bu: str, names: dict, values: dict, remark_options: list[str],
         + (f'<p role="status" class="vw-ok">{escape(notice)}</p>' if notice else "")
         + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(failed)}</p>' if failed else "")
         + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(errors["_rules"])}</p>' if "_rules" in errors else "")
-        + f'<form method="post" action="/validity"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="bu" value="{escape(bu)}">'
+        + f'<form method="post" action="/validity" class="vw-validity-form"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="bu" value="{escape(bu)}">'
         f'<section aria-label="Batas umum" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2">Batas umum {escape(label)}</h2>{note}'
         '<p style="margin:0 0 16px;max-width:680px;color:#607188">Berlaku untuk semua lead yang tidak punya aturan khusus Remark. Acuan tanggal selalu Inbound Date.</p>'
         f'<div style="display:flex;flex-wrap:wrap;gap:16px 32px">{general}</div></section>'
@@ -632,7 +634,7 @@ def validity_page(bu: str, names: dict, values: dict, remark_options: list[str],
     script = (
         f'<script nonce="{nonce}">(function(){{'
         'var sel=document.getElementById("bu");if(sel)sel.addEventListener("change",function(){var u=new URL(location.href);u.searchParams.set("bu",sel.value);location.href=u.toString();});'
-        'var form=document.querySelector("form[action=\"/validity\"]"),box=form.querySelector("[data-role=rules]"),tpl=document.getElementById("vw-rule-tpl"),cnt=form.querySelector("[data-role=rule-count]"),none=form.querySelector("[data-role=no-rules]");'
+        'var form=document.querySelector("form.vw-validity-form"),box=form.querySelector("[data-role=rules]"),tpl=document.getElementById("vw-rule-tpl"),cnt=form.querySelector("[data-role=rule-count]"),none=form.querySelector("[data-role=no-rules]");'
         'function sync(row){row.querySelectorAll("[data-mode]").forEach(function(m){var n=m.parentNode.querySelector("input");n.disabled=m.value!=="bulan";if(n.disabled)n.value="";});}'
         'function refresh(){if(none)none.hidden=box.querySelector("[data-rule]")!==null;}'
         'form.querySelectorAll("[data-mode]").forEach(function(m){m.addEventListener("change",function(){sync(m.parentNode);});});'
@@ -643,6 +645,88 @@ def validity_page(bu: str, names: dict, values: dict, remark_options: list[str],
         '})();</script>'
     )
     return page("Masa berlaku lead", body, nonce, csrf, menu(csrf, user, "validity"), script)
+
+
+def refresh_page(names: dict, options: dict, cards: dict, rows: list[dict], configured: dict, csrf: str, nonce: str, user: dict) -> str:
+    """Start a report or Performa run from the viewer and see how the last ones went. cards: the latest request per kind (or None)."""
+    company_options = "".join(f'<option value="{escape(b)}">{escape(n)}</option>' for b, n in names.items()) + '<option value="all">Semua</option>'
+
+    def period_select() -> str:
+        weeks = "".join(f'<option value="{escape(v)}" data-kind="week">{escape(t)}</option>' for v, t in options["week"])
+        months = "".join(f'<option value="{escape(v)}" data-kind="month" hidden disabled>{escape(t)}</option>' for v, t in options["month"])
+        return f'<select class="vw-in" id="r-period" name="period">{weeks}{months}</select>'
+
+    def status(kind: str) -> str:
+        card = cards.get(kind)
+        if card is None:
+            return '<p data-role="status" style="margin:12px 0 0;color:#607188">Belum pernah dijalankan dari aplikasi ini.</p>'
+        state = card["state"]
+        head = f'{escape(card["target"])}, {escape(card["at"])}'
+        if state == "running":
+            return f'<p data-role="status" role="status" aria-busy="true" style="margin:12px 0 0;color:#17283e"><span class="vw-spin" aria-hidden="true"></span>Sedang berjalan: {head}. Proses tetap lanjut di server bila halaman ditutup.</p>'
+        if state == "done":
+            return f'<p data-role="status" role="status" class="vw-ok" style="margin:12px 0 0">Terakhir berhasil: {head}.</p>'
+        return f'<p data-role="status" role="alert" class="vw-alert" style="margin:12px 0 0">{head}. {escape(card["text"])}</p>'
+
+    def card(kind: str, title: str, text: str, fields: str) -> str:
+        busy = cards.get(kind) is not None and cards[kind]["state"] == "running"
+        missing = "" if configured.get(kind) else ('<p role="alert" class="vw-alert" style="margin:0 0 12px">Alamat webhook n8n untuk proses ini belum diatur pada layanan viewer. '
+                                                    'Atur N8N_GENERATE_URL dan N8N_PERFORMA_URL, atau N8N_ANALYSIS_URL.</p>')
+        disabled = " disabled" if busy or not configured.get(kind) else ""
+        label = "Sedang berjalan" if busy else title
+        return (f'<section aria-label="{escape(title)}" class="vw-box vw-pad" data-kind-card="{kind}"><h2 class="vw-h2">{escape(title)}</h2>'
+                f'<p style="margin:0 0 16px;color:#607188">{text}</p>{missing}'
+                f'<div style="display:flex;flex-wrap:wrap;gap:12px 16px;margin-bottom:16px">{fields}</div>'
+                f'<button type="button" class="vw-btn" data-start="{kind}"{disabled}>{escape(label)}</button>'
+                f'<p data-role="start-error" role="alert" hidden class="vw-alert" style="margin:12px 0 0"></p>{status(kind)}</section>')
+
+    report_fields = (f'<div style="flex:1 1 160px"><label for="r-bu" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Perusahaan</label><select class="vw-in" id="r-bu" name="bu">{company_options}</select></div>'
+                     '<div style="flex:1 1 140px"><label for="r-kind" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Jenis</label><select class="vw-in" id="r-kind"><option value="week">Mingguan</option><option value="month">Bulanan</option></select></div>'
+                     f'<div style="flex:1 1 180px"><label for="r-period" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Periode</label>{period_select()}</div>')
+    performa_fields = (f'<div style="flex:1 1 200px"><label for="p-bu" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Perusahaan</label><select class="vw-in" id="p-bu" name="bu">{company_options}</select></div>')
+    tone = {"running": "#17283e", "done": "#087450", "failed": "#ac3d3d", "timeout": "#ac3d3d"}
+    trs = "".join(
+        f'<tr><td data-label="Mulai">{escape(r["started"])}</td><td data-label="Proses">{escape(r["kind"])}</td><td data-label="Perusahaan">{escape(r["company"])}</td><td data-label="Periode">{escape(r["period"])}</td>'
+        f'<td data-label="Oleh">{escape(r["by"])}</td><td data-label="Durasi">{escape(r["duration"])}</td><td data-label="Hasil"><span style="font-weight:600;color:{tone[r["state"]]}">{escape(r["outcome"])}</span></td></tr>'
+        for r in rows
+    )
+    history = (f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table"><caption class="vw-sr">Riwayat proses generate dan update data</caption><thead><tr><th scope="col">Mulai</th><th scope="col">Proses</th><th scope="col">Perusahaan</th>'
+               f'<th scope="col">Periode</th><th scope="col">Oleh</th><th scope="col">Durasi</th><th scope="col">Hasil</th></tr></thead><tbody>{trs}</tbody></table></div>'
+               if rows else '<div class="vw-box" style="padding:24px">Belum ada proses yang dijalankan dari aplikasi ini.</div>')
+    body = (
+        f'<style nonce="{nonce}">{VALIDITY_CSS}.vw-pad{{padding:24px}}.vw-jobs{{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px;margin-bottom:32px}}'
+        '.vw-spin{display:inline-block;width:14px;height:14px;border:2px solid #6f8199;border-top-color:#2159a9;border-radius:50%;animation:vwsp .9s linear infinite;vertical-align:-2px;margin-right:8px}'
+        '@keyframes vwsp{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.vw-spin{animation:none}}@media (max-width:480px){.vw-jobs{grid-template-columns:minmax(0,1fr)}}</style>'
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Perbarui data</span></nav>'
+        '<h1 class="vw-h1">Perbarui data</h1>'
+        '<p class="vw-lead" style="max-width:700px">Jalankan pembuatan report dan pembaruan data Performa dari sini. Prosesnya berjalan lewat n8n dan membaca Google Sheet saat tombol ditekan. Tidak ada jadwal otomatis. Analisis AI tetap dibuat dari halaman report.</p>'
+        '<div class="vw-jobs">'
+        + card("report", "Generate report", "Membuat report baru untuk satu periode memakai data Sheet dan aturan masa berlaku lead saat ini. Bila periode itu sudah punya report, versi baru ditambahkan dan versi lama tetap tersimpan.", report_fields)
+        + card("performa", "Update data Performa", "Membaca ulang lead dari Sheet dan menyimpannya sebagai data halaman Performa. Data lead tetap anonim.", performa_fields)
+        + '</div>'
+        '<section aria-label="Riwayat proses"><h2 class="vw-h2">Riwayat proses</h2><p style="margin:0 0 12px;color:#607188">Dicatat otomatis: siapa yang menjalankan, kapan, hasilnya, dan pesan galat bila gagal. Hanya satu proses per jenis yang boleh berjalan dalam satu waktu. '
+        'n8n harus melaporkan hasilnya; bila tidak ada laporan dalam 5 menit, proses dianggap tidak dijawab.</p>' + history + '</section></main>'
+    )
+    script = (
+        f'<script nonce="{nonce}">(function(){{'
+        'var csrf=document.querySelector("meta[name=csrf]").content;'
+        'var kindSel=document.getElementById("r-kind"),per=document.getElementById("r-period");'
+        'function filter(){var k=kindSel.value,first=null;[].forEach.call(per.options,function(o){var on=o.dataset.kind===k;o.hidden=!on;o.disabled=!on;if(on&&!first)first=o;});if(per.selectedOptions[0]&&per.selectedOptions[0].disabled&&first)per.value=first.value;}'
+        'if(kindSel){kindSel.addEventListener("change",filter);filter();}'
+        'function poll(kind){fetch("/api/refresh/status?kind="+kind,{credentials:"same-origin"}).then(function(r){return r.json();}).then(function(s){'
+        'if(s.state==="running"){setTimeout(function(){poll(kind);},4000);return;}location.reload();}).catch(function(){setTimeout(function(){poll(kind);},8000);});}'
+        'document.querySelectorAll("[data-kind-card]").forEach(function(card){var kind=card.dataset.kindCard,btn=card.querySelector("[data-start]"),err=card.querySelector("[data-role=start-error]");'
+        'if(card.querySelector("[aria-busy=true]"))poll(kind);'
+        'btn.addEventListener("click",function(){err.hidden=true;btn.disabled=true;btn.textContent="Sedang berjalan";'
+        'var payload={kind:kind,bu:card.querySelector("select[name=bu]").value};if(kind==="report")payload.period=per.value;'
+        'fetch("/api/refresh",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF-Token":csrf},body:JSON.stringify(payload)})'
+        '.then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});}).then(function(res){'
+        'if(!res.ok){btn.disabled=false;btn.textContent=btn.dataset.label;err.textContent=res.body.error||"Proses tidak dimulai.";err.hidden=false;return;}location.reload();})'
+        '.catch(function(){btn.disabled=false;btn.textContent=btn.dataset.label;err.textContent="Tidak bisa menghubungi server. Coba lagi.";err.hidden=false;});});'
+        'btn.dataset.label=card.querySelector("h2").textContent;});'
+        '})();</script>'
+    )
+    return page("Perbarui data", body, nonce, csrf, menu(csrf, user, "refresh"), script)
 
 
 def access_text(user: dict, names: dict) -> str:

@@ -146,6 +146,27 @@ class Store:
         with self._connect() as conn:
             conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
 
+    # ---- report and Performa runs started from the viewer
+    def add_process_request(self, kind: str, bu: str, period: str, requested_by: str) -> str:
+        with self._connect() as conn:
+            row = conn.execute("INSERT INTO reports.process_requests (kind, bu, period, requested_by) VALUES (%s, %s, %s, %s) RETURNING job_id",
+                               (kind, bu, period, requested_by)).fetchone()
+        return str(row["job_id"])
+
+    def recent_processes(self, limit: int = 15, kind: str | None = None) -> list[dict]:
+        """The newest requests (optionally of one kind), each with the results n8n reported so far, newest first."""
+        with self._connect() as conn:
+            if kind:
+                jobs = conn.execute("SELECT job_id, kind, bu, period, requested_by, requested_at FROM reports.process_requests WHERE kind = %s ORDER BY requested_at DESC LIMIT %s", (kind, limit)).fetchall()
+            else:
+                jobs = conn.execute("SELECT job_id, kind, bu, period, requested_by, requested_at FROM reports.process_requests ORDER BY requested_at DESC LIMIT %s", (limit,)).fetchall()
+            ids = [j["job_id"] for j in jobs]
+            results = conn.execute("SELECT job_id, bu, ok, message, finished_at FROM reports.process_results WHERE job_id = ANY(%s)", (ids,)).fetchall() if ids else []
+        by_job: dict = {}
+        for r in results:
+            by_job.setdefault(r["job_id"], []).append({k: r[k] for k in ("bu", "ok", "message", "finished_at")})
+        return [{**j, "job_id": str(j["job_id"]), "results": by_job.get(j["job_id"], [])} for j in jobs]
+
     # ---- how long MQL, SQL and Deal Won stay valid
     def latest_validity(self, bu: str) -> dict | None:
         with self._connect() as conn:

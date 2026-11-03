@@ -53,6 +53,7 @@ class FakeStore:
         self.notes = []
         self.achievements = []
         self.validity = []
+        self.processes = []
         self.remarks = {}
         self.snaps = []
         self.performance = {}
@@ -151,6 +152,22 @@ class FakeStore:
         if self.fail_writes:
             raise RuntimeError("write failed")
         self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def add_process_request(self, kind, bu, period, requested_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        job = {"job_id": f"00000000-0000-4000-8000-{len(self.processes) + 1:012d}", "kind": kind, "bu": bu, "period": period, "requested_by": requested_by,
+               "requested_at": datetime.now(UTC), "results": []}
+        self.processes.append(job)
+        return job["job_id"]
+
+    def recent_processes(self, limit=15, kind=None):
+        self._check()
+        return [dict(j, results=list(j["results"])) for j in reversed(self.processes) if kind in (None, j["kind"])][:limit]
+
+    def report_result(self, job_id, bu, ok, message=""):
+        """What n8n does when a company's run ends."""
+        next(j for j in self.processes if j["job_id"] == job_id)["results"].append({"bu": bu, "ok": ok, "message": message, "finished_at": datetime.now(UTC)})
 
     def latest_validity(self, bu):
         self._check()
@@ -251,7 +268,7 @@ class FakeN8n(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
-        FakeN8n.calls.append({"headers": dict(self.headers), "body": json.loads(body)})
+        FakeN8n.calls.append({"headers": dict(self.headers), "body": json.loads(body), "path": self.path})
         if FakeN8n.on_call:
             FakeN8n.on_call(json.loads(body))
         payload = json.dumps({"message": "Jawaban model bukan JSON"} if FakeN8n.status >= 400 else {"ok": True}).encode()
@@ -278,6 +295,7 @@ class ViewerCase(unittest.TestCase):
         self.store = FakeStore()
         FakeN8n.calls, FakeN8n.status, FakeN8n.on_call = [], 200, None
         cfg = app.Config(password_hash=self.hash, session_secret=SECRET, store=self.store, n8n_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/report-analysis",
+                         n8n_generate_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/report-generate", n8n_performa_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/performa-generate",
                          n8n_header="Authorization", n8n_prefix="Bearer ", n8n_token="n8n-token-123", secure_cookie=True, trust_proxy=True)
         self.server = app.make_server(cfg, "127.0.0.1", 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()

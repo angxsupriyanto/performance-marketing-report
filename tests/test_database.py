@@ -80,6 +80,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/013_process_runs.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/013_process_runs.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -464,6 +466,36 @@ class DatabaseTests(unittest.TestCase):
         for bad in (("BU 1", first), ("bu1", []), ("bu1", {"defaults": []}), ("bu1", {"defaults": {}, "remarks": {}}), ("bu1", {"defaults": {}, "remarks": [{}] * 31})):
             with self.assertRaises(pe.CheckViolation, msg=str(bad)):
                 store.add_validity(bad[0], bad[1], "admin")
+
+    def test_process_requests_come_from_the_viewer_and_results_from_n8n_and_neither_can_change(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        first = store.add_process_request("report", "all", "2026-W44", "admin")
+        second = store.add_process_request("performa", "bu1", "", "andi")
+        with self.writer() as conn:  # what n8n runs after a company's run ends
+            sql_text = "insert_job_result.sql"
+            stored = conn.execute(sql(sql_text), {"p1": first, "p2": "bu1", "p3": True, "p4": "Report 2026-W44 selesai"}).fetchall()
+            self.assertEqual(len(stored), 1)
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": first, "p2": "bu1", "p3": False, "p4": "again"}).fetchall(), [])  # one result per company and job
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": "", "p2": "bu1", "p3": True, "p4": "editor run"}).fetchall(), [])  # an editor run has no job id
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": "00000000-0000-4000-8000-000000000000", "p2": "bu1", "p3": True, "p4": "unknown job"}).fetchall(), [])
+            conn.execute(sql(sql_text), {"p1": first, "p2": "bu2", "p3": False, "p4": "x" * 900})  # long text is cut to 500
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.process_requests (kind, bu, period, requested_by) VALUES ('report', 'bu1', '2026-W44', 'x')")
+        jobs = {j["job_id"]: j for j in store.recent_processes()}
+        self.assertEqual({r["bu"]: (r["ok"], len(r["message"])) for r in jobs[first]["results"]}, {"bu1": (True, 23), "bu2": (False, 500)})
+        self.assertEqual(jobs[second]["results"], [])
+        self.assertEqual([j["kind"] for j in store.recent_processes(kind="performa")], ["performa"])
+        self.assertEqual(len(store.recent_processes(limit=1)), 1)
+        with self.viewer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.process_results (job_id, bu, ok) VALUES (%s, 'bu1', true)", (second,))
+            for statement in ("UPDATE reports.process_requests SET requested_by = 'x'", "DELETE FROM reports.process_requests", "TRUNCATE reports.process_requests", "DELETE FROM reports.process_results"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in (("x", "bu1", "2026-W44"), ("report", "BU 1", "2026-W44"), ("report", "bu1", ""), ("performa", "bu1", "2026-W44"), ("report", "bu1", "2026-W99x")):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_process_request(bad[0], bad[1], bad[2], "admin")
 
     def test_remark_values_come_from_the_newest_run_that_recorded_them(self):
         store = self.viewer_store()

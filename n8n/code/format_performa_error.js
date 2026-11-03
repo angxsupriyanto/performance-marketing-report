@@ -19,4 +19,4 @@ if (typeof err === 'string') {
   add(err.context && err.context.data);
 }
 const detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\s+/g, ' ').slice(0, 1200);
-return { json: { text: `Performa ${String(plan.bu).toUpperCase()} GAGAL dihitung: ${detail}` } };
+return { json: { text: `Performa ${String(plan.bu).toUpperCase()} GAGAL dihitung: ${detail}`, bu: plan.bu, detail } };

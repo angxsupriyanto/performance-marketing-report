@@ -127,7 +127,7 @@ class CodeNodeTests(unittest.TestCase):
 
     def test_manual_parameters_name_the_plans_explicitly(self):
         out = self.plan({"bu": "all", "period": "2026-W39"})
-        self.assertEqual(out["result"][0]["json"], {"trigger": "manual", "plans": [{"bu": "bu1", "period": "2026-W39"}, {"bu": "bu2", "period": "2026-W39"}]})
+        self.assertEqual(out["result"][0]["json"], {"trigger": "manual", "job_id": "", "plans": [{"bu": "bu1", "period": "2026-W39"}, {"bu": "bu2", "period": "2026-W39"}]})
         one = self.plan({"bu": "BU2", "period": " 2026-09 "})
         self.assertEqual(one["result"][0]["json"]["plans"], [{"bu": "bu2", "period": "2026-09"}])
 
@@ -141,10 +141,49 @@ class CodeNodeTests(unittest.TestCase):
 
     def test_webhook_reads_the_body(self):
         ok = self.plan({"body": {"bu": "BU2", "period": "2026-W39"}, "headers": {}}, webhook=True)
-        self.assertEqual(ok["result"][0]["json"], {"trigger": "webhook", "plans": [{"bu": "bu2", "period": "2026-W39"}]})
+        self.assertEqual(ok["result"][0]["json"], {"trigger": "webhook", "job_id": "", "plans": [{"bu": "bu2", "period": "2026-W39"}]})
         both = self.plan({"body": {"period": "2026-09"}}, webhook=True)
         self.assertEqual(len(both["result"][0]["json"]["plans"]), 2)
         self.assertFalse(self.plan({"body": {"bu": "bu1"}}, webhook=True)["ok"])
+
+    def test_the_job_id_from_the_viewer_is_kept_only_when_it_is_a_uuid(self):
+        good = "123e4567-e89b-42d3-a456-426614174000"
+        self.assertEqual(self.plan({"body": {"bu": "bu1", "period": "2026-W39", "job_id": good.upper()}}, webhook=True)["result"][0]["json"]["job_id"], good)
+        for bad in ("x", "123e4567", good + "; DROP TABLE", 5, None, ["a"]):
+            self.assertEqual(self.plan({"body": {"bu": "bu1", "period": "2026-W39", "job_id": bad}}, webhook=True)["result"][0]["json"]["job_id"], "", bad)
+        flow = load("Performa_Generate_v1.json")
+        code = node(flow, "Normalize Plan")["parameters"]["jsCode"]
+        out = run_code(code, [{"body": {"bu": "bu2", "job_id": good}}], {"Webhook Performa": {"items": [{}], "executed": True}})["result"][0]["json"]
+        self.assertEqual((out["trigger"], out["job_id"], out["plans"]), ("webhook", good, [{"bu": "bu2", "period": ""}]))
+        manual = run_code(code, [{"bu": "all"}])["result"][0]["json"]
+        self.assertEqual((manual["trigger"], manual["job_id"]), ("manual", ""))
+
+    def test_each_company_end_is_reported_to_the_viewer_and_editor_runs_report_nothing(self):
+        good = "123e4567-e89b-42d3-a456-426614174000"
+        for name, ok_label, plan_node in (("Report_Generate_v1.json", "Report 2026-W39 selesai", "Save Run"), ("Performa_Generate_v1.json", "Data Performa selesai", "Save Snapshot")):
+            flow = load(name)
+            links = {s: [l["node"] for b in o["main"] for l in b] for s, o in flow["connections"].items()}
+            self.assertIn("Prepare Job Result", links[plan_node], name)
+            self.assertEqual(links["Prepare Job Result"], ["Report Job Result"])
+            self.assertEqual(links["Prepare Job Failure"], ["Report Job Result"])
+            query = node(flow, "Report Job Result")["parameters"]["query"]
+            self.assertIn("reports.process_results", query)
+            self.assertEqual(max(int(n) for n in re.findall(r"\$(\d+)", query)), 4)
+            prepared = [{"json": {"bu": "bu1", "period": "2026-W39", "leads": 3}}]
+            nodes = {"Normalize Plan": {"items": [{"job_id": good}]}, "Prepare Insert": {"items": [p["json"] for p in prepared]}}
+            out = run_code(node(flow, "Prepare Job Result")["parameters"]["jsCode"], [{"inserted": True}], nodes)["result"]
+            self.assertEqual(out[0]["json"]["params"], [good, "bu1", True, ok_label])
+            same = run_code(node(flow, "Prepare Job Result")["parameters"]["jsCode"], [{"inserted": False}], nodes)["result"]
+            self.assertIn("sudah ada", same[0]["json"]["params"][3])
+            self.assertEqual(run_code(node(flow, "Prepare Job Result")["parameters"]["jsCode"], [{"inserted": True}], {**nodes, "Normalize Plan": {"items": [{"job_id": ""}]}})["result"], [])
+            failed = run_code(node(flow, "Prepare Job Failure")["parameters"]["jsCode"], [{"bu": "bu2", "detail": "x" * 900, "text": "Laporan BU2 GAGAL"}], {"Normalize Plan": {"items": [{"job_id": good}]}})
+            params = (failed["result"]["json"] if isinstance(failed["result"], dict) else failed["result"][0]["json"])["params"]
+            self.assertEqual((params[:3], len(params[3])), ([good, "bu2", False], 500))
+        generate = load("Report_Generate_v1.json")
+        err = run_code(node(generate, "Format Generate Error")["parameters"]["jsCode"], [{"error": {"message": "Kolom wajib tidak ada", "httpCode": "422"}}], {"Build CSV": {"items": [{"bu": "bu2", "period": "2026-W39", "csv": "SECRET,ROW"}]}})
+        out = err["result"]["json"] if isinstance(err["result"], dict) else err["result"][0]["json"]
+        self.assertEqual((out["bu"], out["period"], out["detail"]), ("bu2", "2026-W39", "422 | Kolom wajib tidak ada"))
+        self.assertNotIn("SECRET", json.dumps(out))
 
     def test_no_workflow_runs_on_a_schedule(self):
         for path in sorted(WORKFLOWS.glob("*.json")):
@@ -611,7 +650,9 @@ class CodeNodeTests(unittest.TestCase):
     def test_performa_workflow_is_manual_only_and_stores_aggregates_through_the_writer_query(self):
         flow = load("Performa_Generate_v1.json")
         types = {n["name"]: n["type"] for n in flow["nodes"]}
-        self.assertNotIn("n8n-nodes-base.webhook", types.values())  # started by hand, like the user wants
+        self.assertEqual([n for n, t in types.items() if t == "n8n-nodes-base.webhook"], ["Webhook Performa"])  # the viewer's "Perbarui data" button; still no schedule
+        self.assertEqual((node(flow, "Webhook Performa")["parameters"]["httpMethod"], node(flow, "Webhook Performa")["parameters"]["authentication"]), ("POST", "headerAuth"))
+        self.assertNotIn("n8n-nodes-base.scheduleTrigger", types.values())
         self.assertNotIn("n8n-nodes-base.telegram", types.values())
         self.assertEqual(flow["active"], False)
         self.assertEqual(node(flow, "Manual Parameters")["parameters"]["assignments"]["assignments"][0]["value"], "all")

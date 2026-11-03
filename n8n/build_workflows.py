@@ -115,6 +115,19 @@ def postgres_validity_node(flow, position):
     flow.add("Read Validity", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("select_validity.sql"), "options": {}}, position)
 
 
+def job_result_nodes(flow, after_save, after_error, label_function, position):
+    """Reports each company's end to the viewer: a success row after the save step and a failure row after the error formatter, both written to
+    reports.process_results by one Postgres node. Nothing is written for runs started from n8n's editor (no job id)."""
+    x, y = position
+    code_node(flow, "Prepare Job Result", "prepare_job_result.js", (x, y), LABEL=label_function)
+    code_node(flow, "Prepare Job Failure", "prepare_job_failure.js", (x, y + 160), mode="runOnceForEachItem")
+    flow.add("Report Job Result", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("insert_job_result.sql"), "options": {"queryReplacement": "={{ $json.params }}"}}, (x + 240, y + 80))
+    flow.connect(after_save, "Prepare Job Result")
+    flow.connect(after_error, "Prepare Job Failure")
+    flow.connect("Prepare Job Result", "Report Job Result")
+    flow.connect("Prepare Job Failure", "Report Job Result")
+
+
 def telegram_node(flow, name, text_expression, position):
     flow.add(name, "n8n-nodes-base.telegram", 1.2, {"resource": "message", "operation": "sendMessage", "chatId": "<TELEGRAM_CHAT_ID>", "text": text_expression, "additionalFields": {"appendAttribution": False}}, position)
 
@@ -161,6 +174,7 @@ def generate_flow() -> Flow:
     code_node(flow, "Result", "result_generate.js", (2180, 160))
     code_node(flow, "Format Generate Error", "format_generate_error.js", (1220, 400), mode="runOnceForEachItem")
     telegram_node(flow, "Notify Error", "={{ $json.text }}", (1460, 400))
+    job_result_nodes(flow, "Save Run", "Format Generate Error", "(p) => `Report ${p.period}`", (1700, 400))
     for trigger in ("Manual Parameters", "Webhook Generate"):
         flow.connect(trigger, "Normalize Plan")
     flow.connect("Manual Trigger", "Manual Parameters")
@@ -200,6 +214,9 @@ def performa_flow() -> Flow:
     postgres_node(flow, "Save Snapshot", "insert_performance.sql", (1680, -80))
     code_node(flow, "Result", "result_performa.js", (1920, -80))
     code_node(flow, "Format Error", "format_performa_error.js", (1440, 160), mode="runOnceForEachItem")
+    flow.add("Webhook Performa", "n8n-nodes-base.webhook", 2, {"httpMethod": "POST", "path": "performa-generate", "authentication": "headerAuth", "responseMode": "lastNode", "options": {}}, (0, 160), webhookId=node_id(flow.name, "Webhook Performa/webhook"))
+    flow.connect("Webhook Performa", "Normalize Plan")
+    job_result_nodes(flow, "Save Snapshot", "Format Error", "(p) => 'Data Performa'", (1920, 160))
     flow.connect("Manual Trigger", "Manual Parameters")
     for a, b in (("Manual Parameters", "Normalize Plan"), ("Normalize Plan", "Read Validity"), ("Read Validity", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Compute Performa"), ("Prepare Insert", "Save Snapshot"), ("Save Snapshot", "Result")):
         flow.connect(a, b)

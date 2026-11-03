@@ -12,6 +12,7 @@ Daftar hal yang **belum terbukti, belum selesai, atau diketahui rapuh** pada MVP
 | G4 | **Dark mode pada data nyata** | Diperiksa dengan data contoh di Daftar report, Report, Performa, dan Budget. Sel heatmap cohort berwarna belum terlihat dengan data berisi; halaman Target, Pengguna, dan Nama perusahaan hanya diuji lewat tes markup. |
 | G5 | **Nama grup Nurturing** | Nama grup mengikuti nilai Medium di Tracker. Variasi huruf besar-kecil ("Whatsapp" dan "WhatsApp") menjadi dua grup. Pemilik belum memutuskan menyatukan otomatis. |
 | G6 | **n8n versi nyata** | Workflow sudah dijalankan pemilik dan berfungsi, tetapi versi node dan parameternya belum diaudit satu per satu (lihat bagian terkait di `n8n/README.md`). |
+| G21 | **Perbarui data dan masa berlaku lead belum diuji dengan n8n dan database nyata** | Diuji dengan n8n palsu, harness kode node, dan PostgreSQL uji. Belum terbukti: node *Read Validity* dan *Report Job Result* di n8n nyata (credential `report_writer`), webhook Performa, dan hasil per perusahaan untuk pilihan **Semua**. Bila workflow gagal sebelum node pelaporan (mis. Sheet tidak terbaca), halaman hanya menampilkan "tidak dijawab" setelah 5 menit; penyebabnya ada di eksekusi n8n. |
 
 ## Batasan yang disengaja atau diterima
 
@@ -24,10 +25,11 @@ Daftar hal yang **belum terbukti, belum selesai, atau diketahui rapuh** pada MVP
 | G14 | Budget hanya per bulan | Belum ada rencana tahun atau semester; tidak ada hubungan budget ke target. Lihat `ROADMAP.md`. |
 | G15 | Budget memakai nama campaign Tracker, bukan nama campaign iklan di Meta atau Google | Belum ada pemetaan, sehingga ROAS per produk dan biaya per SQL belum tersedia. Lihat `ROADMAP.md`. |
 | G16 | Repo ini **publik** | Jangan commit data lead, report terisi, atau nama campaign internal. Mockup fase berikutnya memakai contoh netral. |
+| G17 | Mockup berada di artifact desain pribadi, bukan di repo | Tautan hanya terbuka bagi pemilik. Ringkasan dan tangkapan layar netral ada di `docs/mockups/`. |
 | G18 | Pencapaian manual tampil **tanpa penanda** (D39) | Pembaca report dan PDF tidak bisa membedakan angka dari Sheet dan angka koreksi; alasan hanya terlihat di form admin. Edit semester atau tahun menggantikan angka sistem langsung, bukan diturunkan dari koreksi per produk, jadi koreksi per produk tidak otomatis masuk ke progress semester dan tahun. Bila pemilik ingin penanda kecil atau penurunan otomatis, ubah `report_view.manual_block` dan `viewer/achievements.py`. |
 | G19 | Daftar Remark untuk aturan masa berlaku dibaca dari report terakhir | Remark baru di Sheet baru bisa dipilih setelah satu report dibuat untuk perusahaan itu; perusahaan tanpa report belum punya daftar. Teks Remark yang lebih dari 60 karakter dilewati dan daftar dibatasi 50 nilai. |
 | G20 | Report lama tidak mengikuti pengaturan masa berlaku yang baru | Angka report sudah tersimpan; ubah pengaturan lalu jalankan Report Generate lagi. Dua report periode yang sama yang dibuat sebelum dan sesudah perubahan bisa berbeda; keduanya tersimpan. |
-| G17 | Mockup berada di artifact desain pribadi, bukan di repo | Tautan hanya terbuka bagi pemilik. Ringkasan dan tangkapan layar netral ada di `docs/mockups/`. |
+| G22 | Pilihan **Semua** di Generate report diproses berurutan oleh n8n dalam satu batas 5 menit | Bila Sheet besar dan dua report melewati 5 menit, proses yang sebenarnya berjalan bisa ditandai "tidak dijawab" padahal hasilnya menyusul tersimpan. Batas ada di `viewer/refresh.py` (`TIMEOUT_SECONDS`). |
 
 ## Utang teknis
 

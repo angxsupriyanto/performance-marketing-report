@@ -6,6 +6,10 @@ Status: **usulan**, kecuali yang ditandai *diputuskan*. Isi ini adalah hasil dis
 
 MVP = yang sudah dibangun dan terdokumentasi: report mingguan dan bulanan per perusahaan, Performa, Budget bulanan, Target, Action dan analisis AI dengan Next Action, PDF, pengguna dan peran, dan dark mode. Fase di bawah **belum** dibangun.
 
+## Ditambahkan setelah MVP terkunci (dibangun, 2026-11)
+
+Empat tambahan kecil pada MVP, masing-masing dengan keputusan di `DECISIONS.md` dan celahnya di `KNOWN_GAPS.md`: **informasi tambahan analisis** (D40), **edit pencapaian manual** (D39), **masa berlaku lead untuk MQL, SQL, dan Deal Won dengan aturan per Remark** (D38), dan **Perbarui data dari aplikasi** (D41). Migrasi `010` sampai `013`. Belum diuji dengan n8n dan database nyata (lihat G21). Fase pemetaan iklan di bawah tetap belum dibangun.
+
 ## Arah jangka panjang (visi pemilik)
 
 Menjadikan produk ini **dashboard digital marketing penuh**: dari perencanaan budget (tahun, semester, bulan) sampai proyeksi hasil terhadap KPI.

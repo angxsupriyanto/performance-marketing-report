@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, achievements, actions, analysis_edits, validity, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
+from viewer import access, achievements, actions, analysis_edits, refresh, validity, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -60,6 +60,8 @@ class Config:
     n8n_token: str
     secure_cookie: bool
     trust_proxy: bool
+    n8n_generate_url: str = ""
+    n8n_performa_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -89,7 +91,15 @@ class Config:
             n8n_token=read_secret(n8n_token_file, min_length=1) if n8n_token_file else "",
             secure_cookie=os.environ.get("VIEWER_COOKIE_SECURE", "true").lower() != "false",
             trust_proxy=os.environ.get("VIEWER_TRUST_PROXY_HEADERS", "false").lower() == "true",
+            n8n_generate_url=os.environ.get("N8N_GENERATE_URL") or sibling_url(os.environ.get("N8N_ANALYSIS_URL", ""), "report-generate"),
+            n8n_performa_url=os.environ.get("N8N_PERFORMA_URL") or sibling_url(os.environ.get("N8N_ANALYSIS_URL", ""), "performa-generate"),
         )
+
+
+def sibling_url(analysis_url: str, path: str) -> str:
+    """The other n8n webhooks live next to the analysis one (.../webhook/report-analysis), so their addresses follow from it unless set explicitly."""
+    tail = "/report-analysis"
+    return analysis_url[: -len(tail)] + "/" + path if analysis_url.endswith(tail) else ""
 
 
 def normalize_prefix(prefix: str) -> str:
@@ -125,12 +135,17 @@ class Jobs:
 
 def call_n8n(cfg: Config, bu: str, period: str, context: dict, extra: dict | None = None) -> str:
     """Returns an error text, or "" when n8n answered 2xx. `extra` adds the team's actions and the budget figures to the request."""
-    if not cfg.n8n_url or not cfg.n8n_token:
+    return call_webhook(cfg, cfg.n8n_url, {"bu": bu, "period": period, "requested_by": "viewer", "targets": context, **(extra or {})}, ANALYSIS_TIMEOUT_SECONDS)
+
+
+def call_webhook(cfg: Config, url: str, payload: dict, timeout: int) -> str:
+    """Posts to an n8n webhook with the shared token. Returns an error text, or "" when n8n answered 2xx."""
+    if not url or not cfg.n8n_token:
         return "Alamat atau token webhook n8n belum diatur pada layanan viewer."
-    body = json.dumps({"bu": bu, "period": period, "requested_by": "viewer", "targets": context, **(extra or {})}, default=generate_report.json_default).encode()
-    request = urllib.request.Request(cfg.n8n_url, data=body, method="POST", headers={"Content-Type": "application/json", cfg.n8n_header: cfg.n8n_prefix + cfg.n8n_token})
+    body = json.dumps(payload, default=generate_report.json_default).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json", cfg.n8n_header: cfg.n8n_prefix + cfg.n8n_token})
     try:
-        with urllib.request.urlopen(request, timeout=ANALYSIS_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             response.read()
         return ""
     except urllib.error.HTTPError as exc:
@@ -146,6 +161,17 @@ def call_n8n(cfg: Config, bu: str, period: str, context: dict, extra: dict | Non
         return f"n8n menjawab {exc.code}" + (f": {detail}" if detail else " dengan jawaban kosong") + "."
     except (urllib.error.URLError, TimeoutError, OSError):
         return "n8n tidak menjawab dalam batas waktu."
+
+
+def run_refresh(cfg: Config, jobs: "Jobs", url: str, payload: dict, job_id: str) -> None:
+    """Calls the n8n webhook of a report or Performa run. n8n writes the results to the database itself; an error answer is kept here so the page can show it."""
+    key = ("refresh", job_id)
+    try:
+        jobs.start(key)
+        error = call_webhook(cfg, url, payload, refresh.TIMEOUT_SECONDS)
+        jobs.finish(key, error.replace("n8n tidak menjawab dalam batas waktu.", "n8n tidak menjawab dalam 5 menit."))
+    except Exception:  # noqa: BLE001 - the job must always leave the running state
+        jobs.finish(key, "Terjadi kesalahan saat menghubungi n8n.")
 
 
 def run_analysis(cfg: Config, jobs: Jobs, bu: str, period: str, context: dict, extra: dict | None = None) -> None:
@@ -341,6 +367,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_validity(form, csrf, nonce)
                     return
+                if path == "/api/refresh":
+                    self.need_admin()
+                    status = self.refresh_start(form)
+                    return
             elif path == "/":
                 status = self.list_page(csrf, nonce)
                 return
@@ -352,6 +382,14 @@ class Handler(BaseHTTPRequestHandler):
                 return
             elif path == "/api/analysis/status":
                 status = self.analysis_status(query)
+                return
+            elif path == "/refresh":
+                self.need_admin()
+                status = self.refresh_page(csrf, nonce)
+                return
+            elif path == "/api/refresh/status":
+                self.need_admin()
+                status = self.refresh_status(query)
                 return
             elif path == "/targets":
                 self.need_admin()
@@ -609,6 +647,79 @@ class Handler(BaseHTTPRequestHandler):
         extra = {"actions": items, "budget": budget_ctx, "team_note": note}
         threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
+        return 202
+
+    def refresh_companies(self) -> list[str]:
+        return list(UNITS)  # the companies n8n's "all" covers (normalize_plan.js)
+
+    def refresh_jobs(self, limit: int = 15, kind: str | None = None) -> list[dict]:
+        """Recent requests with their derived status, newest first."""
+        companies, now = self.refresh_companies(), datetime.now(timezone.utc)
+        out = []
+        for job in self.cfg.store.recent_processes(limit, kind):
+            local = (self.jobs.get(("refresh", job["job_id"])) or {}).get("error", "")
+            out.append({**job, "status": refresh.derive(job, companies, now, local)})
+        return out
+
+    def refresh_page(self, csrf: str, nonce: str) -> int:
+        try:
+            jobs = self.refresh_jobs()
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Riwayat proses tidak bisa dimuat. Database marketing_reports tidak menjawab; muat ulang halaman ini.")
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        latest = {kind: next((j for j in jobs if j["kind"] == kind), None) for kind in refresh.KINDS}
+        rows = [{"started": pages.dt_text(j["requested_at"]), "kind": refresh.KINDS[j["kind"]], "company": "Semua" if j["bu"] == "all" else names.get(j["bu"], j["bu"]),
+                 "period": j["period"] or "-", "by": j["requested_by"], "duration": refresh.duration_text(j, j["status"]), "state": j["status"]["state"],
+                 "outcome": refresh.outcome_text(j, j["status"], names)} for j in jobs]
+        cards = {kind: ({"state": j["status"]["state"], "text": refresh.outcome_text(j, j["status"], names), "at": pages.dt_text(j["requested_at"]),
+                         "target": ("Semua" if j["bu"] == "all" else names.get(j["bu"], j["bu"])) + (f" {j['period']}" if j["period"] else "")} if j else None) for kind, j in latest.items()}
+        options = refresh.period_options(self.now().date())
+        configured = {"report": bool(self.cfg.n8n_generate_url), "performa": bool(self.cfg.n8n_performa_url)}
+        self.send(200, pages.refresh_page(names, options, cards, rows, configured, csrf, nonce, self.user), nonce=nonce)
+        return 200
+
+    def refresh_status(self, query: dict) -> int:
+        kind = query.get("kind", "")
+        if kind not in refresh.KINDS:
+            raise HttpError(400, "proses tidak dikenal")
+        try:
+            jobs = self.refresh_jobs(1, kind)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab")
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        if not jobs:
+            self.json(200, {"state": "idle"})
+        else:
+            self.json(200, {"state": jobs[0]["status"]["state"], "text": refresh.outcome_text(jobs[0], jobs[0]["status"], names)})
+        return 200
+
+    def refresh_start(self, form: dict) -> int:
+        kind, bu, period = form.get("kind", ""), form.get("bu", ""), form.get("period", "")
+        try:
+            period = refresh.check_request(kind, bu, period, self.refresh_companies())
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        url = self.cfg.n8n_generate_url if kind == "report" else self.cfg.n8n_performa_url
+        if not url or not self.cfg.n8n_token:
+            raise HttpError(503, "Alamat atau token webhook n8n untuk proses ini belum diatur pada layanan viewer (N8N_GENERATE_URL, N8N_PERFORMA_URL, atau N8N_ANALYSIS_URL).")
+        if not self.jobs.start(("refresh-start", kind)):  # one click at a time inside this process
+            raise HttpError(409, "Permintaan sebelumnya sedang diproses. Coba lagi sebentar lagi.")
+        try:
+            try:
+                running = [j for j in self.refresh_jobs(1, kind) if j["status"]["state"] == "running"]
+            except Exception:  # noqa: BLE001
+                raise HttpError(503, "Proses tidak dimulai. Database marketing_reports tidak menjawab. Coba lagi.")
+            if running:
+                raise HttpError(409, f"{refresh.KINDS[kind]} masih berjalan. Tunggu sampai selesai.")
+            try:
+                job_id = self.cfg.store.add_process_request(kind, bu, period, self.user["username"])
+            except Exception:  # noqa: BLE001
+                raise HttpError(503, "Proses tidak dimulai. Database marketing_reports tidak menjawab. Coba lagi.")
+        finally:
+            self.jobs.finish(("refresh-start", kind))
+        payload = {"bu": bu, "job_id": job_id, "requested_by": "viewer", **({"period": period} if kind == "report" else {})}
+        threading.Thread(target=run_refresh, args=(self.cfg, self.jobs, url, payload, job_id), daemon=True).start()
+        self.json(202, {"state": "running", "job_id": job_id})
         return 202
 
     def validity_state(self, bu: str) -> tuple[dict, bool, list[dict], list[str]]:

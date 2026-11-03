@@ -29,6 +29,10 @@ services:
       VIEWER_PASSWORD_HASH_FILE: /run/secrets/viewer_password_hash
       VIEWER_SESSION_SECRET_FILE: /run/secrets/viewer_session_secret
       N8N_ANALYSIS_URL: http://n8n-service:5678/webhook/report-analysis   # production URL of the active Report_Analysis_Button_v1
+      # The "Perbarui data" page calls the webhooks of Report_Generate_v1 and Performa_Generate_v1. Their addresses follow from N8N_ANALYSIS_URL
+      # (same host, /webhook/report-generate and /webhook/performa-generate); set these only when yours differ.
+      # N8N_GENERATE_URL: http://n8n-service:5678/webhook/report-generate
+      # N8N_PERFORMA_URL: http://n8n-service:5678/webhook/performa-generate
       N8N_WEBHOOK_HEADER_NAME: Authorization
       N8N_WEBHOOK_HEADER_PREFIX: "Bearer "  # empty the prefix if the n8n Header Auth credential holds the bare token
       N8N_WEBHOOK_TOKEN_FILE: /run/secrets/n8n_webhook_token

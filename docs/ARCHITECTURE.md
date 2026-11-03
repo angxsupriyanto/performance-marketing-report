@@ -41,8 +41,8 @@ Tiga workflow yang **dihasilkan** oleh `n8n/build_workflows.py` (jangan edit JSO
 
 | Workflow | Fungsi |
 |---|---|
-| `Report_Generate_v1` | Sheet → Build CSV → layanan → simpan run → ringkasan Telegram |
-| `Performa_Generate_v1` | Sheet → layanan `/v1/performa` → snapshot Performa |
+| `Report_Generate_v1` | Normalize Plan → **Read Validity** (pengaturan masa berlaku lead dari database) → Sheet → Build CSV → layanan → simpan run → ringkasan Telegram; hasil per perusahaan dilaporkan ke viewer lewat **Report Job Result** |
+| `Performa_Generate_v1` | Normalize Plan → Read Validity → Sheet → layanan `/v1/performa` → snapshot Performa; bisa dipicu manual atau lewat `Webhook Performa` dari viewer, dan melaporkan hasil seperti Report Generate |
 | `Report_Analysis_Button_v1` | Validate Request → Load Latest Run → Prepare Analysis Request → Ask Model → Parse Analysis → Apply Analysis → Prepare Save → Save Analysis |
 
 Prompt analisis: `n8n/prompts/analysis_v2.md`. Node Code memanggil node lain lewat nama; bila node di kanvas diganti nama, kode melaporkan nama yang hilang (`n8n/code/_ref.js`).
@@ -73,9 +73,13 @@ Rute utama: `/` (daftar), `/report/<bu>/<periode>` dan `/report/<bu>/<periode>/p
 
 **Membuat report.** Pemicu manual di n8n dengan `bu` dan `period` eksplisit. Satu report tersimpan per kombinasi (BU, periode, isi sheet, versi kode generator); menjalankan ulang dengan input yang sama tidak menambah baris. Karena versi kode ikut kunci, setelah generator diperbarui, menjalankan ulang menghasilkan report baru.
 
-**Membuat analisis.** Admin menekan *Buat analisis* di viewer → form Action periode (boleh kosong) → viewer menyimpan Action, menyusun konteks budget, lalu memanggil webhook n8n → n8n mengirim `facts`, `targets`, `actions`, dan `budget` ke model → hasilnya disisipkan lewat layanan dan disimpan sebagai baris baru di `report_analyses`. Panel **Next Action** ikut dihasilkan dan disimpan bersama analisis; viewer menampilkannya walau halaman tersimpan belum punya slotnya.
+**Menjalankan dari aplikasi.** Halaman *Perbarui data* mencatat permintaan di `process_requests`, memanggil webhook `report-generate` atau `performa-generate` dengan `job_id`, dan membaca `process_results` yang ditulis n8n per perusahaan. Status diturunkan dari kedua tabel (`viewer/refresh.py`); tanpa laporan dalam 5 menit dianggap tidak dijawab.
 
-**Menampilkan report.** Viewer membaca HTML run terbaru, mengambil `view` yang tersemat, lalu merender ulang dengan: target terbaru (`target_entries`), budget terbaru bulan itu (`budget_snapshots`), Action terbaru periode (`report_actions`), dan teks analisis (edit manual terbaru yang lebih baru dari analisis AI terbaru, selain itu AI). Hasilnya dibungkus kerangka (menu, tombol) dan dikirim lewat `send()`, yang di titik terakhir menerapkan `theme.apply` untuk dark mode.
+**Masa berlaku lead.** Admin mengaturnya di *Masa berlaku lead* (`lead_validity_settings`). n8n membaca baris terbaru per perusahaan (node *Read Validity*) dan mengirimnya ke layanan sebagai parameter `validity`, yang diteruskan ke generator (`--validity`). Pengaturan ikut identitas run (`source_sha256`), jadi mengubahnya lalu membuat report lagi menghasilkan run baru. Aturan hitungnya ada di `METRIC_RULES.md`.
+
+**Membuat analisis.** Admin menekan *Buat analisis* di viewer → form Action periode dan informasi tambahan (keduanya boleh kosong; informasi tambahan dikirim sebagai `team_note`, disimpan di `analysis_notes`, tidak tampil di report) → viewer menyimpan Action, menyusun konteks budget, lalu memanggil webhook n8n → n8n mengirim `facts`, `targets`, `actions`, dan `budget` ke model → hasilnya disisipkan lewat layanan dan disimpan sebagai baris baru di `report_analyses`. Panel **Next Action** ikut dihasilkan dan disimpan bersama analisis; viewer menampilkannya walau halaman tersimpan belum punya slotnya.
+
+**Menampilkan report.** Viewer membaca HTML run terbaru, mengambil `view` yang tersemat, menukar angka pencapaian dengan angka manual bila ada (`report_achievements`, tanpa penanda), lalu merender ulang dengan: target terbaru (`target_entries`), budget terbaru bulan itu (`budget_snapshots`), Action terbaru periode (`report_actions`), dan teks analisis (edit manual terbaru yang lebih baru dari analisis AI terbaru, selain itu AI). Hasilnya dibungkus kerangka (menu, tombol) dan dikirim lewat `send()`, yang di titik terakhir menerapkan `theme.apply` untuk dark mode.
 
 **PDF.** `GET /report/<bu>/<periode>/pdf` membuat `print_document` dari HTML mentah (tanpa tema), menulisnya ke folder sementara, dan mencetaknya dengan Chromium tanpa jaringan. Satu PDF pada satu waktu. PDF selalu terang karena tidak pernah melewati `theme.apply`.
 

@@ -18,4 +18,6 @@ const executed = (name) => {
 };
 const trigger = executed('Webhook Generate') ? 'webhook' : 'manual';
 const bus = requested === 'all' ? BUS : [requested];
-return [{ json: { trigger, plans: bus.map((bu) => ({ bu, period })) } }];
+// Set when the viewer started the run: the results are reported against this id. Runs from n8n's editor have none.
+const jobId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(source.job_id || '')) ? String(source.job_id).toLowerCase() : '';
+return [{ json: { trigger, job_id: jobId, plans: bus.map((bu) => ({ bu, period })) } }];

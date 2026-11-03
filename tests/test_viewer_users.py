@@ -118,7 +118,7 @@ class RoleTests(UserCase):
     def test_the_admin_menu_has_the_admin_pages(self):
         self.login()
         soup = BeautifulSoup(self.call("GET", "/")[1], "html.parser")
-        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/", "/performa", "/budget", "/targets", "/validity", "/users", "/companies"])
+        self.assertEqual([a["href"] for a in soup.select(".vw-menu a")], ["/", "/performa", "/budget", "/targets", "/validity", "/refresh", "/users", "/companies"])
         self.assertEqual(len(soup.select(".vw-menu .vw-sep")), 3)  # one before the budget group, one before the users group, one before the user name
         self.assertEqual([a.get_text() for a in soup.select(".vw-menu a[aria-current=page]")], ["Daftar report"])
         self.assertIn("admin (Admin)", soup.select_one(".vw-menu").get_text())
