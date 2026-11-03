@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
+from viewer import access, achievements, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -317,6 +317,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_actions(form)
                     return
+                if path == "/api/achievements":
+                    self.need_admin()
+                    status = self.save_achievements(form)
+                    return
                 if path in ("/targets/year", "/targets/month"):
                     self.need_admin()
                     status = self.save_targets(path.rsplit("/", 1)[1], form, csrf, nonce)
@@ -503,7 +507,9 @@ class Handler(BaseHTTPRequestHandler):
             rows = self.cfg.store.latest_targets(bu)
         except Exception:  # noqa: BLE001
             rows = None
-        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view), actions=actions_block)
+        saved_figures, manual = self.achievement_state(bu, period, view)
+        shown = achievements.apply_view(view, saved_figures)
+        document = report_view.render_document(shown, targets.build_tg(shown, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view), actions=actions_block, manual=manual)
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
         return 200
 
@@ -540,7 +546,8 @@ class Handler(BaseHTTPRequestHandler):
                      "saved_at": pages.dt_text(saved["saved_at"]) if saved else None, "can_edit": False}
         except Exception:  # noqa: BLE001
             block = None
-        html_text = report_view.print_document(view, targets.build_tg(view, rows), analysis, self.names(), spend, block, pages.dt_text(report["generated_at"]))
+        shown = achievements.apply_view(view, self.safe_achievements(bu, period))
+        html_text = report_view.print_document(shown, targets.build_tg(shown, rows), analysis, self.names(), spend, block, pages.dt_text(report["generated_at"]))
         try:
             data = pdf.render_pdf(html_text)
         except pdf.PdfBusy as exc:
@@ -587,7 +594,7 @@ class Handler(BaseHTTPRequestHandler):
                 note = saved_note["note"] if saved_note else ""
             view = report_view.extract_view(report["html"])
             budget_ctx = budget.analysis_context(self.report_budget(report, view or {}))
-            context = targets.context_for_analysis(facts_of(report), self.cfg.store.latest_targets(bu))
+            context = targets.context_for_analysis(achievements.apply_facts(facts_of(report), self.cfg.store.latest_achievements(bu, period)), self.cfg.store.latest_targets(bu))
         except Exception:  # noqa: BLE001 - release the job, otherwise this report could never be analysed again
             self.jobs.finish((bu, period), "Action atau data pendukung tidak bisa disimpan atau dimuat. Coba lagi.")
             raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba lagi.")
@@ -595,6 +602,78 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202
+
+    def safe_achievements(self, bu: str, period: str):
+        """The newest typed figures, or None when there are none or the table cannot be read (the report then shows the system figures)."""
+        try:
+            return self.cfg.store.latest_achievements(bu, period)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def achievement_state(self, bu: str, period: str, view: dict) -> tuple[dict | None, dict | None]:
+        """(newest saved set, what the report needs to draw the admin forms). The forms exist only for admins."""
+        try:
+            saved = self.cfg.store.latest_achievements(bu, period)
+            readable = True
+        except Exception:  # noqa: BLE001 - without the table the report shows the system figures and no form
+            saved, readable = None, False
+        if not (readable and access.is_admin(self.user)):
+            return saved, None
+        values = achievements.figures(saved)
+        unit = view["progress"]["unit"]
+        fmt = report_view.idr if unit == "idr" else report_view.count_text
+        unit_label = "Rp" if unit == "idr" else "SQL"
+        last = ({"saved_by": saved["saved_by"], "saved_at": pages.dt_text(saved["saved_at"]), "reason": saved["reason"]} if saved else None)
+        forms = {}
+        progress = view["progress"]
+        year_rows = [{"key": scope, "name": name, "system": fmt(progress[scope]["actual"]), "value": str(values.get(scope, ""))}
+                     for scope, name in (("semester", f"{progress['semester']['label']}"), ("year", f"Akumulasi 1 tahun {progress['year']['year']}"))]
+        noun = f"SQL {view['focus']['product']}" if view.get("focus") else "SQL Value"
+        forms["year"] = pages.achievement_form(
+            "year", f"Pencapaian {noun} {progress['year']['year']} sampai {view['label']}",
+            "Isi bila angka dari Sheet belum lengkap. Kolom yang dikosongkan memakai angka sistem. Angka manual menggantikan angka sistem di kartu progress semester dan tahun. Perubahan tersimpan sebagai riwayat; angka sistem tidak dihapus.",
+            unit_label, year_rows, last)
+        if view.get("hardware") and view.get("month"):
+            hw_values = values.get("hardware") or {}
+            month_rows = [{"key": h["name"], "name": h["name"], "system": fmt(h["month_to_date"]), "value": str(hw_values.get(h["name"], ""))} for h in view["hardware"]]
+            forms["month"] = pages.achievement_form(
+                "month", f"Pencapaian SQL Value {view['month']['label']} sampai {view['label']}",
+                "Isi bila angka dari Sheet belum lengkap. Kolom yang dikosongkan memakai angka sistem. Angka manual menggantikan angka sistem di kartu progress bulan ini dan tabel produk. Perubahan tersimpan sebagai riwayat; angka sistem tidak dihapus.",
+                unit_label, month_rows, last)
+        return saved, {"admin": True, "forms": forms}
+
+    def save_achievements(self, form: dict) -> int:
+        bu, period, scope = form.get("bu", ""), form.get("period", ""), form.get("scope", "")
+        if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        view = report_view.extract_view(report["html"]) if report else None
+        if view is None:
+            raise HttpError(404, "report tidak ditemukan")
+        try:
+            try:
+                raw = json.loads(form.get("values", "{}") or "{}")
+            except ValueError:
+                raise ValueError("Isian tidak terbaca.")
+            parsed = achievements.parse(scope, raw, view)
+            reason = achievements.clean_reason(form.get("reason"))
+            saved = self.cfg.store.latest_achievements(bu, period)
+            merged = achievements.merge(saved, scope, parsed)
+            if merged and not reason:
+                raise ValueError("Isi alasan perubahan sebelum menyimpan.")
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        try:
+            self.cfg.store.add_achievements(bu, period, merged, reason, self.user["username"])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        self.json(200, {"ok": True})
+        return 200
 
     def save_actions(self, form: dict) -> int:
         bu, period = form.get("bu", ""), form.get("period", "")

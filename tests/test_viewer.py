@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -50,6 +51,7 @@ class FakeStore:
         self.edits = []
         self.actions = []
         self.notes = []
+        self.achievements = []
         self.snaps = []
         self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
@@ -147,6 +149,16 @@ class FakeStore:
         if self.fail_writes:
             raise RuntimeError("write failed")
         self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_achievements(self, bu, period):
+        self._check()
+        saved = [a for a in self.achievements if (a["bu"], a["period"]) == (bu, period)]
+        return {k: saved[-1][k] for k in ("values", "reason", "saved_by", "saved_at")} if saved else None
+
+    def add_achievements(self, bu, period, values, reason, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.achievements.append({"bu": bu, "period": period, "values": values, "reason": reason, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
 
     def latest_analysis_note(self, bu, period):
         self._check()
@@ -281,6 +293,13 @@ class ViewerCase(unittest.TestCase):
 
 
 class ViewerTests(ViewerCase):
+    def setUp(self):
+        super().setUp()
+        # The target and budget month pickers are relative to today. These tests save targets for 2026-09 and 2026-10, so they run "on" a fixed day.
+        patcher = patch.object(app.Handler, "now", lambda self: datetime(2026, 10, 27, 12, 0, tzinfo=app.pages.WIB))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     # ---- login and sessions
     def test_everything_but_health_and_login_needs_a_session(self):
         for path in ("/", "/report/bu1/2026-W39", "/targets", "/api/analysis/status?bu=bu1&period=2026-W39"):

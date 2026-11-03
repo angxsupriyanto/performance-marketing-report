@@ -178,7 +178,35 @@ ANALYSIS_CSS = """
 .vw-arow-head{color:#607188}
 .vw-in{width:100%;height:44px;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif}
 .vw-linkbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}
-@media (max-width:760px){.vw-arow{grid-template-columns:1fr}.vw-arow-head{display:none}}
+.vw-trow{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.4fr) 72px;gap:8px;align-items:center;margin-bottom:8px}
+@media (max-width:760px){.vw-arow{grid-template-columns:1fr}.vw-arow-head{display:none}.vw-trow{grid-template-columns:1fr}}
+"""
+
+MANUAL_JS = """
+(function(){
+  var box=document.getElementById('vw-analysis'),meta=document.querySelector('meta[name=csrf]');if(!box||!meta)return;
+  function formOf(el){return el.closest('[data-manual-form]');}
+  document.addEventListener('click',function(ev){
+    var open=ev.target.closest('[data-manual-open]');
+    if(open){var f=document.getElementById('manual-'+open.dataset.manualOpen);f.hidden=!f.hidden;open.setAttribute('aria-expanded',String(!f.hidden));
+      if(!f.hidden){var first=f.querySelector('input');if(first)first.focus();}return;}
+    var cancel=ev.target.closest('[data-manual-cancel]');
+    if(cancel){var form=formOf(cancel);form.hidden=true;var b=document.querySelector('[data-manual-open='+form.dataset.manualForm+']');if(b){b.setAttribute('aria-expanded','false');b.focus();}return;}
+    var reset=ev.target.closest('[data-manual-reset]');
+    if(reset){var inp=reset.closest('[data-row]').querySelector('input');inp.value='';inp.focus();return;}
+    var save=ev.target.closest('[data-manual-save]');
+    if(save){
+      var form=formOf(save),err=form.querySelector('[data-role=manual-error]'),values={};
+      form.querySelectorAll('[data-row] input[data-key]').forEach(function(i){values[i.dataset.key]=i.value;});
+      save.disabled=true;err.hidden=true;
+      fetch('/api/achievements',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':meta.content},
+        body:JSON.stringify({bu:box.dataset.bu,period:box.dataset.period,scope:form.dataset.manualForm,values:JSON.stringify(values),reason:form.querySelector('[data-role=manual-reason]').value})})
+        .then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});})
+        .then(function(res){if(res.ok){location.reload();return;}save.disabled=false;err.textContent=res.body.error||'Tidak tersimpan.';err.hidden=false;})
+        .catch(function(){save.disabled=false;err.textContent='Tidak bisa menghubungi server. Coba lagi.';err.hidden=false;});
+    }
+  });
+})();
 """
 
 ANALYSIS_JS = """
@@ -326,6 +354,32 @@ def action_form(label: str, items: list[dict], campaigns: list[str], budget_note
     )
 
 
+def achievement_form(scope: str, heading: str, intro: str, unit_label: str, rows: list[dict], last: dict | None) -> str:
+    """The admin-only form for typing achievement figures by hand. rows: {key, name, system, value}; system is the figure the generator found, shown read-only.
+    last: {saved_by, saved_at, reason} of the newest save, shown so the next admin sees why a figure was changed."""
+    def row(r: dict) -> str:
+        return (f'<div class="vw-trow" data-row><span style="color:#17283e">{escape(r["name"])}</span><span>{escape(r["system"])}</span>'
+                f'<input class="vw-in" data-key="{escape(r["key"])}" type="text" inputmode="numeric" maxlength="24" aria-label="Pencapaian manual {escape(r["name"])} ({escape(unit_label)})" '
+                f'placeholder="Sama dengan sistem" value="{escape(r["value"])}" style="text-align:right">'
+                f'<button type="button" class="vw-linkbtn" data-manual-reset aria-label="Pakai angka sistem untuk {escape(r["name"])}">Reset</button></div>')
+
+    history = (f'<p style="margin:0 0 12px;color:#607188">Terakhir disimpan oleh {escape(last["saved_by"])}, {escape(last["saved_at"])}'
+               + (f'. Alasan: {escape(last["reason"])}' if last.get("reason") else "") + ".</p>") if last else ""
+    return (
+        f'<div role="group" aria-label="{escape(heading)}" style="margin-top:12px;border:1px solid #6f8199;border-radius:6px;padding:16px;background:#fff">'
+        f'<h4 style="margin:0 0 4px;font:600 16px/1.4 Inter,Arial,sans-serif;color:#17283e">{escape(heading)}</h4>'
+        f'<p style="margin:0 0 12px;color:#607188">{escape(intro)}</p>{history}'
+        f'<div class="vw-trow" style="color:#607188" aria-hidden="true"><span>Bagian</span><span>Angka sistem</span><span>Pencapaian manual ({escape(unit_label)})</span><span></span></div>'
+        + "".join(row(r) for r in rows)
+        + '<div style="margin:12px 0 0"><label style="display:block;font-weight:600;color:#17283e;margin-bottom:4px">Alasan perubahan'
+        '<input class="vw-in" data-role="manual-reason" type="text" maxlength="300" placeholder="Contoh: deal belum masuk Sheet, dikonfirmasi sales" style="margin-top:4px;font-weight:400"></label>'
+        '<div style="margin-top:4px;color:#607188">Wajib bila ada angka manual. Tersimpan di riwayat, tidak tampil di report.</div></div>'
+        '<p data-role="manual-error" role="alert" hidden class="vw-alert" style="margin:12px 0 0"></p>'
+        '<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" class="vw-btn" data-manual-save>Simpan pencapaian</button>'
+        '<button type="button" class="vw-linkbtn" data-manual-cancel>Batal</button></div></div>'
+    )
+
+
 def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0, form_html: str = "") -> str:
     bu, period = report["bu"], report["period"]
     label = f"{name} {period}"
@@ -382,6 +436,10 @@ def inject_chrome(report_html: str, chrome: str, nonce: str, csrf: str) -> str:
     script = soup.new_tag("script")
     script.string = ANALYSIS_JS
     body.append(script)
+    if soup.select_one("[data-manual-form]"):
+        manual_script = soup.new_tag("script")
+        manual_script.string = MANUAL_JS
+        body.append(manual_script)
     for tag in soup.find_all(["script", "style"]):
         tag["nonce"] = nonce
     return str(soup)

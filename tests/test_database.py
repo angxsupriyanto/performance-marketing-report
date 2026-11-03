@@ -76,6 +76,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -412,6 +414,30 @@ class DatabaseTests(unittest.TestCase):
         for bad in (("bu1", "2026-W99x", "x"), ("BU 1", "2026-W42", "x"), ("bu1", "2026-W42", "x" * 1001)):
             with self.assertRaises(pe.CheckViolation):
                 store.add_analysis_note(bad[0], bad[1], bad[2], "admin")
+
+    def test_report_achievements_are_append_only_per_report_need_a_reason_and_the_newest_set_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_achievements("bu1", "2026-W42"))
+        store.add_achievements("bu1", "2026-W42", {"hardware": {"Dashcam": 120000000}, "semester": 5000000000}, "Deal belum masuk Sheet", "admin")
+        store.add_achievements("bu1", "2026-W42", {"year": 9000000000}, "Koreksi akumulasi", "andi")
+        latest = store.latest_achievements("bu1", "2026-W42")
+        self.assertEqual((latest["values"], latest["reason"], latest["saved_by"]), ({"year": 9000000000}, "Koreksi akumulasi", "andi"))
+        store.add_achievements("bu1", "2026-W42", {}, "", "admin")  # resetting everything needs no reason
+        self.assertEqual(store.latest_achievements("bu1", "2026-W42")["values"], {})
+        self.assertIsNone(store.latest_achievements("bu1", "2026-W41"))
+        self.assertIsNone(store.latest_achievements("bu2", "2026-W42"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_achievements").fetchone()[0], 3)
+            for statement in ("UPDATE reports.report_achievements SET saved_by = 'x'", "DELETE FROM reports.report_achievements", "TRUNCATE reports.report_achievements"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.report_achievements (bu, period, values, reason, saved_by) VALUES ('bu1', '2026-W42', '{}', '', 'x')")
+        for bad in (("bu1", "2026-W99x", {}, ""), ("BU 1", "2026-W42", {}, ""), ("bu1", "2026-W42", [], ""), ("bu1", "2026-W42", {"year": 1}, "  "), ("bu1", "2026-W42", {}, "x" * 301)):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_achievements(bad[0], bad[1], bad[2], bad[3], "admin")
 
     def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
         import psycopg.errors as pe

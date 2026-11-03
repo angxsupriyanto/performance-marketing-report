@@ -146,6 +146,18 @@ class Store:
         with self._connect() as conn:
             conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
 
+    # ---- achievement figures typed by hand
+    def latest_achievements(self, bu: str, period: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT values, reason, saved_by, saved_at FROM reports.report_achievements WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_achievements(self, bu: str, period: str, values: dict, reason: str, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.report_achievements (bu, period, values, reason, saved_by) VALUES (%s, %s, %s, %s, %s)",
+                         (bu, period, psycopg.types.json.Jsonb(values), reason, saved_by))
+
     # ---- extra information typed when an analysis is requested
     def latest_analysis_note(self, bu: str, period: str) -> dict | None:
         with self._connect() as conn:

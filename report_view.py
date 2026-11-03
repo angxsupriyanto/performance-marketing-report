@@ -93,6 +93,19 @@ def e(value) -> str:
 
 
 # ---- small building blocks, copied from the mockup markup
+def manual_block(manual: dict | None, scope: str) -> str:
+    """The admin-only button and the hidden form (built by the viewer) for typing achievement figures by hand. Dropped from the PDF through data-editor."""
+    form = ((manual or {}).get("forms") or {}).get(scope)
+    if not form:
+        return ""
+    return (
+        '<div data-editor style="margin: 0 0 12px">'
+        f'<button type="button" data-manual-open="{e(scope)}" aria-expanded="false" aria-controls="manual-{e(scope)}" '
+        f'style="display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: {BLUE}; font: 600 14px Inter, Arial, sans-serif; cursor: pointer">Edit pencapaian manual</button>'
+        f'<div id="manual-{e(scope)}" hidden data-manual-form="{e(scope)}">{form}</div></div>'
+    )
+
+
 def link_target() -> str:
     return '<a href="/targets" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur target</a>'
 
@@ -277,7 +290,7 @@ def company_name(bu: str, names: dict | None) -> str:
     return f"Perusahaan {digits.group(1)}" if digits else bu
 
 
-def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> str:
+def progress_section(view: dict, tg: dict | None, names: dict | None = None, manual: dict | None = None) -> str:
     t = _tg(tg)
     p = view["progress"]
     unit = p["unit"]
@@ -297,6 +310,7 @@ def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> 
     else:
         sem = p["semester"]
         sem_title = f"{sem['label']} ({'Januari sampai Juni' if sem['key'].endswith('S1') else 'Juli sampai Desember'})"
+        parts.append(manual_block(manual, "year"))
         parts.append(
             '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px">'
             + progress_card(sem_title, sem["actual"], t["semester"], unit, "semester ini", "semester")
@@ -376,7 +390,7 @@ def won_section(view: dict) -> str:
     return f'<div style="margin-top: 24px">{head}{table}</div>'
 
 
-def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: dict | None = None) -> str:
+def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: dict | None = None, manual: dict | None = None) -> str:
     t = _tg(tg)
     hw = view["hardware"]
     month = view["month"]
@@ -397,6 +411,7 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
     elif total_target <= 0:
         panel.append(f'<p style="margin: 16px 0 0; color: {MUTED}">Target {e(month["label"])} belum diatur. Atur target di halaman Pengaturan target untuk melihat progress.</p>')
     else:
+        panel.append(manual_block(manual, "month"))
         done = percent(mtd_total, total_target)
         items = (
             (f"SQL Value {label}", idr(week_total)),
@@ -582,7 +597,8 @@ def next_action_section(analysis: dict | None) -> str:
             f'{analysis_panel("Rekomendasi dari analisis", "next_action", analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px")}</div>')
 
 
-def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None, actions: dict | None = None) -> str:
+def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None, actions: dict | None = None,
+                manual: dict | None = None) -> str:
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
@@ -617,13 +633,13 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         f'<p style="margin: 12px 0 0; color: {MUTED}">Dibandingkan dengan {e(pl)}: {legend_chip("up")} {legend_chip("down")} {legend_chip("flat")}. Selisih angka diikuti persennya. '
         'Perubahan rate dalam poin persentase (pp), yaitu selisih dua persentase.</p>',
         analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
-        progress_section(view, tg, company),
+        progress_section(view, tg, company, manual),
         sql_section(view),
     ]
     if view.get("won_list"):
         sections.append(won_section(view))
     if view.get("hardware"):
-        sections.append(hardware_section(view, tg, analysis, company))
+        sections.append(hardware_section(view, tg, analysis, company, manual))
     if actions is not None:
         sections.append(actions_section(view, actions))
     sections.append(next_action_section(analysis))
@@ -634,14 +650,14 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
 
 
 def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None,
-                    actions: dict | None = None) -> str:
+                    actions: dict | None = None, manual: dict | None = None) -> str:
     data = json.dumps(view, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     title = f"{company_name(view['bu'], names)} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
     main_style = ' style="padding-top: 24px"' if standalone else ""
     return (
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
-        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget, actions)}</main>'
+        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget, actions, manual)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
 
