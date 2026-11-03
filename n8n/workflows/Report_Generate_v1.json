@@ -63,7 +63,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Builds the BU/period pairs to generate. The period is always given explicitly, either on the\n// \"Manual Parameters\" node or in the webhook body. Nothing is guessed from the current date.\nconst BUS = ['bu1', 'bu2'];\nconst input = $input.first().json;\nconst source = Object.assign({}, input, input.body || {});\n\nconst requested = String(source.bu || 'all').toLowerCase();\nif (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\n\nconst period = String(source.period || '').trim();\nconst match = /^(\\d{4})-(?:W(\\d{2})|(\\d{2}))$/.exec(period);\nif (!match) throw new Error('period wajib diisi dengan format YYYY-Www (mingguan) atau YYYY-MM (bulanan)');\nif (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 53)) throw new Error('nomor minggu harus 01 sampai 53');\nif (match[3] !== undefined && (Number(match[3]) < 1 || Number(match[3]) > 12)) throw new Error('nomor bulan harus 01 sampai 12');\n\nconst executed = (name) => {\n  try { return $(name).isExecuted === true; } catch (e) { return false; }\n};\nconst trigger = executed('Webhook Generate') ? 'webhook' : 'manual';\nconst bus = requested === 'all' ? BUS : [requested];\nreturn [{ json: { trigger, plans: bus.map((bu) => ({ bu, period })) } }];\n"
+        "jsCode": "// Builds the BU/period pairs to generate. The period is always given explicitly, either on the\n// \"Manual Parameters\" node or in the webhook body. Nothing is guessed from the current date.\nconst BUS = ['bu1', 'bu2'];\nconst input = $input.first().json;\nconst source = Object.assign({}, input, input.body || {});\n\nconst requested = String(source.bu || 'all').toLowerCase();\nif (requested !== 'all' && !BUS.includes(requested)) throw new Error(`bu harus salah satu dari: all, ${BUS.join(', ')}`);\n\nconst period = String(source.period || '').trim();\nconst match = /^(\\d{4})-(?:W(\\d{2})|(\\d{2}))$/.exec(period);\nif (!match) throw new Error('period wajib diisi dengan format YYYY-Www (mingguan) atau YYYY-MM (bulanan)');\nif (match[2] !== undefined && (Number(match[2]) < 1 || Number(match[2]) > 53)) throw new Error('nomor minggu harus 01 sampai 53');\nif (match[3] !== undefined && (Number(match[3]) < 1 || Number(match[3]) > 12)) throw new Error('nomor bulan harus 01 sampai 12');\n\nconst executed = (name) => {\n  try { return $(name).isExecuted === true; } catch (e) { return false; }\n};\nconst trigger = executed('Webhook Generate') ? 'webhook' : 'manual';\nconst bus = requested === 'all' ? BUS : [requested];\n// Set when the viewer started the run: the results are reported against this id. Runs from n8n's editor have none.\nconst jobId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(source.job_id || '')) ? String(source.job_id).toLowerCase() : '';\nreturn [{ json: { trigger, job_id: jobId, plans: bus.map((bu) => ({ bu, period })) } }];\n"
       },
       "id": "272da89b-d151-56a6-93d8-558ea81369b2",
       "name": "Normalize Plan",
@@ -71,6 +71,21 @@
       "typeVersion": 2,
       "position": [
         260,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT coalesce(jsonb_object_agg(bu, config), '{}'::jsonb) AS validity\nFROM (\n  SELECT DISTINCT ON (bu) bu, config\n  FROM reports.lead_validity_settings\n  ORDER BY bu, saved_at DESC\n) latest\n",
+        "options": {}
+      },
+      "id": "5230a251-6d0a-55ac-95cd-9f82ad1e4f22",
+      "name": "Read Validity",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        380,
         240
       ]
     },
@@ -116,7 +131,7 @@
       "parameters": {
         "mode": "runOnceForAllItems",
         "language": "javaScript",
-        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Turns the Tracker rows into one CSV per planned report. Only the columns the generator needs are kept, so PIC\n// names, phone numbers, emails and CRM links never leave n8n. Dates arrive as Google Sheets serial numbers and are\n// written as ISO dates, which removes any M/D versus D/M ambiguity.\nconst COLUMNS = [\"Company\", \"Channel\", \"Source\", \"Campaign\", \"Campaign Hardware\", \"Industry\", \"Remark\", \"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"ARR + OTF (Tanpa PPN)\", \"Deal Won Date\", \"Total Contract Deal Won\", \"BU\", \"Record Key\", \"SQL Date\", \"Total Contract SQL\"];\n// Filter columns for the Performa page (Medium, Category Campaign). Copied when the sheet has them; a sheet without them still works.\nconst OPTIONAL_COLUMNS = [\"Medium\", \"Category Campaign\"];\nconst DATE_COLUMNS = new Set([\"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"Deal Won Date\", \"SQL Date\"]);\nconst MONEY_COLUMNS = new Set([\"ARR + OTF (Tanpa PPN)\", \"Total Contract Deal Won\", \"Total Contract SQL\"]);\nconst SERIAL_EPOCH = Date.UTC(1899, 11, 30);\nconst normalize = (name) => String(name).replace(/\\s+/g, ' ').trim();\n\nfunction cell(column, value) {\n  if (value === null || value === undefined) return '';\n  if (typeof value === 'number') {\n    if (DATE_COLUMNS.has(column)) {\n      // Serial 30000 is 1982 and 80000 is 2118. Anything else (for example 20260119 typed as a number) is left as\n      // text so the generator reports it instead of turning it into a nonsense date.\n      if (value < 30000 || value > 80000) return String(value);\n      return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);\n    }\n    if (MONEY_COLUMNS.has(column)) return String(Math.round(value * 100) / 100);\n    return String(value);\n  }\n  return String(value).trim();\n}\n\nconst quote = (text) => (/[\",\\r\\n]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text);\n\n// The Sheets API leaves out empty cells, so a column is judged missing only when NO row has it.\nconst squash = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '');\nconst seen = new Set();\nconst rows = [];\nconst items = $input.all();\nfor (const item of items) {  // first pass: which columns exist in at least one row\n  for (const key of Object.keys(item.json)) seen.add(normalize(key));\n}\nconst ALL = COLUMNS.concat(OPTIONAL_COLUMNS.filter((column) => seen.has(column)));\nfor (const item of items) {\n  const byName = {};\n  for (const [key, value] of Object.entries(item.json)) {\n    const name = normalize(key);\n    byName[name] = value;\n    seen.add(name);\n  }\n  const values = ALL.map((column) => cell(column, byName[column]));\n  if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));\n}\nif (items.length && items[0].json && items[0].json.plans !== undefined) {\n  throw new Error('Build CSV menerima keluaran node Normalize Plan, bukan baris sheet. Node Read Tracker sedang dinonaktifkan (disabled, tampil abu-abu atau dicoret) atau sambungannya terputus. Aktifkan node itu dan pastikan urutannya Normalize Plan, Read Tracker, Build CSV.');\n}\nif (!items.length) throw new Error('Node Read Tracker tidak mengembalikan satu baris pun. Periksa ID spreadsheet, nama tab (NEW Customers List), rentang A:DR, dan credential Google Sheets pada node itu.');\nif (!rows.length) {\n  const sample = [...seen].slice(0, 12).join(', ') || '(tidak ada)';\n  throw new Error(`Node Read Tracker mengembalikan ${items.length} baris, tetapi tidak ada baris yang berisi kolom wajib. Header yang terbaca (maks. 12): ${sample}. Biasanya nama tab atau rentang salah, atau baris judul tidak ada di baris pertama rentang.`);\n}\n\nconst missing = COLUMNS.filter((column) => !seen.has(column));\nif (missing.length) {\n  const hints = missing.map((column) => {\n    const close = [...seen].filter((name) => squash(name) === squash(column));\n    return close.length ? `${column} (header mirip: \"${close[0]}\")` : column;\n  });\n  throw new Error(`Kolom tidak ditemukan di satu baris pun (tidak ada di sheet atau kosong seluruhnya): ${hints.join('; ')}. Baris dibaca: ${rows.length}, header unik: ${seen.size}`);\n}\n\nconst csv = [ALL.map(quote).join(','), ...rows].join('\\n') + '\\n';\nconst plans = ref('Normalize Plan').first().json.plans;\nreturn plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));\n"
+        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Turns the Tracker rows into one CSV per planned report. Only the columns the generator needs are kept, so PIC\n// names, phone numbers, emails and CRM links never leave n8n. Dates arrive as Google Sheets serial numbers and are\n// written as ISO dates, which removes any M/D versus D/M ambiguity.\nconst COLUMNS = [\"Company\", \"Channel\", \"Source\", \"Campaign\", \"Campaign Hardware\", \"Industry\", \"Remark\", \"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"ARR + OTF (Tanpa PPN)\", \"Deal Won Date\", \"Total Contract Deal Won\", \"BU\", \"Record Key\", \"SQL Date\", \"Total Contract SQL\"];\n// Filter columns for the Performa page (Medium, Category Campaign). Copied when the sheet has them; a sheet without them still works.\nconst OPTIONAL_COLUMNS = [\"Medium\", \"Category Campaign\"];\nconst DATE_COLUMNS = new Set([\"Inbound Date\", \"MQL Date\", \"Proposal Price Quote Date\", \"Deal Won Date\", \"SQL Date\"]);\nconst MONEY_COLUMNS = new Set([\"ARR + OTF (Tanpa PPN)\", \"Total Contract Deal Won\", \"Total Contract SQL\"]);\nconst SERIAL_EPOCH = Date.UTC(1899, 11, 30);\nconst normalize = (name) => String(name).replace(/\\s+/g, ' ').trim();\n\nfunction cell(column, value) {\n  if (value === null || value === undefined) return '';\n  if (typeof value === 'number') {\n    if (DATE_COLUMNS.has(column)) {\n      // Serial 30000 is 1982 and 80000 is 2118. Anything else (for example 20260119 typed as a number) is left as\n      // text so the generator reports it instead of turning it into a nonsense date.\n      if (value < 30000 || value > 80000) return String(value);\n      return new Date(SERIAL_EPOCH + Math.floor(value) * 86400000).toISOString().slice(0, 10);\n    }\n    if (MONEY_COLUMNS.has(column)) return String(Math.round(value * 100) / 100);\n    return String(value);\n  }\n  return String(value).trim();\n}\n\nconst quote = (text) => (/[\",\\r\\n]/.test(text) ? `\"${text.replace(/\"/g, '\"\"')}\"` : text);\n\n// The Sheets API leaves out empty cells, so a column is judged missing only when NO row has it.\nconst squash = (name) => name.toLowerCase().replace(/[^a-z0-9]/g, '');\nconst seen = new Set();\nconst rows = [];\nconst items = $input.all();\nfor (const item of items) {  // first pass: which columns exist in at least one row\n  for (const key of Object.keys(item.json)) seen.add(normalize(key));\n}\nconst ALL = COLUMNS.concat(OPTIONAL_COLUMNS.filter((column) => seen.has(column)));\nfor (const item of items) {\n  const byName = {};\n  for (const [key, value] of Object.entries(item.json)) {\n    const name = normalize(key);\n    byName[name] = value;\n    seen.add(name);\n  }\n  const values = ALL.map((column) => cell(column, byName[column]));\n  if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));\n}\nif (items.length && items[0].json && (items[0].json.plans !== undefined || items[0].json.validity !== undefined)) {\n  throw new Error('Build CSV menerima keluaran node Normalize Plan atau Read Validity, bukan baris sheet. Node Read Tracker sedang dinonaktifkan (disabled, tampil abu-abu atau dicoret) atau sambungannya terputus. Aktifkan node itu dan pastikan urutannya Normalize Plan, Read Validity, Read Tracker, Build CSV.');\n}\nif (!items.length) throw new Error('Node Read Tracker tidak mengembalikan satu baris pun. Periksa ID spreadsheet, nama tab (NEW Customers List), rentang A:DR, dan credential Google Sheets pada node itu.');\nif (!rows.length) {\n  const sample = [...seen].slice(0, 12).join(', ') || '(tidak ada)';\n  throw new Error(`Node Read Tracker mengembalikan ${items.length} baris, tetapi tidak ada baris yang berisi kolom wajib. Header yang terbaca (maks. 12): ${sample}. Biasanya nama tab atau rentang salah, atau baris judul tidak ada di baris pertama rentang.`);\n}\n\nconst missing = COLUMNS.filter((column) => !seen.has(column));\nif (missing.length) {\n  const hints = missing.map((column) => {\n    const close = [...seen].filter((name) => squash(name) === squash(column));\n    return close.length ? `${column} (header mirip: \"${close[0]}\")` : column;\n  });\n  throw new Error(`Kolom tidak ditemukan di satu baris pun (tidak ada di sheet atau kosong seluruhnya): ${hints.join('; ')}. Baris dibaca: ${rows.length}, header unik: ${seen.size}`);\n}\n\nconst csv = [ALL.map(quote).join(','), ...rows].join('\\n') + '\\n';\nconst plans = ref('Normalize Plan').first().json.plans;\n// The lead-validity settings saved in the viewer, one object per company ({bu1: {...}}). A company without a saved setting gets '' and the generator uses the limits in its profile.\nconst validity = ref('Read Validity').first().json.validity || {};\nreturn plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length, validity: validity[plan.bu] ? JSON.stringify(validity[plan.bu]) : '' } }));\n"
       },
       "id": "9b8b19fe-3a45-5d11-86ed-1e792918f7f1",
       "name": "Build CSV",
@@ -143,6 +158,10 @@
             {
               "name": "period",
               "value": "={{ $json.period }}"
+            },
+            {
+              "name": "validity",
+              "value": "={{ $json.validity }}"
             }
           ]
         },
@@ -249,7 +268,7 @@
       "parameters": {
         "mode": "runOnceForEachItem",
         "language": "javaScript",
-        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Runs once per failed item (n8n requires a single { json } object in this mode, not an array).\n// Builds a short, aggregate-only message. It reads only named fields of the error and caps the length, so no\n// request body (the CSV) can leak into it. The service's own error text is a validation message and never a row.\nlet plan;\ntry { plan = ref('Build CSV').item.json; } catch (e) { plan = ref('Build CSV').first().json; }\n\nconst err = $json.error !== undefined ? $json.error : $json;\nconst parts = [];\nconst add = (value) => {\n  if (value === undefined || value === null || value === '') return;\n  const text = typeof value === 'string' ? value : JSON.stringify(value);\n  if (!parts.includes(text)) parts.push(text);\n};\nif (typeof err === 'string') {\n  add(err);\n} else {\n  add(err.httpCode);\n  add(err.message);\n  add(err.description);\n  add(err.cause && err.cause.message);\n  add(err.context && err.context.data);\n}\nconst detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\\s+/g, ' ').slice(0, 1200);\nreturn { json: { text: `Laporan ${String(plan.bu).toUpperCase()} ${plan.period} GAGAL dibuat: ${detail}` } };\n"
+        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Runs once per failed item (n8n requires a single { json } object in this mode, not an array).\n// Builds a short, aggregate-only message. It reads only named fields of the error and caps the length, so no\n// request body (the CSV) can leak into it. The service's own error text is a validation message and never a row.\nlet plan;\ntry { plan = ref('Build CSV').item.json; } catch (e) { plan = ref('Build CSV').first().json; }\n\nconst err = $json.error !== undefined ? $json.error : $json;\nconst parts = [];\nconst add = (value) => {\n  if (value === undefined || value === null || value === '') return;\n  const text = typeof value === 'string' ? value : JSON.stringify(value);\n  if (!parts.includes(text)) parts.push(text);\n};\nif (typeof err === 'string') {\n  add(err);\n} else {\n  add(err.httpCode);\n  add(err.message);\n  add(err.description);\n  add(err.cause && err.cause.message);\n  add(err.context && err.context.data);\n}\nconst detail = (parts.join(' | ') || 'penyebab tidak diketahui').replace(/\\s+/g, ' ').slice(0, 1200);\nreturn { json: { text: `Laporan ${String(plan.bu).toUpperCase()} ${plan.period} GAGAL dibuat: ${detail}`, bu: plan.bu, period: plan.period, detail } };\n"
       },
       "id": "90a9ae88-d225-548a-864a-6504355f3a8e",
       "name": "Format Generate Error",
@@ -278,9 +297,110 @@
         1460,
         400
       ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "language": "javaScript",
+        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Tells the viewer that a company's run ended well, so its \"Perbarui data\" page can unlock. One result per saved item.\n// Runs started from n8n's editor carry no job id and report nothing. The text is short and holds no data rows.\nconst jobId = ref('Normalize Plan').first().json.job_id || '';\nif (!jobId) return [];\nconst prepared = ref('Prepare Insert').all();\nconst label = (p) => `Report ${p.period}`;\nreturn $input.all().map((item, i) => {\n  const p = prepared[i].json;\n  const text = item.json.inserted === false ? `${label(p)} sudah ada dengan isi yang sama; tidak ada yang berubah` : `${label(p)} selesai`;\n  return { json: { params: [jobId, p.bu, true, text] } };\n});\n"
+      },
+      "id": "034ee48d-abcf-5bd8-b46b-83307beeb0d8",
+      "name": "Prepare Job Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "language": "javaScript",
+        "jsCode": "// Reads another node of this workflow. When that node is missing or was renamed, say which name the code is looking for: n8n's own\n// message (\"Referenced node doesn't exist\") does not name it. Importing a workflow into one that already has nodes of the same name\n// makes n8n add a number to the new names (for example \"Build CSV1\"); rename them back.\nconst ref = (name) => {\n  const guard = (action) => {\n    try {\n      return action($(name));\n    } catch (e) {\n      throw new Error(`Node \"${name}\" tidak ditemukan atau belum dijalankan di workflow ini (${e.message}). Nama node harus persis \"${name}\". Bila workflow ini diimpor ke workflow yang sudah punya node bernama sama, n8n menambah angka di belakang nama (mis. \"${name}1\"): ganti kembali nama node itu.`);\n    }\n  };\n  return {\n    all: () => guard((n) => n.all()),\n    first: () => guard((n) => n.first()),\n    last: () => guard((n) => n.last()),\n    get item() { return guard((n) => n.item); },\n  };\n};\n\n// Tells the viewer that a company's run failed. Runs once per failed item; `detail` is the capped, data-free reason built by the error formatter.\n// Runs started from n8n's editor carry no job id: the insert then matches no request and stores nothing.\nconst jobId = ref('Normalize Plan').first().json.job_id || '';\nreturn { json: { params: [jobId, $json.bu, false, String($json.detail || 'penyebab tidak diketahui').slice(0, 500)] } };\n"
+      },
+      "id": "d15433c6-76f6-5949-a79c-9bdeec44d9ec",
+      "name": "Prepare Job Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1700,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO reports.process_results (job_id, bu, ok, message)\nSELECT j.job_id, $2, $3::boolean, left($4, 500)\nFROM reports.process_requests j\nWHERE j.job_id = nullif($1, '')::uuid\nON CONFLICT (job_id, bu) DO NOTHING\nRETURNING job_id\n",
+        "options": {
+          "queryReplacement": "={{ $json.params }}"
+        }
+      },
+      "id": "ed630777-15ac-5408-b72e-d73d626a0cf5",
+      "name": "Report Job Result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.5,
+      "position": [
+        1940,
+        480
+      ]
     }
   ],
   "connections": {
+    "Save Run": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Result",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Compose Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Generate Error": {
+      "main": [
+        [
+          {
+            "node": "Prepare Job Failure",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notify Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Result": {
+      "main": [
+        [
+          {
+            "node": "Report Job Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Job Failure": {
+      "main": [
+        [
+          {
+            "node": "Report Job Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Manual Parameters": {
       "main": [
         [
@@ -315,6 +435,17 @@
       ]
     },
     "Normalize Plan": {
+      "main": [
+        [
+          {
+            "node": "Read Validity",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Validity": {
       "main": [
         [
           {
@@ -358,17 +489,6 @@
         ]
       ]
     },
-    "Save Run": {
-      "main": [
-        [
-          {
-            "node": "Compose Message",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Compose Message": {
       "main": [
         [
@@ -385,17 +505,6 @@
         [
           {
             "node": "Result",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Format Generate Error": {
-      "main": [
-        [
-          {
-            "node": "Notify Error",
             "type": "main",
             "index": 0
           }

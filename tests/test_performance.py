@@ -212,7 +212,7 @@ class SeriesAndMatrixTests(unittest.TestCase):
         self.assertIsNone(performance.matrix(self.data.leads, params(per="hari", **{"from": "2026-10-01", "to": "2026-10-10"})))
 
     def test_columns_beyond_the_tenth_fold_into_older_and_the_total_counts_everything(self):
-        data = load(leads=[with_dims(lead("1", "BU1", "GPS", "1/5/2026", mql="1/6/2026", sql_date="10/13/2026", ppq="10/13/2026", arr="Rp 1.000.000"), "Paid", "G", "cpc", "C", "B", "GPS")], headers=DIM_HEADERS)
+        data = load(leads=[with_dims(lead("1", "BU1", "GPS", "6/1/2026", mql="6/2/2026", sql_date="10/13/2026", ppq="10/13/2026", arr="Rp 1.000.000"), "Paid", "G", "cpc", "C", "B", "GPS")], headers=DIM_HEADERS)
         row = performance.matrix(data.leads, params(**{"from": "2026-10-12", "to": "2026-10-18"}))["rows"][0]
         self.assertEqual((row["older"], row["total"], sum(c["n"] for c in row["cells"])), (1, 1, 0))
 
@@ -282,6 +282,47 @@ class PageTests(ViewerCase):
         self.assertIsNone(side.select_one("a[href*='/performa?']"))  # nothing to clear yet
         self.assertIn(".pf-side{position:sticky;top:16px", " ".join(st.get_text() for st in soup.select("style")))
         self.assertEqual(soup.select_one("main")["style"], "max-width:1320px")
+
+    def test_only_the_campaign_filter_has_a_search_box_and_chosen_campaigns_are_grouped_on_top(self):
+        soup = self.soup("?bu=bu1&" + self.RANGE)
+        boxes = soup.select("details [data-find]")
+        self.assertEqual(len(boxes), 1)
+        self.assertEqual(boxes[0].find_parent("details").select_one(".fl").get_text(), "Campaign")
+        search = boxes[0].select_one("input[type=search]")
+        self.assertIsNone(search.get("name"))  # the search text is never sent as a filter
+        self.assertEqual(boxes[0].select_one(".pf-note").get_text(), "3 campaign")  # Camp A, Camp B and the (kosong) value
+        self.assertEqual(len(boxes[0].select(".pf-grp")), 0)  # no group headings while nothing is chosen
+        chosen = self.soup(raw="?bu=bu1&" + self.RANGE + "&campaign=Camp+B").select_one("details [data-find]")
+        self.assertEqual([g.get_text() for g in chosen.select(".pf-grp")], ["Dipilih", "Lainnya"])
+        self.assertEqual([o.select_one(".t").get_text() for o in chosen.select(".pf-opt")], ["Camp B", "Camp A", performance.EMPTY_LABEL])
+        self.assertTrue(chosen.select_one(".pf-opt input").has_attr("checked"))
+        self.assertEqual(len(self.soup("?bu=bu1&" + self.RANGE).select("input[type=search]")), 1)
+
+    def test_relations_list_which_channel_source_medium_and_campaign_values_occur_together(self):
+        data = performance.load(snapshot("bu1"))
+        rel = performance.relations(data)
+        self.assertEqual(set(rel["labels"]), {"channel", "source", "medium", "campaign"})
+        names = lambda combo: tuple(rel["labels"][k][i] for k, i in zip(("channel", "source", "medium", "campaign"), combo))
+        seen = {names(c) for c in rel["combos"]}
+        self.assertEqual(len(seen), len(rel["combos"]))  # each combination once
+        self.assertTrue(all(len(c) == 4 for c in rel["combos"]))
+        for lead in data.leads:
+            self.assertIn(names([lead.d[0], lead.d[1], lead.d[2], lead.d[3]]), seen)
+        empty = performance.relations(performance.Data(AS_OF, {k: [] for k, _ in performance.DIMENSIONS}, []))
+        self.assertEqual(empty["combos"], [])
+
+    def test_the_page_carries_the_relations_for_the_cascading_filters_and_hints_for_the_children(self):
+        soup = self.soup("?bu=bu1&" + self.RANGE)
+        block = soup.select_one("script#pf-rel")
+        self.assertEqual(block["type"], "application/json")
+        data = json.loads(block.get_text())
+        self.assertEqual(data["labels"]["channel"], ["Organic", "Paid"])
+        self.assertTrue(data["combos"])
+        self.assertEqual([h["data-hint"] for h in soup.select("[data-hint]")], ["source", "medium", "campaign"])
+        keys = {o["data-key"] for o in soup.select("[data-opt]")}
+        self.assertTrue({"channel", "source", "medium", "campaign"} <= keys)
+        self.assertIsNotNone(soup.select_one("#pf-drop"))
+        self.assertNotIn("</script><", block.decode_contents())
 
     def test_chosen_filters_change_the_numbers_show_as_chips_and_can_be_removed_one_by_one(self):
         soup = self.soup(raw="?bu=bu1&" + self.RANGE + "&channel=Paid&source=Meta+Ads&source=Google+Ads")
@@ -405,7 +446,7 @@ class PageTests(ViewerCase):
         self.assertEqual(user.select_one("input[type=hidden][name=bu]")["value"], "bu1")
         self.assertEqual(self.call("GET", "/performa?bu=bu2")[0].status, 403)
         self.assertEqual(self.call("GET", "/performa?bu=bu9")[0].status, 404)
-        self.assertEqual([a["href"] for a in user.select(".vw-menu a")], ["/performa"])
+        self.assertEqual([a["href"] for a in user.select(".vw-menu a")], ["/", "/performa"])
 
     def test_needs_a_session_and_never_shows_lead_names(self):
         self.cookie = ""

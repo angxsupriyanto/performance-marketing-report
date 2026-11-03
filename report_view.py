@@ -14,6 +14,8 @@ import re
 from decimal import ROUND_HALF_UP, Decimal
 from html import escape
 
+from bs4 import BeautifulSoup
+
 VIEW_ID = "report-view"
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 NUMBER_WORDS = {1: "Satu", 2: "Dua", 3: "Tiga", 4: "Empat", 5: "Lima", 6: "Enam", 7: "Tujuh"}
@@ -91,16 +93,68 @@ def e(value) -> str:
 
 
 # ---- small building blocks, copied from the mockup markup
+def manual_block(manual: dict | None, scope: str) -> str:
+    """The admin-only button and the hidden form (built by the viewer) for typing achievement figures by hand. Dropped from the PDF through data-editor."""
+    form = ((manual or {}).get("forms") or {}).get(scope)
+    if not form:
+        return ""
+    return (
+        '<div data-editor style="margin: 0 0 12px">'
+        f'<button type="button" data-manual-open="{e(scope)}" aria-expanded="false" aria-controls="manual-{e(scope)}" '
+        f'style="display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: {BLUE}; font: 600 14px Inter, Arial, sans-serif; cursor: pointer">Edit pencapaian manual</button>'
+        f'<div id="manual-{e(scope)}" hidden data-manual-form="{e(scope)}">{form}</div></div>'
+    )
+
+
 def link_target() -> str:
     return '<a href="/targets" style="display: inline-flex; align-items: center; min-height: 44px; font-weight: 600">Atur target</a>'
 
 
-def card(label: str, value: str, compare: str, share: str | None = None) -> str:
-    extra = f'<div style="color: {TEXT}">{e(share)}</div>' if share else ""
+GOOD, BAD, NEUTRAL = ("#e6f5ed", "#087450"), ("#fcecec", "#ac3d3d"), ("#eef2f7", TEXT)  # chip background and text; all pass contrast on their own background
+ARROWS = {"up": ("\u25b2", "naik", GOOD), "down": ("\u25bc", "turun", BAD), "flat": ("\u2192", "tetap", NEUTRAL)}
+HIDDEN = "position: absolute; left: -9999px"  # read by screen readers only, so the colour is never the only signal
+
+
+def delta_chip(now, before, prev_label: str, kind: str = "count") -> str:
+    """A small pill showing how a figure moved against the previous period: arrow, the difference, and the percent (kind "count" or "money").
+    Kind "pp" is for rates, which are already percentages: the difference is in percentage points and there is no percent of it.
+    Up is green, down red, unchanged grey; the arrow and a hidden word carry the same meaning for people who do not see the colour."""
+    if now is None or before is None:
+        return ""
+    diff = Decimal(str(now)) - Decimal(str(before))
+    direction = "up" if diff > 0 else "down" if diff < 0 else "flat"
+    arrow, word, (back, ink) = ARROWS[direction]
+    size = abs(diff)
+    if kind == "pp":
+        text = f"{pct_text(float(size)).rstrip('%')} pp"
+    else:
+        text = idr(size) if kind == "money" else dotted(size)
+        if before != 0:
+            text += f" ({pct_text(float(size * 100 / abs(Decimal(str(before)))))})"
+    return (f'<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: {back}; color: {ink}; font-size: 13px; font-weight: 600; white-space: nowrap">'
+            f'<span aria-hidden="true">{arrow}</span> {e(text)}<span style="{HIDDEN}"> {word} dibanding {e(prev_label)}</span></span>')
+
+
+def card(label: str, value: str, compare: str, share: str | None = None, chip: str = "", share_chip: str = "") -> str:
+    if share:
+        extra = (f'<div style="color: {TEXT}; display: flex; align-items: center; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap"><span>{e(share)}</span>{share_chip}</div>'
+                 if share_chip else f'<div style="color: {TEXT}">{e(share)}</div>')
+    else:
+        extra = ""
     return (
         f'<div style="border: 1px solid {LINE}; border-radius: 6px; padding: 16px"><div style="color: {MUTED}">{e(label)}</div>'
-        f'<div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div><div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
+        f'<div style="display: flex; align-items: baseline; justify-content: space-between; gap: 4px 8px; flex-wrap: wrap"><div style="font: 600 22px/1.3 Inter, Arial, sans-serif; color: {INK}">{e(value)}</div>{chip}</div>'
+        f'<div style="color: {MUTED}">{e(compare)}</div>{extra}</div>'
     )
+
+
+def legend_chip(direction: str) -> str:
+    arrow, word, (back, ink) = ARROWS[direction]
+    return (f'<span style="display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 12px; background: {back}; color: {ink}; font-size: 13px; font-weight: 600">'
+            f'<span aria-hidden="true">{arrow}</span> {word}</span>')
+
+
+RATES = {"MQL": "Submission", "SQL": "MQL", "Deal Won": "SQL"}  # card -> the stage its rate divides by, see METRIC_RULES.md
 
 
 def h3(text: str) -> str:
@@ -236,7 +290,7 @@ def company_name(bu: str, names: dict | None) -> str:
     return f"Perusahaan {digits.group(1)}" if digits else bu
 
 
-def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> str:
+def progress_section(view: dict, tg: dict | None, names: dict | None = None, manual: dict | None = None) -> str:
     t = _tg(tg)
     p = view["progress"]
     unit = p["unit"]
@@ -256,6 +310,7 @@ def progress_section(view: dict, tg: dict | None, names: dict | None = None) -> 
     else:
         sem = p["semester"]
         sem_title = f"{sem['label']} ({'Januari sampai Juni' if sem['key'].endswith('S1') else 'Juli sampai Desember'})"
+        parts.append(manual_block(manual, "year"))
         parts.append(
             '<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 16px">'
             + progress_card(sem_title, sem["actual"], t["semester"], unit, "semester ini", "semester")
@@ -279,8 +334,7 @@ def cohort_toggle(label: str, what: str, own: str) -> str:
     """The switch above a list: off shows everything in the period, on only leads whose Inbound Date is also in the period."""
     return (
         '<div style="margin: 0 0 12px"><label style="display: inline-flex; align-items: center; gap: 10px; min-height: 44px; color: #17283e; font-weight: 500; cursor: pointer">'
-        f'<input type="checkbox" role="switch" data-cohort-toggle style="width: 20px; height: 20px; margin: 0">Hanya yang submission-nya di {e(label)}</label>'
-        f'<div style="color: {MUTED}">Mati: semua {e(what)} pada {e(label)}. Menyala: hanya {e(own)} yang Inbound Date-nya juga di {e(label)}. Untuk report bulanan memakai bulan yang sama.</div></div>'
+        f'<input type="checkbox" role="switch" data-cohort-toggle style="width: 20px; height: 20px; margin: 0">Hanya yang submission-nya di {e(label)}</label></div>'
     )
 
 
@@ -336,7 +390,7 @@ def won_section(view: dict) -> str:
     return f'<div style="margin-top: 24px">{head}{table}</div>'
 
 
-def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: dict | None = None) -> str:
+def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: dict | None = None, manual: dict | None = None) -> str:
     t = _tg(tg)
     hw = view["hardware"]
     month = view["month"]
@@ -357,6 +411,7 @@ def hardware_section(view: dict, tg: dict | None, analysis: dict | None, names: 
     elif total_target <= 0:
         panel.append(f'<p style="margin: 16px 0 0; color: {MUTED}">Target {e(month["label"])} belum diatur. Atur target di halaman Pengaturan target untuk melihat progress.</p>')
     else:
+        panel.append(manual_block(manual, "month"))
         done = percent(mtd_total, total_target)
         items = (
             (f"SQL Value {label}", idr(week_total)),
@@ -514,11 +569,51 @@ def budget_section(b: dict, label: str) -> str:
             f'<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 16px">{"".join(cards)}</div>{bar}{table}</section>')
 
 
-def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None) -> str:
+def actions_section(view: dict, actions: dict) -> str:
+    """What the team did in this period, shown under the report. `actions` comes from the viewer: {items, saved_by, saved_at, can_edit};
+    admins get a link that opens the form in the analysis box (the viewer's script handles the click)."""
+    label = view["label"]
+    items = actions.get("items") or []
+    if items:
+        rows = "".join(
+            f'<tr><td data-label="Action">{e(i["action"])}</td><td data-label="Campaign">{e(i.get("campaign") or "-")}</td><td data-label="Catatan">{e(i.get("note") or "-")}</td></tr>' for i in items
+        )
+        body = (f'<div class="tablebox"><table class="list"><caption class="sr">Action yang dilakukan {e(label)}</caption><thead><tr><th scope="col">Action</th><th scope="col">Campaign</th><th scope="col">Catatan</th></tr></thead>'
+                f'<tbody>{rows}</tbody></table></div>')
+        if actions.get("saved_by"):
+            body += f'<div style="margin-top: 8px; color: {MUTED}; font-size: 12.5px">Diubah oleh {e(actions["saved_by"])} · {e(actions.get("saved_at") or "")}</div>'
+    else:
+        body = f'<div style="color: {MUTED}">Belum ada action tercatat untuk {e(label)}.</div>'
+    edit = ""
+    if actions.get("can_edit"):
+        edit = (f'<button type="button" data-act="actions-open" style="display: inline-flex; align-items: center; min-height: 44px; padding: 0; border: 0; background: none; color: {BLUE}; '
+                f'font: 600 14px Inter, Arial, sans-serif; cursor: pointer">{"Ubah action" if items else "Tambah action"}</button>')
+    return (f'<div data-role="actions" style="margin-top: 32px">{h3("Action " + label)}<p style="margin: 0 0 12px; color: {MUTED}">Action yang dilakukan pada periode ini. Ikut menjadi pertimbangan analisis.</p>'
+            f'{body}{edit}</div>')
+
+
+def next_action_section(analysis: dict | None) -> str:
+    return (f'<div data-role="next-action" style="margin-top: 32px">{h3("Next Action")}<p style="margin: 0 0 12px; color: {MUTED}">Rekomendasi tindak lanjut untuk periode berikutnya, dari analisis dan bisa diedit admin.</p>'
+            f'{analysis_panel("Rekomendasi dari analisis", "next_action", analysis, f"border: 1px solid {LINE}; border-radius: 6px; padding: 16px")}</div>')
+
+
+def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None, company: dict | None = None, budget: dict | None = None, actions: dict | None = None,
+                manual: dict | None = None) -> str:
     m, prev = view["metrics"], view["metrics_prev"]
     pl, same_word = view["prev_label"], view["same_word"]
     names = ("Submission", "MQL", "SQL", "SQL Value", "Deal Won", "Deal Won Value")
-    cards = "".join(card(n, idr(m[n]) if "Value" in n else dotted(m[n]), f"{pl}: " + (idr(prev[n]) if "Value" in n else dotted(prev[n]))) for n in names)
+    def rate_card(n: str) -> str:
+        value, compare = idr(m[n]) if "Value" in n else dotted(m[n]), f"{pl}: " + (idr(prev[n]) if "Value" in n else dotted(prev[n]))
+        kind = "money" if "Value" in n else "count"
+        chip = delta_chip(m[n], prev[n], pl, kind)
+        base = RATES.get(n)
+        if base is None:
+            return card(n, value, compare, chip=chip)
+        now_rate, prev_rate = percent(m[n], m[base]), percent(prev[n], prev[base])
+        rate_chip = delta_chip(now_rate, prev_rate, pl, "pp")
+        return card(n, value, compare, f"{n} Rate {pct_text(now_rate)} · {pl}: {pct_text(prev_rate)}", chip=chip, share_chip=rate_chip)
+
+    cards = "".join(rate_card(n) for n in names)
     same, same_prev = view["same"], view["same_prev"]
     totals = {"MQL": (m["MQL"], f"MQL {view['label']}"), "SQL": (m["SQL"], f"SQL {view['label']}"), "SQL Value": (m["SQL Value"], f"SQL Value {view['label']}")}
     same_cards = ""
@@ -527,37 +622,83 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         total, tail = totals[name]
         share = percent(same[name], total)
         same_cards += card(f"{same_word} {name}", idr(same[name]) if money else dotted(same[name]), f"{pl}: " + (idr(same_prev[name]) if money else dotted(same_prev[name])),
-                           f"{pct_text(share) if share is not None else 'N/A'} dari total {idr(total) if money else dotted(total)} {tail}")
+                           f"{pct_text(share) if share is not None else 'N/A'} dari total {idr(total) if money else dotted(total)} {tail}",
+                           chip=delta_chip(same[name], same_prev[name], pl, "money" if money else "count"))
     sections = [
         f'<div style="margin-bottom: 20px"><div style="font: 600 18px/1.3 Inter, Arial, sans-serif; color: {INK}">Performance Marketing Report</div>'
         f'<div style="color: {MUTED}">{e(view["label"])} ({e(view["range"])}) vs {e(pl)} ({e(view["prev_range"])})</div></div>',
         *([budget_section(budget, view["label"])] if budget is not None else []),
         f'<div class="cards">{cards}</div>',
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
+        f'<p style="margin: 12px 0 0; color: {MUTED}">Dibandingkan dengan {e(pl)}: {legend_chip("up")} {legend_chip("down")} {legend_chip("flat")}. Selisih angka diikuti persennya. '
+        'Perubahan rate dalam poin persentase (pp), yaitu selisih dua persentase.</p>',
+        *([f'<p style="margin: 8px 0 0; color: {MUTED}">{e(view["validity_note"])}</p>'] if view.get("validity_note") else []),
         analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
-        progress_section(view, tg, company),
+        progress_section(view, tg, company, manual),
         sql_section(view),
     ]
     if view.get("won_list"):
         sections.append(won_section(view))
     if view.get("hardware"):
-        sections.append(hardware_section(view, tg, analysis, company))
+        sections.append(hardware_section(view, tg, analysis, company, manual))
+    if actions is not None:
+        sections.append(actions_section(view, actions))
+    sections.append(next_action_section(analysis))
     return (
         f'<section aria-label="Report"><h2 style="margin: 0 0 16px; font: 600 16px/1.4 Inter, Arial, sans-serif; color: {INK}">Report</h2>'
         f'<div style="background: #ffffff; border: 1px solid {LINE}; border-radius: 6px; padding: 24px">{"".join(sections)}</div></section>'
     )
 
 
-def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None) -> str:
+def render_document(view: dict, tg: dict | None = None, analysis: dict | None = None, standalone: bool = True, names: dict | None = None, budget: dict | None = None,
+                    actions: dict | None = None, manual: dict | None = None) -> str:
     data = json.dumps(view, ensure_ascii=False, separators=(",", ":")).replace("</", "<\\/")
     title = f"{company_name(view['bu'], names)} Performance Marketing Report — {view['label']} vs {view['prev_label']}"
     main_style = ' style="padding-top: 24px"' if standalone else ""
     return (
         '<!doctype html><html lang="id"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
         f"<title>{e(title)}</title><style>{CSS}</style></head><body>"
-        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget)}</main>'
+        f'<main class="rp-main"{main_style}>{render_body(view, tg, analysis, names, budget, actions, manual)}</main>'
         f'<script type="application/json" id="{VIEW_ID}">{data}</script><script>{COHORT_JS}</script></body></html>'
     )
+
+
+PRINT_CSS = """
+@page { size: A4; margin: 12mm }
+body { background: #ffffff; -webkit-print-color-adjust: exact; print-color-adjust: exact }
+.rp-main { max-width: none; padding: 0 }
+.rp-main { font-size: 12px }
+section[aria-label=Report] > h2 { display: none }
+section[aria-label=Report] > div { border: 0 !important; padding: 0 !important; background: transparent !important }
+.list th, .list td { padding: 8px 8px }
+.list .num { white-space: nowrap }
+.cards > div, .split, .tablebox, tr, [data-panel], [data-role=next-action] { break-inside: avoid }
+h2, h3, h4, h3 + p { break-after: avoid }
+"""
+
+
+def print_document(view: dict, tg: dict | None = None, analysis: dict | None = None, names: dict | None = None, budget: dict | None = None, actions: dict | None = None,
+                   generated: str = "") -> str:
+    """The report as it is printed to PDF: everything the page shows, minus what only works on a screen (the same-week switch, edit and
+    budget links, buttons). The list views that the switch would hide are dropped, so the print always shows the full period. No script runs."""
+    soup = BeautifulSoup(render_document(view, tg, analysis, True, names, budget, actions), "html.parser")
+    for tag in soup.select("script"):
+        tag.decompose()
+    for tag in soup.select("[data-cohort-view=same], [data-cohort-note], button, [data-role=controls], [data-editor]"):
+        tag.decompose()
+    for tag in soup.select("[data-cohort-toggle]"):
+        group = tag.find_parent("div")
+        (group or tag).decompose()
+    for link in soup.select('a[href^="/"]'):
+        link.unwrap() if link.get_text(strip=True) else link.decompose()
+    for tag in soup.select("[data-cohort-view=all]"):
+        tag.attrs.pop("hidden", None)
+    soup.head.append(BeautifulSoup(f"<style>{PRINT_CSS}</style>", "html.parser"))
+    head = (f'<div style="margin: 0 0 16px; padding-bottom: 12px; border-bottom: 1px solid {LINE}"><div style="font: 600 20px/1.3 Inter, Arial, sans-serif; color: {INK}">'
+            f'{e(company_name(view["bu"], names))} · {e(view["label"])}</div><div style="color: {MUTED}">{e(view["range"])}'
+            f'{" · Dibuat " + e(generated) if generated else ""}</div></div>')
+    soup.select_one("main").insert(0, BeautifulSoup(head, "html.parser"))
+    return str(soup)
 
 
 _VIEW = re.compile(r'<script type="application/json" id="' + VIEW_ID + r'"[^>]*>(.*?)</script>', re.S)
@@ -580,4 +721,5 @@ def analysis_keys(view: dict) -> list[str]:
     if view.get("hardware"):
         keys.append("hardware_summary")
         keys.extend("hardware_" + h["slug"] for h in view["hardware"])
+    keys.append("next_action")
     return keys

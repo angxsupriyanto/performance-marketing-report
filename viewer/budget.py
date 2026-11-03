@@ -174,31 +174,33 @@ def _money(raw: str, label: str, errors: dict, key: str) -> Decimal | None:
         return None
 
 
+def row_indexes(form: dict) -> list[int]:
+    """Row numbers of the campaigns in a posted form. Removing a campaign in the browser leaves gaps, so they are read, never counted."""
+    return sorted({int(k[2:]) for k in form if k.startswith("n_") and k[2:].isdigit()})
+
+
 def parse_form(form: dict[str, str], month: str, today: date) -> dict:
     """Turns the posted Budget form into what is stored, or raises FormError naming the fields. Nothing is stored here."""
     errors: dict[str, str] = {}
-    names: list[str] = []
+    names: list[tuple[int, str]] = []
     seen: set[str] = set()
-    index = 0
-    while f"n_{index}" in form:
+    for index in row_indexes(form):
         try:
             name = clean_name(form[f"n_{index}"])
         except ValueError as exc:
             errors[f"n_{index}"] = str(exc)
-            index += 1
             continue
         if name.casefold() in seen:
             errors[f"n_{index}"] = f"Campaign {name} tercatat dua kali."
         seen.add(name.casefold())
-        names.append(name)
-        index += 1
+        names.append((index, name))
     total = _money(form.get("total", ""), "Total budget", errors, "total")
     first, last = month_bounds(month)
     as_of_text = form.get("as_of", "").strip()
     as_of = None
     campaigns: dict[str, dict] = {}
     weeks = weeks_of_month(month)
-    for i, name in enumerate(names):
+    for i, name in names:
         entry: dict = {"budget": None, "month_spend": None, "weeks": {}}
         budget = _money(form.get(f"b_{i}", ""), f"Budget {name}", errors, f"b_{i}")
         if budget:  # 0 means no budget, like an empty field
@@ -240,3 +242,20 @@ def parse_form(form: dict[str, str], month: str, today: date) -> dict:
     if errors:
         raise FormError(errors)
     return {"total": int(total) if total else None, "as_of": as_of, "campaigns": campaigns}
+
+
+def analysis_context(result: dict) -> dict:
+    """The budget and spend of a report as plain numbers for the analysis: nothing that names the company or the people who entered it.
+    `state` is "ok" when a total budget was saved for the month; otherwise only the state is sent, and the analysis says the budget is not set."""
+    if result.get("state") != "ok":
+        return {"state": result.get("state", "belum"), "month": result.get("month_label")}
+    pick = lambda d, *keys: {k: d.get(k) for k in keys}
+    out = {"state": "ok", "month": result["month_label"], "previous_month": result.get("prev_label"),
+           **pick(result, "total", "spent", "left", "used", "week", "prev_week"), "spend_filled_until": result["as_of"].isoformat() if result.get("as_of") else None,
+           "previous_month_figures": pick(result.get("prev") or {}, "total", "spent", "left", "used"),
+           "campaigns": [pick(r, "name", "budget", "week", "spent", "left", "used") for r in result.get("rows", [])],
+           "unallocated_budget": result.get("unallocated")}
+    rest = result.get("rest")
+    if rest:
+        out["other_campaigns"] = pick(rest, "count", "budget", "week", "spent")
+    return out

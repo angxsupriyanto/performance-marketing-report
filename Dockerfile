@@ -3,6 +3,12 @@ FROM python:3.13-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PORT=8080
 WORKDIR /app
 
+# Chromium prints the viewer's report page to PDF. The report service does not need it: build that one with --build-arg INSTALL_CHROMIUM=false.
+ARG INSTALL_CHROMIUM=true
+RUN if [ "$INSTALL_CHROMIUM" = "true" ]; then \
+      apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation && rm -rf /var/lib/apt/lists/*; \
+    fi
+
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 

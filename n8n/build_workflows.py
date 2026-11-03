@@ -16,7 +16,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 
-PROMPT_FILE = "analysis_v1.md"
+PROMPT_FILE = "analysis_v2.md"
 SETTINGS = {
     "executionOrder": "v1",
     "timezone": "Asia/Jakarta",
@@ -109,6 +109,25 @@ def postgres_node(flow, name, query_file, position, **extra):
     flow.add(name, "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql(query_file), "options": {"queryReplacement": "={{ $json.params }}"}}, position, **extra)
 
 
+def postgres_validity_node(flow, position):
+    """The newest lead-validity setting per company (saved in the viewer). One row, so the Tracker is still read once. No error branch on purpose:
+    when the table is missing (migration 012 not applied) the run stops with the database's message instead of silently using other limits."""
+    flow.add("Read Validity", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("select_validity.sql"), "options": {}}, position)
+
+
+def job_result_nodes(flow, after_save, after_error, label_function, position):
+    """Reports each company's end to the viewer: a success row after the save step and a failure row after the error formatter, both written to
+    reports.process_results by one Postgres node. Nothing is written for runs started from n8n's editor (no job id)."""
+    x, y = position
+    code_node(flow, "Prepare Job Result", "prepare_job_result.js", (x, y), LABEL=label_function)
+    code_node(flow, "Prepare Job Failure", "prepare_job_failure.js", (x, y + 160), mode="runOnceForEachItem")
+    flow.add("Report Job Result", "n8n-nodes-base.postgres", 2.5, {"operation": "executeQuery", "query": sql("insert_job_result.sql"), "options": {"queryReplacement": "={{ $json.params }}"}}, (x + 240, y + 80))
+    flow.connect(after_save, "Prepare Job Result")
+    flow.connect(after_error, "Prepare Job Failure")
+    flow.connect("Prepare Job Result", "Report Job Result")
+    flow.connect("Prepare Job Failure", "Report Job Result")
+
+
 def telegram_node(flow, name, text_expression, position):
     flow.add(name, "n8n-nodes-base.telegram", 1.2, {"resource": "message", "operation": "sendMessage", "chatId": "<TELEGRAM_CHAT_ID>", "text": text_expression, "additionalFields": {"appendAttribution": False}}, position)
 
@@ -130,6 +149,7 @@ def generate_flow() -> Flow:
     flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 0))
     manual_parameters(flow, (240, 0), [("bu", "all"), ("period", "<PERIOD>")])
     code_node(flow, "Normalize Plan", "normalize_plan.js", (260, 240))
+    postgres_validity_node(flow, (380, 240))
     flow.add("Read Tracker", "n8n-nodes-base.googleSheets", 4.7, {
         "resource": "sheet", "operation": "read",
         "documentId": {"__rl": True, "mode": "id", "value": "<SPREADSHEET_ID>"},
@@ -143,7 +163,7 @@ def generate_flow() -> Flow:
     flow.add("Generate Report", "n8n-nodes-base.httpRequest", 4.2, {
         "method": "POST", "url": f"{SERVICE_URL}/v1/reports",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
-        "sendQuery": True, "queryParameters": {"parameters": [{"name": "bu", "value": "={{ $json.bu }}"}, {"name": "period", "value": "={{ $json.period }}"}]},
+        "sendQuery": True, "queryParameters": {"parameters": [{"name": "bu", "value": "={{ $json.bu }}"}, {"name": "period", "value": "={{ $json.period }}"}, {"name": "validity", "value": "={{ $json.validity }}"}]},
         "sendBody": True, "contentType": "raw", "rawContentType": "text/csv", "body": "={{ $json.csv }}",
         "options": {"timeout": 300000},
     }, (980, 240), onError="continueErrorOutput")
@@ -154,10 +174,11 @@ def generate_flow() -> Flow:
     code_node(flow, "Result", "result_generate.js", (2180, 160))
     code_node(flow, "Format Generate Error", "format_generate_error.js", (1220, 400), mode="runOnceForEachItem")
     telegram_node(flow, "Notify Error", "={{ $json.text }}", (1460, 400))
+    job_result_nodes(flow, "Save Run", "Format Generate Error", "(p) => `Report ${p.period}`", (1700, 400))
     for trigger in ("Manual Parameters", "Webhook Generate"):
         flow.connect(trigger, "Normalize Plan")
     flow.connect("Manual Trigger", "Manual Parameters")
-    for a, b in (("Normalize Plan", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Generate Report"), ("Prepare Insert", "Save Run"), ("Save Run", "Compose Message"), ("Compose Message", "Notify"), ("Notify", "Result"), ("Format Generate Error", "Notify Error")):
+    for a, b in (("Normalize Plan", "Read Validity"), ("Read Validity", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Generate Report"), ("Prepare Insert", "Save Run"), ("Save Run", "Compose Message"), ("Compose Message", "Notify"), ("Notify", "Result"), ("Format Generate Error", "Notify Error")):
         flow.connect(a, b)
     flow.connect("Generate Report", "Prepare Insert", 0)
     flow.connect("Generate Report", "Format Generate Error", 1)
@@ -171,6 +192,7 @@ def performa_flow() -> Flow:
     flow.add("Manual Trigger", "n8n-nodes-base.manualTrigger", 1, {}, (0, 0))
     manual_parameters(flow, (240, 0), [("bu", "all")])
     code_node(flow, "Normalize Plan", "normalize_performa_plan.js", (480, 0))
+    postgres_validity_node(flow, (600, 0))
     flow.add("Read Tracker", "n8n-nodes-base.googleSheets", 4.7, {
         "resource": "sheet", "operation": "read",
         "documentId": {"__rl": True, "mode": "id", "value": "<SPREADSHEET_ID>"},
@@ -184,7 +206,7 @@ def performa_flow() -> Flow:
     flow.add("Compute Performa", "n8n-nodes-base.httpRequest", 4.2, {
         "method": "POST", "url": f"{SERVICE_URL}/v1/performa",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
-        "sendQuery": True, "queryParameters": {"parameters": [{"name": "bu", "value": "={{ $json.bu }}"}]},
+        "sendQuery": True, "queryParameters": {"parameters": [{"name": "bu", "value": "={{ $json.bu }}"}, {"name": "validity", "value": "={{ $json.validity }}"}]},
         "sendBody": True, "contentType": "raw", "rawContentType": "text/csv", "body": "={{ $json.csv }}",
         "options": {"timeout": 300000},
     }, (1200, 0), onError="continueErrorOutput")
@@ -192,8 +214,11 @@ def performa_flow() -> Flow:
     postgres_node(flow, "Save Snapshot", "insert_performance.sql", (1680, -80))
     code_node(flow, "Result", "result_performa.js", (1920, -80))
     code_node(flow, "Format Error", "format_performa_error.js", (1440, 160), mode="runOnceForEachItem")
+    flow.add("Webhook Performa", "n8n-nodes-base.webhook", 2, {"httpMethod": "POST", "path": "performa-generate", "authentication": "headerAuth", "responseMode": "lastNode", "options": {}}, (0, 160), webhookId=node_id(flow.name, "Webhook Performa/webhook"))
+    flow.connect("Webhook Performa", "Normalize Plan")
+    job_result_nodes(flow, "Save Snapshot", "Format Error", "(p) => 'Data Performa'", (1920, 160))
     flow.connect("Manual Trigger", "Manual Parameters")
-    for a, b in (("Manual Parameters", "Normalize Plan"), ("Normalize Plan", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Compute Performa"), ("Prepare Insert", "Save Snapshot"), ("Save Snapshot", "Result")):
+    for a, b in (("Manual Parameters", "Normalize Plan"), ("Normalize Plan", "Read Validity"), ("Read Validity", "Read Tracker"), ("Read Tracker", "Build CSV"), ("Build CSV", "Compute Performa"), ("Prepare Insert", "Save Snapshot"), ("Save Snapshot", "Result")):
         flow.connect(a, b)
     flow.connect("Compute Performa", "Prepare Insert", 0)
     flow.connect("Compute Performa", "Format Error", 1)
@@ -221,7 +246,7 @@ def analysis_flow() -> Flow:
         "method": "POST", "url": f"{SERVICE_URL}/v1/analysis/apply",
         "authentication": "genericCredentialType", "genericAuthType": "httpHeaderAuth",
         "sendBody": True, "contentType": "json", "specifyBody": "json",
-        "jsonBody": "={{ JSON.stringify({ report_html: $('Load Latest Run').first().json.numeric_html, analysis: $json.analysis }) }}",
+        "jsonBody": "={{ JSON.stringify({ report_html: $('Load Latest Run').first().json.numeric_html, analysis: Object.fromEntries(Object.entries($json.analysis).filter(([key]) => $('Load Latest Run').first().json.analysis_keys.includes(key))) }) }}",
         "options": {"timeout": 120000},
     }, (1440, 0))
     code_node(flow, "Prepare Save", "prepare_save_analysis.js", (1680, 0))

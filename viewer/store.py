@@ -134,6 +134,83 @@ class Store:
             row = conn.execute("SELECT numeric_html FROM reports.latest_reports WHERE bu = %s ORDER BY period_start DESC LIMIT 1", (bu,)).fetchone()
         return row["numeric_html"] if row else None
 
+    # ---- actions the team took in a period
+    def latest_actions(self, bu: str, period: str) -> dict | None:
+        """The newest saved list for one report period: {items, saved_by, saved_at}, or None when nothing was ever saved."""
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT items, saved_by, saved_at FROM reports.report_actions WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_actions(self, bu: str, period: str, items: list, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
+
+    # ---- report and Performa runs started from the viewer
+    def add_process_request(self, kind: str, bu: str, period: str, requested_by: str) -> str:
+        with self._connect() as conn:
+            row = conn.execute("INSERT INTO reports.process_requests (kind, bu, period, requested_by) VALUES (%s, %s, %s, %s) RETURNING job_id",
+                               (kind, bu, period, requested_by)).fetchone()
+        return str(row["job_id"])
+
+    def recent_processes(self, limit: int = 15, kind: str | None = None) -> list[dict]:
+        """The newest requests (optionally of one kind), each with the results n8n reported so far, newest first."""
+        with self._connect() as conn:
+            if kind:
+                jobs = conn.execute("SELECT job_id, kind, bu, period, requested_by, requested_at FROM reports.process_requests WHERE kind = %s ORDER BY requested_at DESC LIMIT %s", (kind, limit)).fetchall()
+            else:
+                jobs = conn.execute("SELECT job_id, kind, bu, period, requested_by, requested_at FROM reports.process_requests ORDER BY requested_at DESC LIMIT %s", (limit,)).fetchall()
+            ids = [j["job_id"] for j in jobs]
+            results = conn.execute("SELECT job_id, bu, ok, message, finished_at FROM reports.process_results WHERE job_id = ANY(%s)", (ids,)).fetchall() if ids else []
+        by_job: dict = {}
+        for r in results:
+            by_job.setdefault(r["job_id"], []).append({k: r[k] for k in ("bu", "ok", "message", "finished_at")})
+        return [{**j, "job_id": str(j["job_id"]), "results": by_job.get(j["job_id"], [])} for j in jobs]
+
+    # ---- how long MQL, SQL and Deal Won stay valid
+    def latest_validity(self, bu: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute("SELECT config, saved_by, saved_at FROM reports.lead_validity_settings WHERE bu = %s ORDER BY saved_at DESC LIMIT 1", (bu,)).fetchone()
+
+    def validity_history(self, bu: str, limit: int = 20) -> list[dict]:
+        with self._connect() as conn:
+            return conn.execute("SELECT config, saved_by, saved_at FROM reports.lead_validity_settings WHERE bu = %s ORDER BY saved_at DESC LIMIT %s", (bu, limit)).fetchall()
+
+    def add_validity(self, bu: str, config: dict, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.lead_validity_settings (bu, config, saved_by) VALUES (%s, %s, %s)", (bu, psycopg.types.json.Jsonb(config), saved_by))
+
+    def latest_remark_values(self, bu: str) -> list[str]:
+        """The Remark texts seen in the company's newest report run that recorded them (audit.inputs.table.remark_values), most common first."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT audit #> '{inputs,table,remark_values}' AS values FROM reports.report_runs WHERE bu = %s AND jsonb_typeof(audit #> '{inputs,table,remark_values}') = 'array' "
+                "ORDER BY generated_at DESC LIMIT 1", (bu,)).fetchone()
+        return [v for v in (row["values"] if row else []) if isinstance(v, str)]
+
+    # ---- achievement figures typed by hand
+    def latest_achievements(self, bu: str, period: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT values, reason, saved_by, saved_at FROM reports.report_achievements WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_achievements(self, bu: str, period: str, values: dict, reason: str, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.report_achievements (bu, period, values, reason, saved_by) VALUES (%s, %s, %s, %s, %s)",
+                         (bu, period, psycopg.types.json.Jsonb(values), reason, saved_by))
+
+    # ---- extra information typed when an analysis is requested
+    def latest_analysis_note(self, bu: str, period: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute(
+                "SELECT note, saved_by, saved_at FROM reports.analysis_notes WHERE bu = %s AND period = %s ORDER BY saved_at DESC LIMIT 1", (bu, period),
+            ).fetchone()
+
+    def add_analysis_note(self, bu: str, period: str, note: str, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.analysis_notes (bu, period, note, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, note, saved_by))
+
     # ---- manual edits of analysis panels
     def latest_edits(self, run_id) -> list[dict]:
         """Newest edit row per panel of one run. body None means the AI version was restored."""

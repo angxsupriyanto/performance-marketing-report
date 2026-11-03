@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from unittest.mock import patch
 from urllib.parse import urlencode
 
 from bs4 import BeautifulSoup
@@ -48,6 +49,12 @@ class FakeStore:
         self.users = {}
         self.names = {}
         self.edits = []
+        self.actions = []
+        self.notes = []
+        self.achievements = []
+        self.validity = []
+        self.processes = []
+        self.remarks = {}
         self.snaps = []
         self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
@@ -136,6 +143,70 @@ class FakeStore:
             raise RuntimeError("write failed")
         self.edits.append({"run_id": run_id, "panel_key": panel_key, "body": body, "edited_by": edited_by, "created_at": datetime.now(UTC)})
 
+    def latest_actions(self, bu, period):
+        self._check()
+        saved = [a for a in self.actions if (a["bu"], a["period"]) == (bu, period)]
+        return {"items": saved[-1]["items"], "saved_by": saved[-1]["saved_by"], "saved_at": saved[-1]["saved_at"]} if saved else None
+
+    def add_actions(self, bu, period, items, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def add_process_request(self, kind, bu, period, requested_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        job = {"job_id": f"00000000-0000-4000-8000-{len(self.processes) + 1:012d}", "kind": kind, "bu": bu, "period": period, "requested_by": requested_by,
+               "requested_at": datetime.now(UTC), "results": []}
+        self.processes.append(job)
+        return job["job_id"]
+
+    def recent_processes(self, limit=15, kind=None):
+        self._check()
+        return [dict(j, results=list(j["results"])) for j in reversed(self.processes) if kind in (None, j["kind"])][:limit]
+
+    def report_result(self, job_id, bu, ok, message=""):
+        """What n8n does when a company's run ends."""
+        next(j for j in self.processes if j["job_id"] == job_id)["results"].append({"bu": bu, "ok": ok, "message": message, "finished_at": datetime.now(UTC)})
+
+    def latest_validity(self, bu):
+        self._check()
+        saved = [v for v in self.validity if v["bu"] == bu]
+        return {k: saved[-1][k] for k in ("config", "saved_by", "saved_at")} if saved else None
+
+    def validity_history(self, bu, limit=20):
+        self._check()
+        return [{k: v[k] for k in ("config", "saved_by", "saved_at")} for v in reversed(self.validity) if v["bu"] == bu][:limit]
+
+    def add_validity(self, bu, config, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.validity.append({"bu": bu, "config": config, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_remark_values(self, bu):
+        self._check()
+        return list(self.remarks.get(bu, []))
+
+    def latest_achievements(self, bu, period):
+        self._check()
+        saved = [a for a in self.achievements if (a["bu"], a["period"]) == (bu, period)]
+        return {k: saved[-1][k] for k in ("values", "reason", "saved_by", "saved_at")} if saved else None
+
+    def add_achievements(self, bu, period, values, reason, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.achievements.append({"bu": bu, "period": period, "values": values, "reason": reason, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_analysis_note(self, bu, period):
+        self._check()
+        saved = [n for n in self.notes if (n["bu"], n["period"]) == (bu, period)]
+        return {"note": saved[-1]["note"], "saved_by": saved[-1]["saved_by"], "saved_at": saved[-1]["saved_at"]} if saved else None
+
+    def add_analysis_note(self, bu, period, note, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.notes.append({"bu": bu, "period": period, "note": note, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
     # ---- users and company names, same rules as the real Store
     def ensure_bootstrap_admin(self, password_hash):
         self._check()
@@ -197,7 +268,7 @@ class FakeN8n(BaseHTTPRequestHandler):
 
     def do_POST(self):
         body = self.rfile.read(int(self.headers["Content-Length"]))
-        FakeN8n.calls.append({"headers": dict(self.headers), "body": json.loads(body)})
+        FakeN8n.calls.append({"headers": dict(self.headers), "body": json.loads(body), "path": self.path})
         if FakeN8n.on_call:
             FakeN8n.on_call(json.loads(body))
         payload = json.dumps({"message": "Jawaban model bukan JSON"} if FakeN8n.status >= 400 else {"ok": True}).encode()
@@ -224,6 +295,7 @@ class ViewerCase(unittest.TestCase):
         self.store = FakeStore()
         FakeN8n.calls, FakeN8n.status, FakeN8n.on_call = [], 200, None
         cfg = app.Config(password_hash=self.hash, session_secret=SECRET, store=self.store, n8n_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/report-analysis",
+                         n8n_generate_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/report-generate", n8n_performa_url=f"http://127.0.0.1:{self.n8n.server_port}/webhook/performa-generate",
                          n8n_header="Authorization", n8n_prefix="Bearer ", n8n_token="n8n-token-123", secure_cookie=True, trust_proxy=True)
         self.server = app.make_server(cfg, "127.0.0.1", 0)
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
@@ -259,6 +331,13 @@ class ViewerCase(unittest.TestCase):
 
 
 class ViewerTests(ViewerCase):
+    def setUp(self):
+        super().setUp()
+        # The target and budget month pickers are relative to today. These tests save targets for 2026-09 and 2026-10, so they run "on" a fixed day.
+        patcher = patch.object(app.Handler, "now", lambda self: datetime(2026, 10, 27, 12, 0, tzinfo=app.pages.WIB))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     # ---- login and sessions
     def test_everything_but_health_and_login_needs_a_session(self):
         for path in ("/", "/report/bu1/2026-W39", "/targets", "/api/analysis/status?bu=bu1&period=2026-W39"):
@@ -349,7 +428,7 @@ class ViewerTests(ViewerCase):
         self.assertEqual(soup.select_one("h1.vw-h1").get_text(), "Report Perusahaan 1")
         self.assertIsNotNone(soup.select_one("#vw-analysis[data-state=none] button"))
         self.assertIn("Belum ada analisis", body)
-        self.assertEqual([h.get_text() for h in soup.select("h2")], ["Report"])
+        self.assertEqual([h.get_text() for h in soup.select("h2")], ["Action yang sudah dilakukan di Week 39", "Report"])
         self.assertIn("Campaign Hardware", [h.get_text() for h in soup.select("h3")])
         self.assertEqual(len(soup.select(".hw-funnel-block")) + len(soup.select(".hardware-section")), 0)  # nothing of the old dashboard
         nonce = re.search(r"'nonce-([^']+)'", response.getheader("Content-Security-Policy")).group(1)

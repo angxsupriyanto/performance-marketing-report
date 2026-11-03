@@ -40,5 +40,5 @@ FASE 3 - container
 2. Jalankan: docker compose -p report-viewer -f deploy/docker-compose.report-viewer.local.yml up -d --build
 3. Dari container lain di network yang sama (mis. curl dari container n8n), periksa http://report-viewer:8090/healthz.
    Harus {"status":"ok","database":true}. Laporkan hasilnya dan log 20 baris terakhir report-viewer.
-4. Selesai. Saya yang menambahkan public hostname officehour.pesankopi.com -> http://report-viewer:8090 di Cloudflare.
+4. Selesai. Saya yang menambahkan public hostname officehours.pesankopi.com -> http://report-viewer:8090 di Cloudflare.
 ```

@@ -78,5 +78,35 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
   UNION ALL SELECT 22, 'performance_snapshots accepts the v2 lead-row shape (constraint performance_snapshots_data_shape)',
          EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'performance_snapshots_data_shape' AND conrelid = to_regclass('reports.performance_snapshots') AND contype = 'c'
                  AND pg_get_constraintdef(oid) LIKE '%dims%')
+  UNION ALL SELECT 23, 'report_actions exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.report_actions') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_actions'), 'TRUNCATE')), false)
+  UNION ALL SELECT 24, 'analysis_notes exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.analysis_notes') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.analysis_notes'), 'TRUNCATE')), false)
+  UNION ALL SELECT 25, 'report_achievements exists; report_viewer can SELECT and INSERT but not UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.report_achievements') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'INSERT')
+                      AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'TRUNCATE')), false)
+  UNION ALL SELECT 26, 'lead_validity_settings exists; report_viewer can SELECT and INSERT, report_writer and report_reader can SELECT, nobody can UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.lead_validity_settings') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'INSERT')
+                      AND has_table_privilege('report_writer', to_regclass('reports.lead_validity_settings'), 'SELECT') AND has_table_privilege('report_reader', to_regclass('reports.lead_validity_settings'), 'SELECT')
+                      AND NOT (has_table_privilege('report_writer', to_regclass('reports.lead_validity_settings'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.lead_validity_settings'), 'INSERT')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'TRUNCATE')), false)
+  UNION ALL SELECT 27, 'process_requests: report_viewer INSERTs, report_writer cannot; process_results: report_writer INSERTs, report_viewer cannot; nobody can UPDATE or DELETE',
+         to_regclass('reports.process_requests') IS NOT NULL AND to_regclass('reports.process_results') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.process_requests'), 'INSERT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.process_results'), 'SELECT')
+                      AND has_table_privilege('report_writer', to_regclass('reports.process_results'), 'INSERT') AND has_table_privilege('report_writer', to_regclass('reports.process_requests'), 'SELECT')
+                      AND has_table_privilege('report_reader', to_regclass('reports.process_requests'), 'SELECT') AND has_table_privilege('report_reader', to_regclass('reports.process_results'), 'SELECT')
+                      AND NOT (has_table_privilege('report_writer', to_regclass('reports.process_requests'), 'INSERT') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.process_results'), 'INSERT')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.process_requests'), 'UPDATE') OR has_table_privilege('report_writer', to_regclass('reports.process_results'), 'UPDATE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.process_requests'), 'DELETE') OR has_table_privilege('report_writer', to_regclass('reports.process_results'), 'DELETE')), false)
 ) checks
 ORDER BY n;

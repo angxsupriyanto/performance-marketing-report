@@ -150,6 +150,38 @@ def options(data: Data, params: Params) -> dict[str, list[dict]]:
     return out
 
 
+PARENT_KEYS = ("channel", "source", "medium", "campaign")
+
+
+def relations(data: Data) -> dict:
+    """Which Channel, Source, Medium and Campaign values occur together on at least one lead, whatever the date range. The browser narrows Source,
+    Medium and Campaign lists with it while a parent is being ticked. `labels` are the values of each filter; `combos` hold positions in them."""
+    positions = [[key for key, _ in DIMENSIONS].index(k) for k in PARENT_KEYS]
+    labels = {k: [label(v) for v in data.dims[k]] for k in PARENT_KEYS}
+    combos = sorted({tuple(lead.d[i] for i in positions) for lead in data.leads})
+    return {"labels": labels, "combos": [list(c) for c in combos]}
+
+
+def nurturing_groups(rel: dict | None) -> dict[str, str]:
+    """Budget cannot take one row per Nurturing campaign: there are too many. Every campaign that only ever runs under a Source holding
+    "Nurturing" is mapped to one group per Medium ("Email Nurturing"), so choosing the campaign adds the group. Keys are lower-cased
+    campaign names. A campaign that also runs under another Source stays on its own."""
+    if not rel:
+        return {}
+    labels = rel["labels"]
+    nurturing = {i for i, name in enumerate(labels["source"]) if "nurturing" in name.casefold()}
+    if not nurturing:
+        return {}
+    only: dict[int, bool] = {}
+    group: dict[int, str] = {}
+    for _, source, medium, campaign in rel["combos"]:
+        only[campaign] = only.get(campaign, True) and source in nurturing
+        if source in nurturing:
+            medium_name = labels["medium"][medium]
+            group.setdefault(campaign, labels["source"][source] if medium_name in ("", EMPTY_LABEL) else f"{medium_name} {labels['source'][source]}")
+    return {labels["campaign"][c].casefold(): group[c] for c, alone in only.items() if alone and c in group}
+
+
 # ---- the chosen range, grouped
 def _label(start: date, gran: str, full: bool = False) -> str:
     if gran == "day":

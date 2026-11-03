@@ -77,7 +77,7 @@ class EditFlowTests(ViewerCase):
         self.assertIn("Dibuat oleh model claude-sonnet-5-5 ·", panel.select_one("[data-role=meta]").get_text())
         self.assertEqual([b.get_text() for b in panel.select("[data-role=controls] button")], ["Edit"])
         self.assertEqual(panel.select_one("textarea").get_text().strip(), "teks AI")
-        self.assertEqual(len(soup.select("[data-panel]")), 7)  # executive, hardware summary and five products
+        self.assertEqual(len(soup.select("[data-panel]")), 8)  # executive, hardware summary, five products and next action
         self.assertEqual(soup.select_one("#vw-analysis")["data-edited"], "0")
 
     def test_saving_an_edit_shows_edited_and_keeps_every_version(self):
@@ -93,7 +93,7 @@ class EditFlowTests(ViewerCase):
         self.assertIn("model awal: claude-sonnet-5-5", panel.select_one("[data-role=meta]").get_text())
         self.assertEqual([b.get_text() for b in panel.select("[data-role=controls] button")], ["Edit", "Kembalikan ke versi AI"])
         self.assertEqual(soup.select_one("#vw-analysis")["data-edited"], "1")
-        self.assertIsNotNone(soup.select_one("#vw-confirm"))
+        self.assertIsNotNone(soup.select_one("#vw-form [data-role=warn]"))  # the "panels were edited" warning lives in the actions form now
         self.assertNotIn("<i>saya</i>", self.call("GET", "/report/bu1/2026-W39")[1])  # stored as text, shown escaped
 
     def test_restoring_brings_back_the_ai_text(self):

@@ -18,7 +18,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, analysis_edits, auth, budget, pages, performance, performance_pages, targets  # noqa: E402
+from viewer import access, achievements, actions, analysis_edits, refresh, validity, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -60,6 +60,8 @@ class Config:
     n8n_token: str
     secure_cookie: bool
     trust_proxy: bool
+    n8n_generate_url: str = ""
+    n8n_performa_url: str = ""
 
     @classmethod
     def from_env(cls) -> "Config":
@@ -89,7 +91,15 @@ class Config:
             n8n_token=read_secret(n8n_token_file, min_length=1) if n8n_token_file else "",
             secure_cookie=os.environ.get("VIEWER_COOKIE_SECURE", "true").lower() != "false",
             trust_proxy=os.environ.get("VIEWER_TRUST_PROXY_HEADERS", "false").lower() == "true",
+            n8n_generate_url=os.environ.get("N8N_GENERATE_URL") or sibling_url(os.environ.get("N8N_ANALYSIS_URL", ""), "report-generate"),
+            n8n_performa_url=os.environ.get("N8N_PERFORMA_URL") or sibling_url(os.environ.get("N8N_ANALYSIS_URL", ""), "performa-generate"),
         )
+
+
+def sibling_url(analysis_url: str, path: str) -> str:
+    """The other n8n webhooks live next to the analysis one (.../webhook/report-analysis), so their addresses follow from it unless set explicitly."""
+    tail = "/report-analysis"
+    return analysis_url[: -len(tail)] + "/" + path if analysis_url.endswith(tail) else ""
 
 
 def normalize_prefix(prefix: str) -> str:
@@ -123,14 +133,19 @@ class Jobs:
             self.items[key] = {"state": "failed" if error else "done", "error": error, "started": self.items.get(key, {}).get("started", 0)}
 
 
-def call_n8n(cfg: Config, bu: str, period: str, context: dict) -> str:
-    """Returns an error text, or "" when n8n answered 2xx."""
-    if not cfg.n8n_url or not cfg.n8n_token:
+def call_n8n(cfg: Config, bu: str, period: str, context: dict, extra: dict | None = None) -> str:
+    """Returns an error text, or "" when n8n answered 2xx. `extra` adds the team's actions and the budget figures to the request."""
+    return call_webhook(cfg, cfg.n8n_url, {"bu": bu, "period": period, "requested_by": "viewer", "targets": context, **(extra or {})}, ANALYSIS_TIMEOUT_SECONDS)
+
+
+def call_webhook(cfg: Config, url: str, payload: dict, timeout: int) -> str:
+    """Posts to an n8n webhook with the shared token. Returns an error text, or "" when n8n answered 2xx."""
+    if not url or not cfg.n8n_token:
         return "Alamat atau token webhook n8n belum diatur pada layanan viewer."
-    body = json.dumps({"bu": bu, "period": period, "requested_by": "viewer", "targets": context}, default=generate_report.json_default).encode()
-    request = urllib.request.Request(cfg.n8n_url, data=body, method="POST", headers={"Content-Type": "application/json", cfg.n8n_header: cfg.n8n_prefix + cfg.n8n_token})
+    body = json.dumps(payload, default=generate_report.json_default).encode()
+    request = urllib.request.Request(url, data=body, method="POST", headers={"Content-Type": "application/json", cfg.n8n_header: cfg.n8n_prefix + cfg.n8n_token})
     try:
-        with urllib.request.urlopen(request, timeout=ANALYSIS_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             response.read()
         return ""
     except urllib.error.HTTPError as exc:
@@ -148,11 +163,22 @@ def call_n8n(cfg: Config, bu: str, period: str, context: dict) -> str:
         return "n8n tidak menjawab dalam batas waktu."
 
 
-def run_analysis(cfg: Config, jobs: Jobs, bu: str, period: str, context: dict) -> None:
+def run_refresh(cfg: Config, jobs: "Jobs", url: str, payload: dict, job_id: str) -> None:
+    """Calls the n8n webhook of a report or Performa run. n8n writes the results to the database itself; an error answer is kept here so the page can show it."""
+    key = ("refresh", job_id)
+    try:
+        jobs.start(key)
+        error = call_webhook(cfg, url, payload, refresh.TIMEOUT_SECONDS)
+        jobs.finish(key, error.replace("n8n tidak menjawab dalam batas waktu.", "n8n tidak menjawab dalam 5 menit."))
+    except Exception:  # noqa: BLE001 - the job must always leave the running state
+        jobs.finish(key, "Terjadi kesalahan saat menghubungi n8n.")
+
+
+def run_analysis(cfg: Config, jobs: Jobs, bu: str, period: str, context: dict, extra: dict | None = None) -> None:
     key = (bu, period)
     try:
         before = cfg.store.latest_analysis_time(bu, period)
-        error = call_n8n(cfg, bu, period, context)
+        error = call_n8n(cfg, bu, period, context, extra)
         if not error:
             after = cfg.store.latest_analysis_time(bu, period)
             if after is None or (before is not None and after <= before):
@@ -211,6 +237,8 @@ class Handler(BaseHTTPRequestHandler):
         return ""
 
     def send(self, status: int, body: str | bytes, content_type: str = "text/html; charset=utf-8", nonce: str = "", extra: dict | None = None) -> None:
+        if isinstance(body, str) and content_type.startswith("text/html"):
+            body = theme.apply(body, nonce)
         data = body.encode("utf-8") if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", content_type)
@@ -311,6 +339,14 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_edit(form)
                     return
+                if path == "/api/actions":
+                    self.need_admin()
+                    status = self.save_actions(form)
+                    return
+                if path == "/api/achievements":
+                    self.need_admin()
+                    status = self.save_achievements(form)
+                    return
                 if path in ("/targets/year", "/targets/month"):
                     self.need_admin()
                     status = self.save_targets(path.rsplit("/", 1)[1], form, csrf, nonce)
@@ -327,14 +363,33 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_budget(form, csrf, nonce)
                     return
+                if path == "/validity":
+                    self.need_admin()
+                    status = self.save_validity(form, csrf, nonce)
+                    return
+                if path == "/api/refresh":
+                    self.need_admin()
+                    status = self.refresh_start(form)
+                    return
             elif path == "/":
                 status = self.list_page(csrf, nonce)
+                return
+            elif path.startswith("/report/") and path.endswith("/pdf"):
+                status = self.report_pdf(path)
                 return
             elif path.startswith("/report/"):
                 status = self.report_page(path, csrf, nonce)
                 return
             elif path == "/api/analysis/status":
                 status = self.analysis_status(query)
+                return
+            elif path == "/refresh":
+                self.need_admin()
+                status = self.refresh_page(csrf, nonce)
+                return
+            elif path == "/api/refresh/status":
+                self.need_admin()
+                status = self.refresh_status(query)
                 return
             elif path == "/targets":
                 self.need_admin()
@@ -351,6 +406,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/budget":
                 self.need_admin()
                 status = self.budget_page(query, csrf, nonce)
+                return
+            elif path == "/validity":
+                self.need_admin()
+                status = self.validity_page(query, csrf, nonce)
                 return
             elif path == "/performa":
                 status = self.performance_page(query, csrf, nonce)
@@ -462,7 +521,27 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:  # noqa: BLE001 - without the edit table the AI text still shows, read-only
                 edits, edits_ok = [], False
             analysis, edited = analysis_edits.effective(report, edits, report_view.analysis_keys(view), access.is_admin(self.user) and edits_ok, pages.dt_text)
-        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited)
+        saved_actions, actions_block, form_html = None, None, ""
+        if view is not None:
+            try:
+                saved_actions = self.cfg.store.latest_actions(bu, period)
+                items = list(saved_actions["items"]) if saved_actions else []
+                actions_block = {"items": items, "saved_by": saved_actions["saved_by"] if saved_actions else None,
+                                 "saved_at": pages.dt_text(saved_actions["saved_at"]) if saved_actions else None, "can_edit": access.is_admin(self.user)}
+            except Exception:  # noqa: BLE001 - without the table the report still shows; the Action section just stays out
+                items, actions_block = [], None
+            if access.is_admin(self.user):
+                spend = self.report_budget(report, view)
+                note = (f"Budget dan spend {spend['month_label']} ikut dikirim sebagai pertimbangan analisis." if spend.get("state") == "ok"
+                        else f"Budget {spend['month_label']} belum diatur, jadi analisis berjalan tanpa data budget dan spend.")
+                if not spend.get("names"):
+                    note += " Belum ada campaign yang dipilih di Budget, jadi kolom Campaign hanya berisi Tidak spesifik."
+                try:
+                    saved_note = self.cfg.store.latest_analysis_note(bu, period)
+                except Exception:  # noqa: BLE001 - without the table the form simply opens empty
+                    saved_note = None
+                form_html = pages.action_form(view["label"], items, spend.get("names", []), note, saved_note["note"] if saved_note else "")
+        chrome = pages.report_chrome(report, state, (job or {}).get("error", ""), csrf, self.user, self.names().get(bu, bu), edited, form_html)
         if view is None:
             note = (
                 '<main class="vw-main" style="padding-top:0"><div class="vw-box vw-pad" role="alert"><div class="vw-h2">Report ini dibuat oleh generator versi lama</div>'
@@ -474,8 +553,57 @@ class Handler(BaseHTTPRequestHandler):
             rows = self.cfg.store.latest_targets(bu)
         except Exception:  # noqa: BLE001
             rows = None
-        document = report_view.render_document(view, targets.build_tg(view, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view))
+        saved_figures, manual = self.achievement_state(bu, period, view)
+        shown = achievements.apply_view(view, saved_figures)
+        document = report_view.render_document(shown, targets.build_tg(shown, rows), analysis, standalone=False, names=self.names(), budget=self.report_budget(report, view), actions=actions_block, manual=manual)
         self.send(200, pages.inject_chrome(document, chrome, nonce, csrf), nonce=nonce)
+        return 200
+
+    def report_pdf(self, path: str) -> int:
+        """The report page as a PDF file: the same data, text and access rules as the page, without the buttons that only work on a screen."""
+        parts = path.split("/")
+        if len(parts) != 5 or not BU.fullmatch(parts[2]) or not PERIOD.fullmatch(parts[3]):
+            raise HttpError(404, "report tidak ditemukan")
+        bu, period = parts[2], parts[3]
+        if not access.can_see(self.user, bu):
+            raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke report perusahaan ini.")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab; coba lagi")
+        view = report_view.extract_view(report["html"]) if report else None
+        if view is None:
+            raise HttpError(404, "report tidak ditemukan atau dibuat oleh generator versi lama")
+        try:
+            edits = self.cfg.store.latest_edits(report["run_id"])
+        except Exception:  # noqa: BLE001 - without the edit table the AI text still prints
+            edits = []
+        analysis, _ = analysis_edits.effective(report, edits, report_view.analysis_keys(view), False, pages.dt_text)
+        analysis = {k: v for k, v in analysis.items() if not k.startswith("_")}  # plain text: no chips, no provenance, no controls
+        try:
+            rows = self.cfg.store.latest_targets(bu)
+        except Exception:  # noqa: BLE001
+            rows = None
+        spend = self.report_budget(report, view)
+        spend["admin"] = False
+        try:
+            saved = self.cfg.store.latest_actions(bu, period)
+            block = {"items": list(saved["items"]) if saved else [], "saved_by": saved["saved_by"] if saved else None,
+                     "saved_at": pages.dt_text(saved["saved_at"]) if saved else None, "can_edit": False}
+        except Exception:  # noqa: BLE001
+            block = None
+        shown = achievements.apply_view(view, self.safe_achievements(bu, period))
+        html_text = report_view.print_document(shown, targets.build_tg(shown, rows), analysis, self.names(), spend, block, pages.dt_text(report["generated_at"]))
+        try:
+            data = pdf.render_pdf(html_text)
+        except pdf.PdfBusy as exc:
+            self.json(429, {"error": str(exc)})
+            return 429
+        except pdf.PdfError as exc:
+            self.json(503, {"error": str(exc)})
+            return 503
+        slug = re.sub(r"[^A-Za-z0-9._-]+", "-", f"{self.names().get(bu, bu)}-{period}").strip("-") or f"{bu}-{period}"
+        self.send(200, data, "application/pdf", extra={"Content-Disposition": f'attachment; filename="report-{slug}.pdf"'})
         return 200
 
     def start_analysis(self, form: dict) -> int:
@@ -485,12 +613,255 @@ class Handler(BaseHTTPRequestHandler):
         report = self.cfg.store.get_report(bu, period)
         if report is None:
             raise HttpError(404, "belum ada report numerik; jalankan Report Generate di n8n dahulu")
+        note = None
+        if "info" in form:  # the form sent the free text: check it before anything starts
+            try:
+                note = actions.clean_note(form["info"])
+            except ValueError as exc:
+                raise HttpError(400, str(exc))
+        items = None
+        if "items" in form:  # the form sent the list: check it before anything starts, then keep it as the period's list
+            try:
+                items = actions.clean_items(form["items"])
+            except ValueError as exc:
+                raise HttpError(400, str(exc))
         if not self.jobs.start((bu, period)):
             raise HttpError(409, "analisis untuk report ini sedang berjalan")
-        context = targets.context_for_analysis(facts_of(report), self.cfg.store.latest_targets(bu))
-        threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context), daemon=True).start()
+        try:
+            if items is not None:
+                self.cfg.store.add_actions(bu, period, items, self.user["username"])
+            else:
+                saved = self.cfg.store.latest_actions(bu, period)
+                items = list(saved["items"]) if saved else []
+            if note is not None:
+                self.cfg.store.add_analysis_note(bu, period, note, self.user["username"])
+            else:
+                saved_note = self.cfg.store.latest_analysis_note(bu, period)
+                note = saved_note["note"] if saved_note else ""
+            view = report_view.extract_view(report["html"])
+            budget_ctx = budget.analysis_context(self.report_budget(report, view or {}))
+            context = targets.context_for_analysis(achievements.apply_facts(facts_of(report), self.cfg.store.latest_achievements(bu, period)), self.cfg.store.latest_targets(bu))
+        except Exception:  # noqa: BLE001 - release the job, otherwise this report could never be analysed again
+            self.jobs.finish((bu, period), "Action atau data pendukung tidak bisa disimpan atau dimuat. Coba lagi.")
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba lagi.")
+        extra = {"actions": items, "budget": budget_ctx, "team_note": note}
+        threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202
+
+    def refresh_companies(self) -> list[str]:
+        return list(UNITS)  # the companies n8n's "all" covers (normalize_plan.js)
+
+    def refresh_jobs(self, limit: int = 15, kind: str | None = None) -> list[dict]:
+        """Recent requests with their derived status, newest first."""
+        companies, now = self.refresh_companies(), datetime.now(timezone.utc)
+        out = []
+        for job in self.cfg.store.recent_processes(limit, kind):
+            local = (self.jobs.get(("refresh", job["job_id"])) or {}).get("error", "")
+            out.append({**job, "status": refresh.derive(job, companies, now, local)})
+        return out
+
+    def refresh_page(self, csrf: str, nonce: str) -> int:
+        try:
+            jobs = self.refresh_jobs()
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Riwayat proses tidak bisa dimuat. Database marketing_reports tidak menjawab; muat ulang halaman ini.")
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        latest = {kind: next((j for j in jobs if j["kind"] == kind), None) for kind in refresh.KINDS}
+        rows = [{"started": pages.dt_text(j["requested_at"]), "kind": refresh.KINDS[j["kind"]], "company": "Semua" if j["bu"] == "all" else names.get(j["bu"], j["bu"]),
+                 "period": j["period"] or "-", "by": j["requested_by"], "duration": refresh.duration_text(j, j["status"]), "state": j["status"]["state"],
+                 "outcome": refresh.outcome_text(j, j["status"], names)} for j in jobs]
+        cards = {kind: ({"state": j["status"]["state"], "text": refresh.outcome_text(j, j["status"], names), "at": pages.dt_text(j["requested_at"]),
+                         "target": ("Semua" if j["bu"] == "all" else names.get(j["bu"], j["bu"])) + (f" {j['period']}" if j["period"] else "")} if j else None) for kind, j in latest.items()}
+        options = refresh.period_options(self.now().date())
+        configured = {"report": bool(self.cfg.n8n_generate_url), "performa": bool(self.cfg.n8n_performa_url)}
+        self.send(200, pages.refresh_page(names, options, cards, rows, configured, csrf, nonce, self.user), nonce=nonce)
+        return 200
+
+    def refresh_status(self, query: dict) -> int:
+        kind = query.get("kind", "")
+        if kind not in refresh.KINDS:
+            raise HttpError(400, "proses tidak dikenal")
+        try:
+            jobs = self.refresh_jobs(1, kind)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "database marketing_reports tidak menjawab")
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        if not jobs:
+            self.json(200, {"state": "idle"})
+        else:
+            self.json(200, {"state": jobs[0]["status"]["state"], "text": refresh.outcome_text(jobs[0], jobs[0]["status"], names)})
+        return 200
+
+    def refresh_start(self, form: dict) -> int:
+        kind, bu, period = form.get("kind", ""), form.get("bu", ""), form.get("period", "")
+        try:
+            period = refresh.check_request(kind, bu, period, self.refresh_companies())
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        url = self.cfg.n8n_generate_url if kind == "report" else self.cfg.n8n_performa_url
+        if not url or not self.cfg.n8n_token:
+            raise HttpError(503, "Alamat atau token webhook n8n untuk proses ini belum diatur pada layanan viewer (N8N_GENERATE_URL, N8N_PERFORMA_URL, atau N8N_ANALYSIS_URL).")
+        if not self.jobs.start(("refresh-start", kind)):  # one click at a time inside this process
+            raise HttpError(409, "Permintaan sebelumnya sedang diproses. Coba lagi sebentar lagi.")
+        try:
+            try:
+                running = [j for j in self.refresh_jobs(1, kind) if j["status"]["state"] == "running"]
+            except Exception:  # noqa: BLE001
+                raise HttpError(503, "Proses tidak dimulai. Database marketing_reports tidak menjawab. Coba lagi.")
+            if running:
+                raise HttpError(409, f"{refresh.KINDS[kind]} masih berjalan. Tunggu sampai selesai.")
+            try:
+                job_id = self.cfg.store.add_process_request(kind, bu, period, self.user["username"])
+            except Exception:  # noqa: BLE001
+                raise HttpError(503, "Proses tidak dimulai. Database marketing_reports tidak menjawab. Coba lagi.")
+        finally:
+            self.jobs.finish(("refresh-start", kind))
+        payload = {"bu": bu, "job_id": job_id, "requested_by": "viewer", **({"period": period} if kind == "report" else {})}
+        threading.Thread(target=run_refresh, args=(self.cfg, self.jobs, url, payload, job_id), daemon=True).start()
+        self.json(202, {"state": "running", "job_id": job_id})
+        return 202
+
+    def validity_state(self, bu: str) -> tuple[dict, bool, list[dict], list[str]]:
+        """(config in force, whether it was saved, history, Remark choices). Without a saved row the profile's own limits are what is in force."""
+        store = self.cfg.store
+        try:
+            latest = store.latest_validity(bu)
+            history = store.validity_history(bu)
+            remarks = store.latest_remark_values(bu)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pengaturan tidak bisa dimuat. Database marketing_reports tidak menjawab; muat ulang halaman ini.")
+        config = latest["config"] if latest else validity.profile_config(bu)
+        options = list(remarks) + [r["remark"] for r in config["remarks"] if r["remark"] not in remarks]  # a saved rule's Remark must stay selectable
+        return config, latest is not None, history, options
+
+    def validity_page(self, query: dict, csrf: str, nonce: str, posted: dict | None = None, errors: dict | None = None, failed: str = "", status: int = 200) -> int:
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        bu = posted.get("bu", "") if posted else query.get("bu", "bu1")
+        if bu not in UNITS:
+            raise HttpError(404, "Perusahaan tidak dikenal")
+        config, saved, history, options = self.validity_state(bu)
+        values = posted if posted else validity.form_values(config)
+        notice = ""
+        if not posted and query.get("saved") == "1":
+            notice = f"Pengaturan {names.get(bu, bu)} tersimpan. Berlaku untuk report dan data Performa yang dibuat berikutnya."
+        elif not posted and query.get("saved") == "same":
+            notice = "Tidak ada perubahan yang perlu disimpan."
+        rows = [{"saved_at": h["saved_at"], "saved_by": h["saved_by"], "summary": validity.summary(h["config"])[1:]} for h in history]
+        self.send(status, pages.validity_page(bu, names, values, options, validity.summary(config), rows, errors or {}, csrf, nonce, self.user, notice, failed, not saved), nonce=nonce)
+        return status
+
+    def save_validity(self, form: dict, csrf: str, nonce: str) -> int:
+        bu = form.get("bu", "")
+        if bu not in UNITS:
+            raise HttpError(400, "Perusahaan tidak dikenal")
+        config, _, _, options = self.validity_state(bu)
+        parsed, errors = validity.parse_form(form, options)
+        if parsed is None:
+            return self.validity_page({}, csrf, nonce, posted=form, errors=errors, failed="Periksa isian yang ditandai. Belum ada yang disimpan.", status=422)
+        try:
+            saved = self.cfg.store.latest_validity(bu)
+            if saved is not None and saved["config"] == parsed:
+                self.redirect(f"/validity?bu={bu}&saved=same")
+                return 303
+            self.cfg.store.add_validity(bu, generate_report.normalize_validity(parsed), self.user["username"])
+        except Exception:  # noqa: BLE001
+            return self.validity_page({}, csrf, nonce, posted=form, failed="Pengaturan tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", status=503)
+        self.redirect(f"/validity?bu={bu}&saved=1")
+        return 303
+
+    def safe_achievements(self, bu: str, period: str):
+        """The newest typed figures, or None when there are none or the table cannot be read (the report then shows the system figures)."""
+        try:
+            return self.cfg.store.latest_achievements(bu, period)
+        except Exception:  # noqa: BLE001
+            return None
+
+    def achievement_state(self, bu: str, period: str, view: dict) -> tuple[dict | None, dict | None]:
+        """(newest saved set, what the report needs to draw the admin forms). The forms exist only for admins."""
+        try:
+            saved = self.cfg.store.latest_achievements(bu, period)
+            readable = True
+        except Exception:  # noqa: BLE001 - without the table the report shows the system figures and no form
+            saved, readable = None, False
+        if not (readable and access.is_admin(self.user)):
+            return saved, None
+        values = achievements.figures(saved)
+        unit = view["progress"]["unit"]
+        fmt = report_view.idr if unit == "idr" else report_view.count_text
+        unit_label = "Rp" if unit == "idr" else "SQL"
+        last = ({"saved_by": saved["saved_by"], "saved_at": pages.dt_text(saved["saved_at"]), "reason": saved["reason"]} if saved else None)
+        forms = {}
+        progress = view["progress"]
+        year_rows = [{"key": scope, "name": name, "system": fmt(progress[scope]["actual"]), "value": str(values.get(scope, ""))}
+                     for scope, name in (("semester", f"{progress['semester']['label']}"), ("year", f"Akumulasi 1 tahun {progress['year']['year']}"))]
+        noun = f"SQL {view['focus']['product']}" if view.get("focus") else "SQL Value"
+        forms["year"] = pages.achievement_form(
+            "year", f"Pencapaian {noun} {progress['year']['year']} sampai {view['label']}",
+            "Isi bila angka dari Sheet belum lengkap. Kolom yang dikosongkan memakai angka sistem. Angka manual menggantikan angka sistem di kartu progress semester dan tahun. Perubahan tersimpan sebagai riwayat; angka sistem tidak dihapus.",
+            unit_label, year_rows, last)
+        if view.get("hardware") and view.get("month"):
+            hw_values = values.get("hardware") or {}
+            month_rows = [{"key": h["name"], "name": h["name"], "system": fmt(h["month_to_date"]), "value": str(hw_values.get(h["name"], ""))} for h in view["hardware"]]
+            forms["month"] = pages.achievement_form(
+                "month", f"Pencapaian SQL Value {view['month']['label']} sampai {view['label']}",
+                "Isi bila angka dari Sheet belum lengkap. Kolom yang dikosongkan memakai angka sistem. Angka manual menggantikan angka sistem di kartu progress bulan ini dan tabel produk. Perubahan tersimpan sebagai riwayat; angka sistem tidak dihapus.",
+                unit_label, month_rows, last)
+        return saved, {"admin": True, "forms": forms}
+
+    def save_achievements(self, form: dict) -> int:
+        bu, period, scope = form.get("bu", ""), form.get("period", ""), form.get("scope", "")
+        if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        view = report_view.extract_view(report["html"]) if report else None
+        if view is None:
+            raise HttpError(404, "report tidak ditemukan")
+        try:
+            try:
+                raw = json.loads(form.get("values", "{}") or "{}")
+            except ValueError:
+                raise ValueError("Isian tidak terbaca.")
+            parsed = achievements.parse(scope, raw, view)
+            reason = achievements.clean_reason(form.get("reason"))
+            saved = self.cfg.store.latest_achievements(bu, period)
+            merged = achievements.merge(saved, scope, parsed)
+            if merged and not reason:
+                raise ValueError("Isi alasan perubahan sebelum menyimpan.")
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        try:
+            self.cfg.store.add_achievements(bu, period, merged, reason, self.user["username"])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pencapaian tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        self.json(200, {"ok": True})
+        return 200
+
+    def save_actions(self, form: dict) -> int:
+        bu, period = form.get("bu", ""), form.get("period", "")
+        if not BU.fullmatch(bu) or not PERIOD.fullmatch(period):
+            raise HttpError(400, "perusahaan atau period tidak valid")
+        try:
+            report = self.cfg.store.get_report(bu, period)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        if report is None:
+            raise HttpError(404, "report tidak ditemukan")
+        try:
+            items = actions.clean_items(form.get("items", "[]"))
+        except ValueError as exc:
+            raise HttpError(400, str(exc))
+        try:
+            self.cfg.store.add_actions(bu, period, items, self.user["username"])
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Action tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.")
+        self.json(200, {"ok": True})
+        return 200
 
     def save_edit(self, form: dict) -> int:
         bu, period, key = form.get("bu", ""), form.get("period", ""), form.get("key", "")
@@ -621,9 +992,9 @@ class Handler(BaseHTTPRequestHandler):
             raise HttpError(403, "Tidak ada akses. Akun Anda belum diberi akses ke perusahaan ini.")
         today = self.now().date()
 
-        def render(status: int, params, state: str, snapshot=None, points=None, totals=None, matrix=None, option_lists=None) -> int:
+        def render(status: int, params, state: str, snapshot=None, points=None, totals=None, matrix=None, option_lists=None, relations=None) -> int:
             self.send(status, performance_pages.performance_page(names=names, bu=bu, choices=choices, params=params, state=state, snapshot=snapshot, points=points or [], totals=totals,
-                                                                 matrix=matrix, option_lists=option_lists, csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
+                                                                 matrix=matrix, option_lists=option_lists, relations=relations, csrf=csrf, nonce=nonce, me=self.user), nonce=nonce)
             return status
 
         try:
@@ -637,14 +1008,15 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return render(200, params, "lama", snapshot=snapshot)
         option_lists = performance.options(data, params)
+        rel = performance.relations(data)
         if params.error:
-            return render(200, params, "error", snapshot=snapshot, option_lists=option_lists)
+            return render(200, params, "error", snapshot=snapshot, option_lists=option_lists, relations=rel)
         leads = performance.filter_leads(data, params)
         points = performance.series(leads, params)
         if not performance.has_activity(points):
             unfiltered = params.active and performance.has_activity(performance.series(data.leads, params))
-            return render(200, params, "kosong_filter" if unfiltered else "kosong", snapshot=snapshot, option_lists=option_lists)
-        return render(200, params, "ok", snapshot=snapshot, points=points, totals=performance.summary(points), matrix=performance.matrix(leads, params), option_lists=option_lists)
+            return render(200, params, "kosong_filter" if unfiltered else "kosong", snapshot=snapshot, option_lists=option_lists, relations=rel)
+        return render(200, params, "ok", snapshot=snapshot, points=points, totals=performance.summary(points), matrix=performance.matrix(leads, params), option_lists=option_lists, relations=rel)
 
     # ---- budget
     def report_budget(self, report: dict, view: dict) -> dict:
@@ -653,9 +1025,11 @@ class Handler(BaseHTTPRequestHandler):
         try:
             snaps = self.cfg.store.budget_snapshots(bu, budget.months_needed(kind, start))
             result = budget.report_budget(kind, start, report["period_end"], report["period"], snaps)
+            names = sorted(budget.campaigns_of(budget.newest(snaps.get(month, []))), key=str.casefold)
         except Exception:  # noqa: BLE001 - a budget problem must not hide the report
             result = {"state": "gagal", "month_label": budget.month_label(month), "kind": kind}
-        result.update(bu=bu, month=month, admin=access.is_admin(self.user), prev_week_label=view.get("prev_label", ""))
+            names = []
+        result.update(names=names, bu=bu, month=month, admin=access.is_admin(self.user), prev_week_label=view.get("prev_label", ""))
         return result
 
     def budget_months(self) -> list[tuple[str, str]]:
@@ -681,30 +1055,41 @@ class Handler(BaseHTTPRequestHandler):
         today = self.now().date()
         digits = lambda v: "" if v in (None, "") else f"{int(v):,}".replace(",", ".")
         rows: list[dict] = []
+        tracker = list((report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else [])
+        try:  # the Performa snapshot is refreshed on its own, so it can know campaigns the newest report was built before
+            snapshot = store.latest_performance(bu)
+        except Exception:  # noqa: BLE001 - the report's own list is still offered
+            snapshot = None
+        rel = None
+        if snapshot and isinstance(snapshot.get("data"), dict):
+            tracker += [n for n in (snapshot["data"].get("dims") or {}).get("campaign", []) if isinstance(n, str) and n.strip()]
+            try:
+                loaded = performance.load(snapshot)
+                rel = performance.relations(loaded) if loaded else None
+            except Exception:  # noqa: BLE001 - the picker still works, only without the parent filters
+                rel = None
         if posted is not None:
-            index = 0
-            while f"n_{index}" in posted:
-                rows.append({"name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
+            for index in budget.row_indexes(posted):
+                rows.append({"idx": index, "name": " ".join(posted[f"n_{index}"].split()), "budget": posted.get(f"b_{index}", ""), "month": posted.get(f"m_{index}", ""),
                              "weeks": {k: posted.get(f"w_{index}_{k}", "") for k, _, _ in weeks}})
-                index += 1
             total_text, as_of_text = posted.get("total", ""), posted.get("as_of", "")
         else:
             saved = budget.campaigns_of(current)
-            tracker = (report_view.extract_view(html_text) or {}).get("campaign_names", []) if html_text else []
-            merged = {n.casefold(): n for n in tracker}
-            merged.update({n.casefold(): n for n in saved})
-            for key in sorted(merged):
-                name = merged[key]
-                c = saved.get(name, {})
-                rows.append({"name": name, "budget": digits(c.get("budget")), "month": digits(c.get("month_spend")),
+            for index, name in enumerate(sorted(saved, key=str.casefold)):  # only campaigns that already have figures; the rest are added by hand
+                c = saved[name]
+                rows.append({"idx": index, "name": name, "budget": digits(c.get("budget")), "month": digits(c.get("month_spend")),
                              "weeks": {k: digits((c.get("weeks") or {}).get(k)) for k, _, _ in weeks}})
             total_text = digits(current["total_budget"]) if current else ""
             as_of_text = current["spend_as_of"].isoformat() if current and current["spend_as_of"] else ""
+        grouped = performance.nurturing_groups(rel)
+        universe = {n.casefold(): n for n in tracker}
+        universe.update({r["name"].casefold(): r["name"] for r in rows if r["name"]})  # a saved name missing from the tracker can still be added back
+        picker = sorted(universe.values(), key=str.casefold)
         base_id = str(current["snapshot_id"]) if current else ""
         notice = ""
         if query.get("saved"):
             notice = f"Budget dan spend {names[bu]} {budget.month_label(month)} tersimpan."
-        self.send(status, pages.budget_page(bu, names, month, options, rows, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed), nonce=nonce)
+        self.send(status, pages.budget_page(bu, names, month, options, rows, picker, weeks, total_text, as_of_text, base_id, today, errors or {}, history, csrf, nonce, self.user, notice, failed, rel=rel, grouped=grouped), nonce=nonce)
         return status
 
     def safe_names(self) -> dict[str, str]:

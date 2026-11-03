@@ -78,6 +78,31 @@ class ServiceTests(unittest.TestCase):
         self.assertIn(status, (400, 422))
         self.assertEqual(self.call("/v1/unknown", b"{}")[0], 404)
 
+    def test_lead_validity_settings_change_the_numbers_and_the_identity_of_the_run(self):
+        from urllib.parse import quote
+        rows = [{**LEADS[0]}, {**LEADS[0], "Record Key": "9", "No": "9", "Company": "Co9", "Inbound Date": "1/5/2025", "SQL Date": "9/23/2026"}]
+        rows[1]["Proposal Price Quote Date"] = "9/24/2026"
+        plain = self.call("/v1/reports?bu=bu1&period=2026-W39", csv_text(rows))
+        self.assertEqual(plain[0], 200, plain[1])
+        none = json.dumps({"defaults": {"MQL": None, "SQL": None, "Deal Won": None}, "remarks": []})
+        loose = self.call("/v1/reports?bu=bu1&period=2026-W39&validity=" + quote(none), csv_text(rows))
+        self.assertEqual(loose[0], 200, loose[1])
+        self.assertEqual((plain[1]["audit"]["metrics"]["now"]["SQL"], loose[1]["audit"]["metrics"]["now"]["SQL"]), (1, 2))  # profile limit 6 months vs saved "no limit"
+        self.assertNotEqual(plain[1]["source_sha256"], loose[1]["source_sha256"])
+        again = self.call("/v1/reports?bu=bu1&period=2026-W39&validity=" + quote(none), csv_text(rows))
+        self.assertEqual(again[1]["source_sha256"], loose[1]["source_sha256"])  # same input and settings: same identity, so a repeat is skipped as a duplicate
+        perf = self.call("/v1/performa?bu=bu1&validity=" + quote(none), csv_text(rows))
+        self.assertEqual(perf[0], 200, perf[1])
+        self.assertNotEqual(perf[1]["source_sha256"], self.call("/v1/performa?bu=bu1", csv_text(rows))[1]["source_sha256"])
+
+    def test_bad_lead_validity_settings_are_a_400_before_anything_runs(self):
+        from urllib.parse import quote
+        for raw in ("not json", json.dumps({"defaults": {"MQL": 0, "SQL": None, "Deal Won": None}}), json.dumps([]), "x" * 9000):
+            status, body = self.call("/v1/reports?bu=bu1&period=2026-W39&validity=" + quote(raw), csv_text(LEADS))
+            self.assertEqual(status, 400, raw[:20])
+            self.assertIn("validity", body["error"])
+            self.assertEqual(self.call("/v1/performa?bu=bu1&validity=" + quote(raw), csv_text(LEADS))[0], 400)
+
     def test_oversize_body_is_refused_before_reading(self):
         original = server.MAX_BODY_BYTES
         server.MAX_BODY_BYTES = 10

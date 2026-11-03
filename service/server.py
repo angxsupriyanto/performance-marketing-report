@@ -62,7 +62,36 @@ def load_token() -> str:
         raise SystemExit(f"layanan tidak dijalankan tanpa token yang valid: {exc}")
 
 
-def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool) -> dict:
+MAX_VALIDITY_CHARS = 8000
+
+
+def source_digest(csv_bytes: bytes, validity: str) -> str:
+    """The identity of a run's input. The lead-validity settings are part of it: the same Sheet with other settings gives other numbers,
+    and a run with the same identity is skipped as a duplicate."""
+    digest = hashlib.sha256(csv_bytes)
+    if validity:
+        digest.update(b"\nvalidity:" + json.dumps(generate_report.normalize_validity(json.loads(validity)), sort_keys=True).encode())
+    return digest.hexdigest()
+
+
+def validity_file(tmp: str, raw: str) -> list[str]:
+    """Writes the lead-validity settings the caller passed (JSON in a query parameter) next to the table and returns the generator option for it.
+    The generator checks the content again; here only the size and that it is JSON are checked, so a bad value is a 400 and not a failed run."""
+    if not raw:
+        return []
+    if len(raw) > MAX_VALIDITY_CHARS:
+        raise HttpError(400, "parameter validity terlalu besar")
+    try:
+        config = json.loads(raw)
+        generate_report.normalize_validity(config)
+    except ValueError as exc:
+        raise HttpError(400, f"parameter validity tidak valid: {exc}")
+    path = Path(tmp) / "validity.json"
+    path.write_text(json.dumps(config), encoding="utf-8")
+    return ["--validity", str(path)]
+
+
+def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool, validity: str = "") -> dict:
     if not PROFILE_NAME.fullmatch(bu):
         raise HttpError(400, "parameter bu tidak valid")
     if not PERIOD.fullmatch(period):
@@ -75,7 +104,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
         table = Path(tmp) / "table.csv"
         output = Path(tmp) / "report.html"
         table.write_bytes(csv_bytes)
-        command = [sys.executable, str(ROOT / "generate_report.py"), "--table", str(table), "--bu", bu, "--period", period, "--output", str(output)]
+        command = [sys.executable, str(ROOT / "generate_report.py"), "--table", str(table), "--bu", bu, "--period", period, "--output", str(output), *validity_file(tmp, validity)]
         if allow_duplicate_keys:
             command.append("--allow-duplicate-keys")
         try:
@@ -95,7 +124,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
         "period_kind": audit["period_kind"],
         "period_start": audit["period_start"],
         "period_end": audit["period_end"],
-        "source_sha256": hashlib.sha256(csv_bytes).hexdigest(),
+        "source_sha256": source_digest(csv_bytes, validity),
         "generator_version": GENERATOR_VERSION,
         "html": html,
         "audit": audit,
@@ -105,7 +134,7 @@ def generate(csv_bytes: bytes, bu: str, period: str, allow_duplicate_keys: bool)
     }
 
 
-def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool) -> dict:
+def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool, validity: str = "") -> dict:
     """Anonymous per-lead rows for the Performa page (stage dates, values, filter values). The CSV itself is never stored."""
     if not PROFILE_NAME.fullmatch(bu):
         raise HttpError(400, "parameter bu tidak valid")
@@ -116,7 +145,7 @@ def performance(csv_bytes: bytes, bu: str, allow_duplicate_keys: bool) -> dict:
     with tempfile.TemporaryDirectory(prefix="performa-") as tmp:
         table, output = Path(tmp) / "table.csv", Path(tmp) / "performa.json"
         table.write_bytes(csv_bytes)
-        command = [sys.executable, str(ROOT / "generate_report.py"), "--table", str(table), "--bu", bu, "--performa-json", str(output)]
+        command = [sys.executable, str(ROOT / "generate_report.py"), "--table", str(table), "--bu", bu, "--performa-json", str(output), *validity_file(tmp, validity)]
         if allow_duplicate_keys:
             command.append("--allow-duplicate-keys")
         try:
@@ -195,9 +224,9 @@ class Handler(BaseHTTPRequestHandler):
                         query = parse_qs(url.query)
                         one = lambda key: (query.get(key) or [""])[0]
                         if url.path == "/v1/reports":
-                            result = generate(body, one("bu").lower(), one("period"), one("allow_duplicate_keys") == "true")
+                            result = generate(body, one("bu").lower(), one("period"), one("allow_duplicate_keys") == "true", one("validity"))
                         else:
-                            result = performance(body, one("bu").lower(), one("allow_duplicate_keys") == "true")
+                            result = performance(body, one("bu").lower(), one("allow_duplicate_keys") == "true", one("validity"))
                     else:
                         result = apply(body)
                 status = 200

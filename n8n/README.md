@@ -6,7 +6,7 @@ Tiga workflow siap impor (n8n 2.x). Semuanya **dihasilkan** oleh `n8n/build_work
 |---|---|
 | `Report_Generate_v1` | Membaca tab *NEW Customers List*, mengirim hanya kolom yang dibutuhkan ke layanan laporan, menyimpan hasilnya ke PostgreSQL, lalu mengirim ringkasan agregat ke Telegram. |
 | `Report_Analysis_Button_v1` | Membaca run terbaru untuk BU dan periode yang dipilih, mengirim **hanya `facts` agregat** ke model (bawaan: combo `pesankopi-report` di 9router), memvalidasi JSON balasan, menyisipkannya ke laporan, dan menyimpan hasilnya. |
-| `Performa_Generate_v1` | Membaca tab *NEW Customers List*, meminta `report-service` menghitung agregat per hari dan cohort, dan menyimpannya sebagai snapshot untuk halaman Performa. Manual saja, tanpa webhook dan tanpa Telegram. Lihat `deploy/VIEWER.md`. |
+| `Performa_Generate_v1` | Membaca tab *NEW Customers List*, meminta `report-service` menghitung agregat per hari dan cohort, dan menyimpannya sebagai snapshot untuk halaman Performa. Dijalankan manual dari editor atau lewat `POST /webhook/performa-generate` (tombol *Perbarui data* di viewer); tanpa jadwal dan tanpa Telegram. Lihat `deploy/VIEWER.md`. |
 
 **Tidak ada penjadwalan.** Semua dijalankan manual, dan periode selalu disebut eksplisit (tidak ada tebakan "minggu lalu"). Dua cara memicu `Generate` dan `Analysis`:
 
@@ -34,8 +34,8 @@ Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `
    | Read Tracker | Google Sheets OAuth2, cukup scope read-only |
    | Generate Report, Apply Analysis | Header Auth: `Authorization` = `Bearer <isi report_service_token.txt>` |
    | Ask Model | Header Auth: `Authorization` = `Bearer <API key 9router>` (untuk `PROVIDER = 'openai'`, bawaan). Untuk `PROVIDER = 'anthropic'`: `x-api-key` = kunci API Anthropic |
-   | Save Run, Save Analysis, Load Latest Run, Save Snapshot | Postgres sebagai `report_writer` |
-   | Webhook Generate, Webhook Analysis | Header Auth (token pemanggil) |
+   | Save Run, Save Analysis, Load Latest Run, Save Snapshot, Read Validity, Report Job Result | Postgres sebagai `report_writer` |
+   | Webhook Generate, Webhook Analysis, Webhook Performa | Header Auth (token pemanggil; boleh sama dengan yang dipakai viewer) |
    | Notify, Notify Error | Telegram |
 
 4. **Isi placeholder** (ada di JSON sebagai teks `<...>`): `<SPREADSHEET_ID>` dan `<TELEGRAM_CHAT_ID>` pada node terkait, `<BU>` dan `<PERIOD>` pada node *Manual Parameters* setiap kali menjalankan manual. Model tidak lagi berupa placeholder: node *Prepare Analysis Request* memakai `PROVIDER = 'openai'` ke `https://9router.pesankopi.com/v1/chat/completions` dengan model (combo) `pesankopi-report`. Untuk memakai alamat internal Docker router, ubah `url` di baris `openai`; untuk kembali ke Claude, ubah `PROVIDER` menjadi `'anthropic'` dan pasang credential `x-api-key`.
@@ -70,6 +70,8 @@ Daftar SQL dan Deal Won memuat **nama perusahaan** dan nilainya. Dokumen platfor
 ## Memperbaiki satu node tanpa impor ulang
 
 Impor ulang membuat workflow baru dan membuat Anda memilih ulang credential dan mengisi placeholder lagi. Untuk perbaikan kode, cukup ganti isi satu Code node: buka node, hapus isinya, lalu tempel isi berkas yang sesuai di `n8n/workflows/code/` (mis. `Report_Generate_v1__Build_CSV.js`). Berkas itu sudah terender (daftar kolom dan prompt sudah terisi), dibuat oleh `build_workflows.py`, dan diuji agar selalu sama dengan isi JSON. Bila Anda mengubah `PROVIDER`, URL, atau model di node `Prepare Analysis Request`, ulangi perubahan itu setelah menempel.
+
+**Pembaruan analisis (prompt `analysis_v2`: action, budget, panel Next Action, catatan KPI, angka juta dan miliar):** di `Report_Analysis_Button_v1` ganti isi tiga Code node dengan berkas di `n8n/workflows/code/`: `Validate Request` (`Report_Analysis_Button_v1__Validate_Request.js`), `Prepare Analysis Request` (`..._Prepare_Analysis_Request.js`), dan `Parse Analysis` (`..._Parse_Analysis.js`). Lalu buka node HTTP `Apply Analysis` dan ganti **JSON Body** dengan nilai `jsonBody` node itu di `Report_Analysis_Button_v1.json` (ia menyaring kunci supaya `next_action` tidak dikirim ke halaman tersimpan yang belum punya slotnya). Alamat router di node `Prepare Analysis Request` dipasang lagi bila Anda pernah mengubahnya. Tidak perlu mengimpor ulang workflow atau memilih ulang credential. Panel **Next Action** terisi juga untuk report lama: ia disimpan bersama analisis dan ditampilkan viewer, jadi Report Generate tidak perlu dijalankan lagi.
 
 Sheets API tidak mengirim sel kosong, jadi `Build CSV` menganggap suatu kolom hilang hanya bila **tidak ada satu baris pun** yang memilikinya. Kolom yang kosong di seluruh sheet tidak bisa dibedakan dari kolom yang tidak ada, dan akan dilaporkan sebagai hilang.
 

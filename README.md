@@ -1,5 +1,7 @@
 # Performance Marketing Dashboard (weekly & monthly, per BU)
 
+> **Baru di proyek ini?** Mulai dari [`CLAUDE.md`](CLAUDE.md) (orientasi satu halaman dan aturan kerja), lalu [`docs/README.md`](docs/README.md) (arsitektur, keputusan, model data, runbook, celah yang diketahui, dan roadmap). Dokumen ini menjelaskan generator dan prosedur CLI; sisanya ada di `docs/`.
+
 Template HTML 960 px dan generator laporan mingguan atau bulanan per BU. Profil yang tersedia: **BU1** dan **BU2** (lihat `profiles/`). Proses angka **deterministik**: empat CSV Campaign Tracker masuk, minggu ISO ditentukan secara eksplisit, dan satu HTML mandiri serta berkas audit dihasilkan. Script tidak memakai AI, tidak mencari data di internet, dan tidak menulis analisis deskriptif.
 
 Repo ini hanya berisi **template kosong, kode, aturan, dan contoh JSON analisis kosong**. Repo GitHub saat ini bersifat publik. Jangan commit CSV lead, HTML laporan terisi, audit run, atau JSON analisis berisi informasi internal. `.gitignore` mengecualikan berkas tersebut secara default.

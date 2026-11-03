@@ -72,6 +72,16 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/007_performance.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/008_performance_lead_rows.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/009_report_actions.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/013_process_runs.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/013_process_runs.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -232,7 +242,7 @@ class DatabaseTests(unittest.TestCase):
         from test_table_mode import LEADS
         flow = test_n8n.load("Report_Generate_v1.json")
         csv_items = test_n8n.run_code(test_n8n.node(flow, "Build CSV")["parameters"]["jsCode"], test_n8n.sheet_rows(LEADS),
-                                      {"Normalize Plan": {"items": [{"plans": [{"bu": "bu2", "period": "2026-W39"}]}], "executed": True}})["result"]
+                                      {"Normalize Plan": {"items": [{"plans": [{"bu": "bu2", "period": "2026-W39"}]}], "executed": True}, "Read Validity": {"items": [{"validity": {}}], "executed": True}})["result"]
         report = server.generate(csv_items[0]["json"]["csv"].encode(), "bu2", "2026-W39", False)
         prepared = test_n8n.run_code(test_n8n.node(flow, "Prepare Insert")["parameters"]["jsCode"], [report])["result"]
         params = {f"p{i}": v for i, v in enumerate(prepared[0]["json"]["params"], 1)}
@@ -361,6 +371,135 @@ class DatabaseTests(unittest.TestCase):
             self.assertEqual(conn.execute("SELECT count(*) FROM reports.budget_snapshots").fetchone()[0], 2)
             with self.assertRaises(pe.InsufficientPrivilege):
                 conn.execute("INSERT INTO reports.budget_snapshots (bu, month, data, saved_by) VALUES ('bu1', '2026-10', '{\"campaigns\": {}}', 'x')")
+
+    def test_report_actions_are_append_only_per_period_and_the_newest_list_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_actions("bu1", "2026-W42"))
+        store.add_actions("bu1", "2026-W42", [{"action": "Naikkan bid", "campaign": "Camp A", "note": ""}], "admin")
+        store.add_actions("bu1", "2026-W42", [{"action": "Ganti materi", "campaign": "", "note": "mulai Selasa"}, {"action": "Pause iklan lama", "campaign": "Camp B", "note": ""}], "andi")
+        latest = store.latest_actions("bu1", "2026-W42")
+        self.assertEqual([i["action"] for i in latest["items"]], ["Ganti materi", "Pause iklan lama"])
+        self.assertEqual(latest["saved_by"], "andi")
+        store.add_actions("bu1", "2026-W42", [], "admin")  # removing everything is a save too
+        self.assertEqual(store.latest_actions("bu1", "2026-W42")["items"], [])
+        self.assertIsNone(store.latest_actions("bu2", "2026-W42"))
+        self.assertIsNone(store.latest_actions("bu1", "2026-W41"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_actions").fetchone()[0], 3)  # every version kept
+            for statement in ("UPDATE reports.report_actions SET saved_by = 'x'", "DELETE FROM reports.report_actions", "TRUNCATE reports.report_actions"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_actions").fetchone()[0], 3)
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES ('bu1', '2026-W42', '[]', 'x')")
+        for bad in (("bu1", "2026-W99x", []), ("BU 1", "2026-W42", []), ("bu1", "2026-W42", {"action": "x"}), ("bu1", "2026-W42", [{"action": "x", "campaign": "", "note": ""}] * 31)):
+            with self.assertRaises(pe.CheckViolation):
+                store.add_actions(bad[0], bad[1], bad[2], "admin")
+
+    def test_analysis_notes_are_append_only_per_period_and_the_newest_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_analysis_note("bu1", "2026-W42"))
+        store.add_analysis_note("bu1", "2026-W42", "Promo Dashcam", "admin")
+        store.add_analysis_note("bu1", "2026-W42", "Promo Dashcam\nMeta dikurangi", "andi")
+        store.add_analysis_note("bu1", "2026-W42", "", "admin")  # clearing is a save
+        self.assertEqual(store.latest_analysis_note("bu1", "2026-W42")["note"], "")
+        self.assertIsNone(store.latest_analysis_note("bu2", "2026-W42"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.analysis_notes").fetchone()[0], 3)
+            for statement in ("UPDATE reports.analysis_notes SET saved_by = 'x'", "DELETE FROM reports.analysis_notes", "TRUNCATE reports.analysis_notes"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.analysis_notes (bu, period, note, saved_by) VALUES ('bu1', '2026-W42', 'x', 'x')")
+        for bad in (("bu1", "2026-W99x", "x"), ("BU 1", "2026-W42", "x"), ("bu1", "2026-W42", "x" * 1001)):
+            with self.assertRaises(pe.CheckViolation):
+                store.add_analysis_note(bad[0], bad[1], bad[2], "admin")
+
+    def test_report_achievements_are_append_only_per_report_need_a_reason_and_the_newest_set_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_achievements("bu1", "2026-W42"))
+        store.add_achievements("bu1", "2026-W42", {"hardware": {"Dashcam": 120000000}, "semester": 5000000000}, "Deal belum masuk Sheet", "admin")
+        store.add_achievements("bu1", "2026-W42", {"year": 9000000000}, "Koreksi akumulasi", "andi")
+        latest = store.latest_achievements("bu1", "2026-W42")
+        self.assertEqual((latest["values"], latest["reason"], latest["saved_by"]), ({"year": 9000000000}, "Koreksi akumulasi", "andi"))
+        store.add_achievements("bu1", "2026-W42", {}, "", "admin")  # resetting everything needs no reason
+        self.assertEqual(store.latest_achievements("bu1", "2026-W42")["values"], {})
+        self.assertIsNone(store.latest_achievements("bu1", "2026-W41"))
+        self.assertIsNone(store.latest_achievements("bu2", "2026-W42"))
+        with self.viewer() as conn:
+            self.assertEqual(conn.execute("SELECT count(*) FROM reports.report_achievements").fetchone()[0], 3)
+            for statement in ("UPDATE reports.report_achievements SET saved_by = 'x'", "DELETE FROM reports.report_achievements", "TRUNCATE reports.report_achievements"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        with self.writer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.report_achievements (bu, period, values, reason, saved_by) VALUES ('bu1', '2026-W42', '{}', '', 'x')")
+        for bad in (("bu1", "2026-W99x", {}, ""), ("BU 1", "2026-W42", {}, ""), ("bu1", "2026-W42", [], ""), ("bu1", "2026-W42", {"year": 1}, "  "), ("bu1", "2026-W42", {}, "x" * 301)):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_achievements(bad[0], bad[1], bad[2], bad[3], "admin")
+
+    def test_lead_validity_settings_are_append_only_per_company_read_by_n8n_and_the_newest_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_validity("bu1"))
+        first = {"defaults": {"MQL": None, "SQL": 6, "Deal Won": None}, "remarks": []}
+        second = {"defaults": {"MQL": None, "SQL": 6, "Deal Won": None}, "remarks": [{"remark": "Trial", "MQL": "default", "SQL": 12, "Deal Won": None}]}
+        store.add_validity("bu1", first, "admin")
+        store.add_validity("bu1", second, "andi")
+        store.add_validity("bu2", first, "admin")
+        self.assertEqual((store.latest_validity("bu1")["config"], store.latest_validity("bu1")["saved_by"]), (second, "andi"))
+        self.assertEqual([h["saved_by"] for h in store.validity_history("bu1")], ["andi", "admin"])
+        with self.writer() as conn:  # n8n reads the newest setting per company with the writer role
+            rows = conn.execute("SELECT DISTINCT ON (bu) bu, config FROM reports.lead_validity_settings ORDER BY bu, saved_at DESC").fetchall()
+            self.assertEqual({bu: cfg for bu, cfg in rows}, {"bu1": second, "bu2": first})
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.lead_validity_settings (bu, config, saved_by) VALUES ('bu1', '{\"defaults\": {}}', 'x')")
+        with self.viewer() as conn:
+            for statement in ("UPDATE reports.lead_validity_settings SET saved_by = 'x'", "DELETE FROM reports.lead_validity_settings", "TRUNCATE reports.lead_validity_settings"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in (("BU 1", first), ("bu1", []), ("bu1", {"defaults": []}), ("bu1", {"defaults": {}, "remarks": {}}), ("bu1", {"defaults": {}, "remarks": [{}] * 31})):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_validity(bad[0], bad[1], "admin")
+
+    def test_process_requests_come_from_the_viewer_and_results_from_n8n_and_neither_can_change(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        first = store.add_process_request("report", "all", "2026-W44", "admin")
+        second = store.add_process_request("performa", "bu1", "", "andi")
+        with self.writer() as conn:  # what n8n runs after a company's run ends
+            sql_text = "insert_job_result.sql"
+            stored = conn.execute(sql(sql_text), {"p1": first, "p2": "bu1", "p3": True, "p4": "Report 2026-W44 selesai"}).fetchall()
+            self.assertEqual(len(stored), 1)
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": first, "p2": "bu1", "p3": False, "p4": "again"}).fetchall(), [])  # one result per company and job
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": "", "p2": "bu1", "p3": True, "p4": "editor run"}).fetchall(), [])  # an editor run has no job id
+            self.assertEqual(conn.execute(sql(sql_text), {"p1": "00000000-0000-4000-8000-000000000000", "p2": "bu1", "p3": True, "p4": "unknown job"}).fetchall(), [])
+            conn.execute(sql(sql_text), {"p1": first, "p2": "bu2", "p3": False, "p4": "x" * 900})  # long text is cut to 500
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.process_requests (kind, bu, period, requested_by) VALUES ('report', 'bu1', '2026-W44', 'x')")
+        jobs = {j["job_id"]: j for j in store.recent_processes()}
+        self.assertEqual({r["bu"]: (r["ok"], len(r["message"])) for r in jobs[first]["results"]}, {"bu1": (True, 23), "bu2": (False, 500)})
+        self.assertEqual(jobs[second]["results"], [])
+        self.assertEqual([j["kind"] for j in store.recent_processes(kind="performa")], ["performa"])
+        self.assertEqual(len(store.recent_processes(limit=1)), 1)
+        with self.viewer() as conn:
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.process_results (job_id, bu, ok) VALUES (%s, 'bu1', true)", (second,))
+            for statement in ("UPDATE reports.process_requests SET requested_by = 'x'", "DELETE FROM reports.process_requests", "TRUNCATE reports.process_requests", "DELETE FROM reports.process_results"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in (("x", "bu1", "2026-W44"), ("report", "BU 1", "2026-W44"), ("report", "bu1", ""), ("performa", "bu1", "2026-W44"), ("report", "bu1", "2026-W99x")):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_process_request(bad[0], bad[1], bad[2], "admin")
+
+    def test_remark_values_come_from_the_newest_run_that_recorded_them(self):
+        store = self.viewer_store()
+        self.assertEqual(store.latest_remark_values("bu1"), [])
 
     def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
         import psycopg.errors as pe

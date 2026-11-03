@@ -7,6 +7,9 @@ from html import escape
 
 from bs4 import BeautifulSoup
 
+from viewer import cascade, theme
+from viewer.performance import EMPTY_LABEL
+
 WIB = timezone(timedelta(hours=7))
 MONTHS = ("Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des")
 TITLE = "Digital Marketing Report"
@@ -18,10 +21,17 @@ BASE_CSS = """
 body{margin:0;background:#f4f7fb;color:#394d65;font:14px/1.5 Inter,Arial,sans-serif}
 a{color:#2159a9}a:hover{color:#17283e}
 a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid #2159a9;outline-offset:2px}
-.vw-top{background:#fff;border-bottom:1px solid #dfe7f0;padding:0 32px;height:56px;display:flex;align-items:center;justify-content:space-between}
+.vw-top{background:#fff;border-bottom:1px solid #dfe7f0;padding:0 32px;min-height:56px;display:flex;align-items:center;justify-content:space-between}
 .vw-brand{font-weight:600;color:#17283e}
-.vw-menu{display:flex;align-items:center;gap:24px}
-.vw-menu a,.vw-link{display:inline-flex;align-items:center;min-height:44px}
+.vw-menu{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:0 16px;flex:1;margin-left:16px}
+.vw-menu-main,.vw-menu-user{display:flex;flex-wrap:wrap;align-items:center;gap:0 14px}
+.vw-mn,.vw-menu-user span,.vw-menu button{white-space:nowrap}
+.vw-mn{display:inline-flex;align-items:center;min-height:44px;padding:0 2px;box-sizing:border-box;border-bottom:2px solid transparent;text-decoration:none}
+.vw-mn:hover{color:#17283e}
+.vw-mn[aria-current=page]{color:#17283e;font-weight:600;border-bottom-color:#2159a9}
+.vw-sep{width:1px;height:20px;background:#dfe7f0}
+.vw-menu-user form{display:flex;margin:0}
+.vw-link{display:inline-flex;align-items:center;min-height:44px}
 .vw-menu button{background:none;border:0;padding:0;color:#2159a9;font:inherit;cursor:pointer;min-height:44px}
 .vw-menu button:hover{color:#17283e}
 .vw-main{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 64px}
@@ -89,19 +99,23 @@ ROLE_TEXT = {"admin": "Admin", "user": "Pengguna"}
 
 
 def menu(csrf: str, user: dict | None, current: str = "") -> str:
+    """Daftar report and Performa for everyone, then admin-only groups (budget and targets, users and company names), as in the mockup."""
     def link(key: str, href: str, text: str) -> str:
-        here = ' aria-current="page" style="color:#17283e;font-weight:600"' if current == key else ""
-        return f'<a href="{href}"{here}>{text}</a>'
+        here = ' aria-current="page"' if current == key else ""
+        return f'<a class="vw-mn" href="{href}"{here}>{text}</a>'
 
-    links = ""
+    sep = '<span class="vw-sep" aria-hidden="true"></span>'
+    main = ""
+    who = ""
     if user is not None:
-        links = link("performa", "/performa", "Performa")
+        main = link("daftar", "/", "Daftar report") + link("performa", "/performa", "Performa")
         if user["role"] == "admin":
-            links += (link("users", "/users", "Pengguna") + link("targets", "/targets", "Pengaturan target") + link("budget", "/budget", "Budget")
-                      + link("companies", "/companies", "Nama perusahaan"))
+            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target") + link("validity", "/validity", "Masa berlaku lead") + link("refresh", "/refresh", "Perbarui data")
+                     + sep + link("users", "/users", "Pengguna") + link("companies", "/companies", "Nama perusahaan"))
+        who = f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>{sep}'
     return (
-        f'<nav class="vw-menu" aria-label="Menu">{f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>' if user is not None else ""}{links}'
-        f'<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></nav>'
+        f'<nav class="vw-menu" aria-label="Menu"><div class="vw-menu-main">{main}</div>'
+        f'<div class="vw-menu-user">{theme.switch_html()}{who}<form method="post" action="/logout"><input type="hidden" name="csrf" value="{escape(csrf)}"><button type="submit">Keluar</button></form></div></nav>'
     )
 
 
@@ -152,7 +166,7 @@ def report_list(rows: list[dict], csrf: str, nonce: str, user: dict | None, name
     body = (
         f'<main class="vw-main"><h1 class="vw-h1">Daftar report</h1><p class="vw-lead">Dibuat dari tab NEW Customers List lewat n8n. Yang terbaru di atas.</p>{content}</main>'
     )
-    return page("Daftar report", body, nonce, csrf, menu(csrf, user))
+    return page("Daftar report", body, nonce, csrf, menu(csrf, user, "daftar"))
 
 
 ANALYSIS_CSS = """
@@ -160,6 +174,39 @@ ANALYSIS_CSS = """
 .vw-chrome{width:100%;max-width:1040px;margin:0 auto;padding:24px 32px 0}
 .vw-chrome *{box-sizing:border-box}
 .vw-chrome a{color:#2159a9}
+.vw-arow{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) minmax(0,2fr) 72px;gap:8px;align-items:center;margin-bottom:8px}
+.vw-arow-head{color:#607188}
+.vw-in{width:100%;height:44px;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif}
+.vw-linkbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}
+.vw-trow{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(0,1.2fr) minmax(0,1.4fr) 72px;gap:8px;align-items:center;margin-bottom:8px}
+@media (max-width:760px){.vw-arow{grid-template-columns:1fr}.vw-arow-head{display:none}.vw-trow{grid-template-columns:1fr}}
+"""
+
+MANUAL_JS = """
+(function(){
+  var box=document.getElementById('vw-analysis'),meta=document.querySelector('meta[name=csrf]');if(!box||!meta)return;
+  function formOf(el){return el.closest('[data-manual-form]');}
+  document.addEventListener('click',function(ev){
+    var open=ev.target.closest('[data-manual-open]');
+    if(open){var f=document.getElementById('manual-'+open.dataset.manualOpen);f.hidden=!f.hidden;open.setAttribute('aria-expanded',String(!f.hidden));
+      if(!f.hidden){var first=f.querySelector('input');if(first)first.focus();}return;}
+    var cancel=ev.target.closest('[data-manual-cancel]');
+    if(cancel){var form=formOf(cancel);form.hidden=true;var b=document.querySelector('[data-manual-open='+form.dataset.manualForm+']');if(b){b.setAttribute('aria-expanded','false');b.focus();}return;}
+    var reset=ev.target.closest('[data-manual-reset]');
+    if(reset){var inp=reset.closest('[data-row]').querySelector('input');inp.value='';inp.focus();return;}
+    var save=ev.target.closest('[data-manual-save]');
+    if(save){
+      var form=formOf(save),err=form.querySelector('[data-role=manual-error]'),values={};
+      form.querySelectorAll('[data-row] input[data-key]').forEach(function(i){values[i.dataset.key]=i.value;});
+      save.disabled=true;err.hidden=true;
+      fetch('/api/achievements',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json','X-CSRF-Token':meta.content},
+        body:JSON.stringify({bu:box.dataset.bu,period:box.dataset.period,scope:form.dataset.manualForm,values:JSON.stringify(values),reason:form.querySelector('[data-role=manual-reason]').value})})
+        .then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});})
+        .then(function(res){if(res.ok){location.reload();return;}save.disabled=false;err.textContent=res.body.error||'Tidak tersimpan.';err.hidden=false;})
+        .catch(function(){save.disabled=false;err.textContent='Tidak bisa menghubungi server. Coba lagi.';err.hidden=false;});
+    }
+  });
+})();
 """
 
 ANALYSIS_JS = """
@@ -168,7 +215,9 @@ ANALYSIS_JS = """
   var csrf=document.querySelector('meta[name=csrf]').content;
   var bu=box.dataset.bu,period=box.dataset.period,timer=null;
   var title=box.querySelector('[data-role=title]'),text=box.querySelector('[data-role=text]'),btn=box.querySelector('button');
-  var confirmBox=document.getElementById('vw-confirm');
+  var form=document.getElementById('vw-form'),mode='generate';
+  var infoBox=document.getElementById('vw-info'),infoCount=document.getElementById('vw-info-count');
+  if(infoBox&&infoCount)infoBox.addEventListener('input',function(){infoCount.textContent=infoBox.value.length+' / 1000 karakter';});
   function show(kind,head,body,color){title.textContent=head;title.style.color=color||'#17283e';text.textContent=body;
     box.setAttribute('role',kind==='error'?'alert':'status');}
   function post(url,payload){
@@ -184,24 +233,64 @@ ANALYSIS_JS = """
         show('error','Analisis gagal',s.error||'Analisis tidak selesai. Report numerik tidak berubah.','#ac3d3d');
       }).catch(function(){timer=setTimeout(poll,8000);});
   }
-  function start(){
-    if(confirmBox)confirmBox.hidden=true;
+  function start(items,info){
+    if(form)form.hidden=true;
     btn.disabled=true;btn.textContent='Menganalisis';
     show('status','Menganalisis','Mengirim ringkasan angka ke Claude dan menyisipkan hasilnya ke report. Jangan tutup halaman ini.');
-    post('/api/analysis',{bu:bu,period:period}).then(function(res){
+    post('/api/analysis',{bu:bu,period:period,items:JSON.stringify(items),info:info}).then(function(res){
         if(!res.ok){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal',res.body.error||'Permintaan ditolak.','#ac3d3d');return;}
         poll();
       }).catch(function(){btn.disabled=false;btn.textContent='Coba lagi';show('error','Analisis gagal','Tidak bisa menghubungi server. Coba lagi.','#ac3d3d');});
   }
-  if(btn){
-    btn.addEventListener('click',function(){
-      if(confirmBox&&Number(box.dataset.edited)>0){confirmBox.hidden=false;confirmBox.querySelector('button').focus();return;}
-      start();
+  /* the report as a PDF: fetched in the page so that a wait and a failure can be shown, then saved from memory */
+  var pdfBtn=document.getElementById('vw-pdf'),pdfMsg=document.getElementById('vw-pdf-msg');
+  if(pdfBtn){pdfBtn.addEventListener('click',function(){
+    pdfMsg.hidden=true;pdfBtn.disabled=true;pdfBtn.textContent='Membuat PDF...';
+    function done(){pdfBtn.disabled=false;pdfBtn.textContent='Simpan sebagai PDF';}
+    function fail(m){done();pdfMsg.textContent=m;pdfMsg.hidden=false;}
+    fetch(pdfBtn.dataset.href,{credentials:'same-origin'}).then(function(r){
+      if(!r.ok){return r.json().catch(function(){return {};}).then(function(j){fail(j.error||(r.status===403?'Tidak ada akses ke report ini.':'PDF tidak berhasil dibuat. Coba lagi.'));});}
+      var name=((r.headers.get('Content-Disposition')||'').match(/filename="([^"]+)"/)||[])[1]||'report.pdf';
+      return r.blob().then(function(b){var url=URL.createObjectURL(b),a=document.createElement('a');a.href=url;a.download=name;document.body.appendChild(a);a.click();a.remove();
+        setTimeout(function(){URL.revokeObjectURL(url);},4000);done();});
+    }).catch(function(){fail('Tidak bisa menghubungi server. Coba lagi.');});
+  });}
+  /* the list of actions: one form for both "create analysis" and "change actions" */
+  var rowsBox=form?form.querySelector('[data-role=rows]'):null,tpl=document.getElementById('vw-row-tpl'),formError=form?form.querySelector('[data-role=form-error]'):null;
+  function renumber(){rowsBox.querySelectorAll('[data-row]').forEach(function(r,i){var n=i+1;
+    r.querySelector('input[data-f=action]').setAttribute('aria-label','Action '+n);r.querySelector('select').setAttribute('aria-label','Campaign untuk action '+n);
+    r.querySelector('input[data-f=note]').setAttribute('aria-label','Catatan untuk action '+n);r.querySelector('[data-act=row-remove]').setAttribute('aria-label','Hapus action '+n);});}
+  function addRow(){rowsBox.appendChild(tpl.content.cloneNode(true));renumber();}
+  function items(){return [].slice.call(rowsBox.querySelectorAll('[data-row]')).map(function(r){return {action:r.querySelector('input[data-f=action]').value,campaign:r.querySelector('select').value,note:r.querySelector('input[data-f=note]').value};});}
+  function openForm(kind){
+    mode=kind;formError.hidden=true;
+    form.querySelector('[data-act=form-submit]').textContent=kind==='edit'?'Simpan action':(box.dataset.state==='done'?'Buat ulang analisis':'Buat analisis');
+    form.querySelector('[data-role=warn]').hidden=!(kind==='generate'&&Number(box.dataset.edited)>0);
+    var iw=form.querySelector('[data-role=info-wrap]');if(iw)iw.hidden=kind!=='generate';
+    if(!rowsBox.querySelector('[data-row]'))addRow();
+    form.hidden=false;form.querySelector('input[data-f=action]').focus();
+    if(kind==='edit')form.scrollIntoView({block:'center'});
+  }
+  function closeForm(){form.hidden=true;}
+  if(form){
+    form.addEventListener('click',function(ev){
+      var el=ev.target.closest('[data-act]');if(!el)return;var act=el.dataset.act;
+      if(act==='row-add'){addRow();rowsBox.lastElementChild.querySelector('input').focus();return;}
+      if(act==='row-remove'){var row=el.closest('[data-row]');row.remove();if(!rowsBox.querySelector('[data-row]'))addRow();renumber();return;}
+      if(act==='form-cancel'){closeForm();if(btn)btn.focus();return;}
+      if(act==='form-submit'){
+        if(mode==='generate'){var inf=document.getElementById('vw-info');start(items(),inf?inf.value:'');return;}
+        el.disabled=true;
+        post('/api/actions',{bu:bu,period:period,items:JSON.stringify(items())}).then(function(res){
+          if(res.ok){location.reload();return;}
+          el.disabled=false;formError.textContent=res.body.error||'Tidak tersimpan.';formError.hidden=false;
+        }).catch(function(){el.disabled=false;formError.textContent='Tidak bisa menghubungi server. Coba lagi.';formError.hidden=false;});
+      }
     });
-    if(confirmBox){
-      confirmBox.querySelector('[data-act=continue]').addEventListener('click',start);
-      confirmBox.querySelector('[data-act=abort]').addEventListener('click',function(){confirmBox.hidden=true;btn.focus();});
-    }
+    document.addEventListener('click',function(ev){if(ev.target.closest('[data-act=actions-open]'))openForm('edit');});
+  }
+  if(btn){
+    btn.addEventListener('click',function(){if(form)openForm('generate');else start([],'');});
     if(box.dataset.state==='running'){btn.disabled=true;btn.textContent='Menganalisis';poll();}
   }
   function parts(el){var panel=el.closest('[data-panel]');return {panel:panel,key:el.dataset.key,
@@ -232,7 +321,68 @@ def analysis_state(has_analysis: bool, job: dict | None) -> str:
     return "done" if has_analysis else "none"
 
 
-def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0) -> str:
+def action_form(label: str, items: list[dict], campaigns: list[str], budget_note: str, extra_note: str = "") -> str:
+    """The admin-only form for the actions of the period; the viewer's script opens it from the analysis button or from the Action section.
+    campaigns: the rows saved in Budget for the report's month, so the list is short and matches what the analysis is given as spend."""
+    names = list(dict.fromkeys(c for c in campaigns if c))
+    for item in items:
+        if item.get("campaign") and item["campaign"] not in names:
+            names.append(item["campaign"])  # a saved name that is no longer in Budget must not silently vanish from its row
+
+    def row(item: dict) -> str:
+        options = '<option value="">Tidak spesifik</option>' + "".join(f'<option value="{escape(c)}"{" selected" if c == item.get("campaign") else ""}>{escape(c)}</option>' for c in names)
+        return (f'<div class="vw-arow" data-row><input class="vw-in" data-f="action" type="text" maxlength="300" aria-label="Action" placeholder="Contoh: naikkan bid kata kunci brand" value="{escape(item.get("action", ""))}">'
+                f'<select class="vw-in" aria-label="Campaign">{options}</select>'
+                f'<input class="vw-in" data-f="note" type="text" maxlength="300" aria-label="Catatan" placeholder="Catatan singkat" value="{escape(item.get("note", ""))}">'
+                '<button type="button" class="vw-linkbtn" data-act="row-remove" style="width:72px">Hapus</button></div>')
+
+    rows = "".join(row(i) for i in items) or row({})
+    return (
+        '<div id="vw-form" hidden role="group" aria-labelledby="vw-form-title" class="vw-box vw-pad" style="margin-top:16px;border-color:#6f8199">'
+        f'<h2 id="vw-form-title" class="vw-h2" style="margin-bottom:4px">Action yang sudah dilakukan di {escape(label)}</h2>'
+        '<p style="margin:0 0 12px;color:#607188">Tulis action yang dijalankan pada periode ini, misalnya menaikkan bid atau mengganti materi iklan. Isian ini tersimpan di report dan ikut menjadi pertimbangan analisis. Boleh dikosongkan.</p>'
+        '<div data-role="warn" role="alert" hidden style="margin-bottom:12px;padding:10px 12px;border:1px solid #6f8199;border-radius:6px;color:#17283e">Ada panel yang sudah diedit. Membuat ulang analisis menggantikan teks yang tampil dengan versi AI baru, termasuk panel yang sudah diedit. Versi hasil edit tetap tersimpan di riwayat.</div>'
+        '<div class="vw-arow vw-arow-head" aria-hidden="true"><span>Action</span><span>Campaign (opsional)</span><span>Catatan (opsional)</span><span></span></div>'
+        f'<div data-role="rows">{rows}</div><template id="vw-row-tpl">{row({})}</template>'
+        '<button type="button" class="vw-linkbtn" data-act="row-add" style="justify-content:flex-start">+ Tambah action</button>'
+        '<div data-role="info-wrap" style="margin:16px 0 0"><label for="vw-info" style="display:block;font-weight:600;color:#17283e;margin-bottom:4px">Informasi tambahan untuk analisis (opsional)</label>'
+        '<p id="vw-info-hint" style="margin:0 0 8px;color:#607188">Tulis konteks yang tidak ada di angka, misalnya promo, libur, iklan dihentikan, atau gangguan tracking. Dikirim ke AI sebagai pertimbangan dan tersimpan di riwayat analisis. Tidak tampil di report. Jangan menulis nama perusahaan lead atau data pribadi.</p>'
+        f'<textarea id="vw-info" class="vw-in" rows="4" maxlength="1000" aria-describedby="vw-info-hint vw-info-count" placeholder="Contoh: Minggu ini ada promo Dashcam sampai 16 Okt; budget Meta dikurangi mulai 14 Okt." style="height:auto;padding:10px 12px;line-height:1.5;resize:vertical">{escape(extra_note)}</textarea>'
+        f'<div id="vw-info-count" style="margin-top:4px;color:#607188;text-align:right">{len(extra_note)} / 1000 karakter</div></div>'
+        f'<p style="margin:8px 0 12px;color:#607188">{escape(budget_note)}</p>'
+        '<p data-role="form-error" role="alert" hidden class="vw-alert" style="margin:0 0 12px"></p>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" class="vw-btn" data-act="form-submit">Buat analisis</button>'
+        '<button type="button" class="vw-linkbtn" data-act="form-cancel">Batal</button></div></div>'
+    )
+
+
+def achievement_form(scope: str, heading: str, intro: str, unit_label: str, rows: list[dict], last: dict | None) -> str:
+    """The admin-only form for typing achievement figures by hand. rows: {key, name, system, value}; system is the figure the generator found, shown read-only.
+    last: {saved_by, saved_at, reason} of the newest save, shown so the next admin sees why a figure was changed."""
+    def row(r: dict) -> str:
+        return (f'<div class="vw-trow" data-row><span style="color:#17283e">{escape(r["name"])}</span><span>{escape(r["system"])}</span>'
+                f'<input class="vw-in" data-key="{escape(r["key"])}" type="text" inputmode="numeric" maxlength="24" aria-label="Pencapaian manual {escape(r["name"])} ({escape(unit_label)})" '
+                f'placeholder="Sama dengan sistem" value="{escape(r["value"])}" style="text-align:right">'
+                f'<button type="button" class="vw-linkbtn" data-manual-reset aria-label="Pakai angka sistem untuk {escape(r["name"])}">Reset</button></div>')
+
+    history = (f'<p style="margin:0 0 12px;color:#607188">Terakhir disimpan oleh {escape(last["saved_by"])}, {escape(last["saved_at"])}'
+               + (f'. Alasan: {escape(last["reason"])}' if last.get("reason") else "") + ".</p>") if last else ""
+    return (
+        f'<div role="group" aria-label="{escape(heading)}" style="margin-top:12px;border:1px solid #6f8199;border-radius:6px;padding:16px;background:#fff">'
+        f'<h4 style="margin:0 0 4px;font:600 16px/1.4 Inter,Arial,sans-serif;color:#17283e">{escape(heading)}</h4>'
+        f'<p style="margin:0 0 12px;color:#607188">{escape(intro)}</p>{history}'
+        f'<div class="vw-trow" style="color:#607188" aria-hidden="true"><span>Bagian</span><span>Angka sistem</span><span>Pencapaian manual ({escape(unit_label)})</span><span></span></div>'
+        + "".join(row(r) for r in rows)
+        + '<div style="margin:12px 0 0"><label style="display:block;font-weight:600;color:#17283e;margin-bottom:4px">Alasan perubahan'
+        '<input class="vw-in" data-role="manual-reason" type="text" maxlength="300" placeholder="Contoh: deal belum masuk Sheet, dikonfirmasi sales" style="margin-top:4px;font-weight:400"></label>'
+        '<div style="margin-top:4px;color:#607188">Wajib bila ada angka manual. Tersimpan di riwayat, tidak tampil di report.</div></div>'
+        '<p data-role="manual-error" role="alert" hidden class="vw-alert" style="margin:12px 0 0"></p>'
+        '<div style="margin-top:12px;display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" class="vw-btn" data-manual-save>Simpan pencapaian</button>'
+        '<button type="button" class="vw-linkbtn" data-manual-cancel>Batal</button></div></div>'
+    )
+
+
+def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dict, name: str, edited: int = 0, form_html: str = "") -> str:
     bu, period = report["bu"], report["period"]
     label = f"{name} {period}"
     if state == "running":
@@ -247,21 +397,20 @@ def report_chrome(report: dict, state: str, job_error: str, csrf: str, user: dic
     role = "alert" if state == "failed" else "status"
     return (
         f'<style nonce="{{nonce}}">{BASE_CSS}{ANALYSIS_CSS}</style>'
-        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf, user)}</header>'
+        f'<header class="vw-top"><span class="vw-brand">{TITLE}</span>{menu(csrf, user, "daftar")}</header>'
         '<div class="vw-chrome"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span>'
         f'<span aria-current="page" style="color:#17283e">{escape(label)}</span></nav>'
         f'<h1 class="vw-h1" style="margin-bottom:12px">Report {escape(name)}</h1>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:8px 24px">'
         f'<dl class="vw-dl"><div><dt>Periode</dt><dd>{escape(period)}</dd></div><div><dt>Tanggal</dt><dd style="font-weight:400">{escape(range_text(report["period_start"], report["period_end"]))}</dd></div></dl>'
+        f'<div style="margin-bottom:24px"><button type="button" id="vw-pdf" class="vw-btn alt" data-href="/report/{escape(bu)}/{escape(period)}/pdf">Simpan sebagai PDF</button>'
+        '<p id="vw-pdf-msg" role="alert" hidden class="vw-alert" style="margin:8px 0 0;max-width:320px"></p></div></div>'
         + (f'<section id="vw-analysis" aria-label="Analisis" role="{role}" class="vw-box vw-pad" data-bu="{escape(bu)}" data-period="{escape(period)}" data-state="{escape(state)}" data-edited="{edited}" style="margin-bottom:24px">'
         f'<div class="vw-bar"><div style="flex:1 1 360px;min-width:0"><div data-role="title" style="font-weight:600;color:{color}">{escape(head)}</div><div data-role="text">{escape(text)}</div></div>'
         + (f'<div><button type="button" class="vw-btn{" alt" if alt else ""}"{disabled}>{escape(label_btn)}</button></div>' if user["role"] == "admin"
            else '<div style="color:#607188">Hanya admin yang bisa membuat atau membuat ulang analisis.</div>')
         + '</div>'
-        + ('<div id="vw-confirm" role="alert" hidden class="vw-box vw-pad" style="margin-top:16px;border-color:#6f8199"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Ada panel yang sudah diedit</div>'
-           '<div style="margin-bottom:12px">Membuat ulang analisis menggantikan teks yang tampil dengan versi AI baru, termasuk panel yang sudah diedit. Versi hasil edit tetap tersimpan di riwayat.</div>'
-           '<div style="display:flex;flex-wrap:wrap;align-items:center;gap:4px 16px"><button type="button" data-act="continue" class="vw-btn">Lanjutkan buat ulang</button>'
-           '<button type="button" data-act="abort" style="display:inline-flex;align-items:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer">Batal</button></div></div>'
-           if user["role"] == "admin" else "")
+        + (form_html if user["role"] == "admin" else "")
         + '</section>')
         + '</div>'
     )
@@ -289,6 +438,10 @@ def inject_chrome(report_html: str, chrome: str, nonce: str, csrf: str) -> str:
     script = soup.new_tag("script")
     script.string = ANALYSIS_JS
     body.append(script)
+    if soup.select_one("[data-manual-form]"):
+        manual_script = soup.new_tag("script")
+        manual_script.string = MANUAL_JS
+        body.append(manual_script)
     for tag in soup.find_all(["script", "style"]):
         tag["nonce"] = nonce
     return str(soup)
@@ -395,6 +548,187 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
     return page("Pengaturan target", body, nonce, csrf, menu(csrf, user, "targets"), script)
 
 
+VALIDITY_CSS = """
+.vw-in{width:100%;height:44px;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif}
+.vw-linkbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}
+""" + """.vw-rrow{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,minmax(0,1.5fr)) 72px;gap:8px;align-items:start;margin-bottom:8px}
+.vw-cell{display:flex;flex-wrap:wrap;gap:8px;min-width:0}.vw-cell select{flex:1 1 130px;min-width:0}.vw-cell input{flex:1 1 72px;min-width:0}
+@media (max-width:760px){.vw-rrow{grid-template-columns:1fr}}
+"""
+
+
+def validity_page(bu: str, names: dict, values: dict, remark_options: list[str], summary_lines: list[str], history: list[dict], errors: dict,
+                  csrf: str, nonce: str, user: dict, notice: str = "", failed: str = "", saved_with_profile: bool = False) -> str:
+    """The admin page for how long MQL, SQL and Deal Won stay valid. values holds the form fields (see viewer.validity.form_values)."""
+    label = names.get(bu, bu)
+    bu_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
+    stages = (("MQL", "mql"), ("SQL", "sql"), ("Deal Won", "won"))
+
+    def err(name: str) -> str:
+        return f'<span role="alert" style="color:#ac3d3d;display:block;margin-top:4px">{escape(errors[name])}</span>' if name in errors else ""
+
+    def cell(prefix: str, key: str, stage: str, general: bool, mode: str, n: str) -> str:
+        opts = ([] if general else [("default", "Ikut batas umum")]) + [("none", "Tanpa batas"), ("bulan", "Batasi")]
+        options = "".join(f'<option value="{v}"{" selected" if v == mode else ""}>{t}</option>' for v, t in opts)
+        field = f"{prefix}_{key}"
+        invalid = ' aria-invalid="true"' if f"{field}_n" in errors else ""
+        disabled = "" if mode == "bulan" else " disabled"
+        return (f'<div class="vw-cell"><select class="vw-in" name="{field}_mode" data-mode aria-label="Masa berlaku {escape(stage)}">{options}</select>'
+                f'<input class="vw-in" name="{field}_n" type="text" inputmode="numeric" maxlength="3" placeholder="Bulan" aria-label="Bulan batas {escape(stage)}" value="{escape(n)}"{invalid}{disabled} style="text-align:right">'
+                f'{err(field + "_n")}</div>')
+
+    general = "".join(
+        f'<div style="flex:1 1 220px"><div style="font-weight:500;color:#17283e;margin-bottom:6px">Masa berlaku {escape(stage)}</div>'
+        f'{cell("g", key, stage, True, values.get(f"g_{key}_mode", "none"), values.get(f"g_{key}_n", ""))}</div>'
+        for stage, key in stages
+    )
+
+    def rule_row(i: int) -> str:
+        chosen = values.get(f"r{i}_remark", "")
+        options = '<option value="">Pilih Remark</option>' + "".join(f'<option value="{escape(r)}"{" selected" if r == chosen else ""}>{escape(r)}</option>' for r in remark_options)
+        cells = "".join(cell(f"r{i}", key, stage, False, values.get(f"r{i}_{key}_mode", "default"), values.get(f"r{i}_{key}_n", "")) for stage, key in stages)
+        return (f'<div class="vw-rrow" data-rule><div><select class="vw-in" name="r{i}_remark" aria-label="Remark aturan">{options}</select>{err(f"r{i}_remark")}</div>{cells}'
+                '<button type="button" class="vw-linkbtn" data-rule-remove style="width:72px">Hapus</button></div>')
+
+    count = int(values.get("rule_count", "0") or 0)
+    rows = "".join(rule_row(i) for i in range(count))
+    empty = ('<p style="margin:0 0 12px;color:#607188" data-role="no-rules"' + ("" if count else "") + f'{" hidden" if count else ""}>Belum ada aturan khusus untuk {escape(label)}.</p>')
+    no_options = "" if remark_options else ('<p style="margin:0 0 12px;color:#607188">Belum ada daftar Remark. Daftar muncul setelah report pertama dibuat untuk perusahaan ini.</p>')
+    summary_html = "".join(f'<li style="margin-bottom:4px">{escape(line)}</li>' for line in summary_lines)
+    if history:
+        trs = "".join(f'<tr><td data-label="Waktu">{escape(dt_text(h["saved_at"]))}</td><td data-label="Oleh">{escape(h["saved_by"])}</td>'
+                      f'<td data-label="Ringkasan">{escape(" ".join(h["summary"]))}</td></tr>' for h in history)
+        hist = (f'<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Riwayat masa berlaku lead {escape(label)}</caption><thead><tr><th scope="col">Waktu</th><th scope="col">Oleh</th>'
+                f'<th scope="col">Ringkasan</th></tr></thead><tbody>{trs}</tbody></table></div>')
+    else:
+        hist = f'<div class="vw-box" style="padding:24px">Belum ada pengaturan tersimpan untuk {escape(label)}. Yang berlaku sekarang adalah batas bawaan dari profil perusahaan.</div>'
+    note = ('<p style="margin:0 0 16px;color:#607188">Belum ada pengaturan tersimpan; yang tampil adalah batas bawaan dari profil perusahaan. Menyimpan akan menggantikannya.</p>' if saved_with_profile else "")
+    body = (
+        f'<style nonce="{nonce}">{VALIDITY_CSS}</style>'
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Masa berlaku lead</span></nav>'
+        '<h1 class="vw-h1">Masa berlaku lead</h1>'
+        '<p class="vw-lead" style="max-width:700px">Lead dianggap expired bila jarak dari <strong>Inbound Date</strong> ke tanggal MQL, tanggal SQL, atau tanggal Deal Won melebihi batas bulan di bawah. '
+        'Lead expired dikeluarkan dari angka tahap itu saja: MQL expired keluar dari MQL, SQL expired keluar dari SQL, Deal Won expired keluar dari Deal Won. Submission tidak berubah.</p>'
+        '<p style="margin:0 0 24px;max-width:700px;color:#607188">Pengaturan berlaku untuk report dan data Performa yang dibuat setelah disimpan. Report lama tidak berubah. Lead tanpa Inbound Date tetap dianggap valid.</p>'
+        f'<div class="vw-field" style="margin-bottom:24px;max-width:200px"><label for="bu">Perusahaan</label><select id="bu" data-reload="bu">{bu_options}</select></div>'
+        + (f'<p role="status" class="vw-ok">{escape(notice)}</p>' if notice else "")
+        + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(failed)}</p>' if failed else "")
+        + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(errors["_rules"])}</p>' if "_rules" in errors else "")
+        + f'<form method="post" action="/validity" class="vw-validity-form"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="bu" value="{escape(bu)}">'
+        f'<section aria-label="Batas umum" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2">Batas umum {escape(label)}</h2>{note}'
+        '<p style="margin:0 0 16px;max-width:680px;color:#607188">Berlaku untuk semua lead yang tidak punya aturan khusus Remark. Acuan tanggal selalu Inbound Date.</p>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:16px 32px">{general}</div></section>'
+        '<section aria-label="Aturan khusus Remark" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2">Aturan khusus berdasarkan Remark</h2>'
+        '<p style="margin:0 0 16px;max-width:680px;color:#607188">Lead dengan Remark tertentu bisa punya masa berlaku sendiri, misalnya Trial 12 bulan. Remark dipilih dari nilai yang ada di Sheet '
+        '(dibaca dari report terakhir), dan harus sama persis, tanpa membedakan huruf besar dan kecil. Remark baru muncul di daftar setelah report berikutnya dibuat.</p>'
+        f'{no_options}{empty}'
+        '<div class="vw-rrow" style="color:#607188" aria-hidden="true"><span>Remark</span><span>MQL</span><span>SQL</span><span>Deal Won</span><span></span></div>'
+        f'<div data-role="rules">{rows}</div><template id="vw-rule-tpl">{rule_row(0).replace("r0_", "r__I___")}</template>'
+        f'<input type="hidden" name="rule_count" value="{count}" data-role="rule-count">'
+        '<button type="button" class="vw-linkbtn" data-rule-add style="justify-content:flex-start">+ Tambah aturan Remark</button></section>'
+        f'<section aria-label="Ringkasan" class="vw-box" style="padding:16px 24px;margin-bottom:24px;border-color:#6f8199"><h2 class="vw-h2">Ringkasan yang akan berlaku</h2><ul style="margin:0;padding-left:20px">{summary_html}</ul>'
+        '<p style="margin:8px 0 0;color:#607188">Ringkasan yang sama tampil di report sebagai catatan, bersama jumlah lead yang dikeluarkan.</p></section>'
+        '<div style="margin-bottom:32px"><button class="vw-btn" type="submit">Simpan pengaturan</button></div></form>'
+        f'<section aria-label="Riwayat perubahan"><h2 class="vw-h2">Riwayat perubahan {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
+    )
+    script = (
+        f'<script nonce="{nonce}">(function(){{'
+        'var sel=document.getElementById("bu");if(sel)sel.addEventListener("change",function(){var u=new URL(location.href);u.searchParams.set("bu",sel.value);location.href=u.toString();});'
+        'var form=document.querySelector("form.vw-validity-form"),box=form.querySelector("[data-role=rules]"),tpl=document.getElementById("vw-rule-tpl"),cnt=form.querySelector("[data-role=rule-count]"),none=form.querySelector("[data-role=no-rules]");'
+        'function sync(row){row.querySelectorAll("[data-mode]").forEach(function(m){var n=m.parentNode.querySelector("input");n.disabled=m.value!=="bulan";if(n.disabled)n.value="";});}'
+        'function refresh(){if(none)none.hidden=box.querySelector("[data-rule]")!==null;}'
+        'form.querySelectorAll("[data-mode]").forEach(function(m){m.addEventListener("change",function(){sync(m.parentNode);});});'
+        'form.addEventListener("click",function(ev){'
+        'if(ev.target.closest("[data-rule-add]")){var i=Number(cnt.value);var html=tpl.innerHTML.split("__I__").join(String(i));var d=document.createElement("div");d.innerHTML=html;var row=d.firstElementChild;'
+        'row.querySelectorAll("[data-mode]").forEach(function(m){m.addEventListener("change",function(){sync(m.parentNode);});});box.appendChild(row);cnt.value=String(i+1);refresh();row.querySelector("select").focus();return;}'
+        'var rm=ev.target.closest("[data-rule-remove]");if(rm){rm.closest("[data-rule]").remove();refresh();}});'
+        '})();</script>'
+    )
+    return page("Masa berlaku lead", body, nonce, csrf, menu(csrf, user, "validity"), script)
+
+
+def refresh_page(names: dict, options: dict, cards: dict, rows: list[dict], configured: dict, csrf: str, nonce: str, user: dict) -> str:
+    """Start a report or Performa run from the viewer and see how the last ones went. cards: the latest request per kind (or None)."""
+    company_options = "".join(f'<option value="{escape(b)}">{escape(n)}</option>' for b, n in names.items()) + '<option value="all">Semua</option>'
+
+    def period_select() -> str:
+        weeks = "".join(f'<option value="{escape(v)}" data-kind="week">{escape(t)}</option>' for v, t in options["week"])
+        months = "".join(f'<option value="{escape(v)}" data-kind="month" hidden disabled>{escape(t)}</option>' for v, t in options["month"])
+        return f'<select class="vw-in" id="r-period" name="period">{weeks}{months}</select>'
+
+    def status(kind: str) -> str:
+        card = cards.get(kind)
+        if card is None:
+            return '<p data-role="status" style="margin:12px 0 0;color:#607188">Belum pernah dijalankan dari aplikasi ini.</p>'
+        state = card["state"]
+        head = f'{escape(card["target"])}, {escape(card["at"])}'
+        if state == "running":
+            return f'<p data-role="status" role="status" aria-busy="true" style="margin:12px 0 0;color:#17283e"><span class="vw-spin" aria-hidden="true"></span>Sedang berjalan: {head}. Proses tetap lanjut di server bila halaman ditutup.</p>'
+        if state == "done":
+            return f'<p data-role="status" role="status" class="vw-ok" style="margin:12px 0 0">Terakhir berhasil: {head}.</p>'
+        return f'<p data-role="status" role="alert" class="vw-alert" style="margin:12px 0 0">{head}. {escape(card["text"])}</p>'
+
+    def card(kind: str, title: str, text: str, fields: str) -> str:
+        busy = cards.get(kind) is not None and cards[kind]["state"] == "running"
+        missing = "" if configured.get(kind) else ('<p role="alert" class="vw-alert" style="margin:0 0 12px">Alamat webhook n8n untuk proses ini belum diatur pada layanan viewer. '
+                                                    'Atur N8N_GENERATE_URL dan N8N_PERFORMA_URL, atau N8N_ANALYSIS_URL.</p>')
+        disabled = " disabled" if busy or not configured.get(kind) else ""
+        label = "Sedang berjalan" if busy else title
+        return (f'<section aria-label="{escape(title)}" class="vw-box vw-pad" data-kind-card="{kind}"><h2 class="vw-h2">{escape(title)}</h2>'
+                f'<p style="margin:0 0 16px;color:#607188">{text}</p>{missing}'
+                f'<div style="display:flex;flex-wrap:wrap;gap:12px 16px;margin-bottom:16px">{fields}</div>'
+                f'<button type="button" class="vw-btn" data-start="{kind}"{disabled}>{escape(label)}</button>'
+                f'<p data-role="start-error" role="alert" hidden class="vw-alert" style="margin:12px 0 0"></p>{status(kind)}</section>')
+
+    report_fields = (f'<div style="flex:1 1 160px"><label for="r-bu" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Perusahaan</label><select class="vw-in" id="r-bu" name="bu">{company_options}</select></div>'
+                     '<div style="flex:1 1 140px"><label for="r-kind" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Jenis</label><select class="vw-in" id="r-kind"><option value="week">Mingguan</option><option value="month">Bulanan</option></select></div>'
+                     f'<div style="flex:1 1 180px"><label for="r-period" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Periode</label>{period_select()}</div>')
+    performa_fields = (f'<div style="flex:1 1 200px"><label for="p-bu" style="display:block;font-weight:500;color:#17283e;margin-bottom:6px">Perusahaan</label><select class="vw-in" id="p-bu" name="bu">{company_options}</select></div>')
+    tone = {"running": "#17283e", "done": "#087450", "failed": "#ac3d3d", "timeout": "#ac3d3d"}
+    trs = "".join(
+        f'<tr><td data-label="Mulai">{escape(r["started"])}</td><td data-label="Proses">{escape(r["kind"])}</td><td data-label="Perusahaan">{escape(r["company"])}</td><td data-label="Periode">{escape(r["period"])}</td>'
+        f'<td data-label="Oleh">{escape(r["by"])}</td><td data-label="Durasi">{escape(r["duration"])}</td><td data-label="Hasil"><span style="font-weight:600;color:{tone[r["state"]]}">{escape(r["outcome"])}</span></td></tr>'
+        for r in rows
+    )
+    history = (f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table"><caption class="vw-sr">Riwayat proses generate dan update data</caption><thead><tr><th scope="col">Mulai</th><th scope="col">Proses</th><th scope="col">Perusahaan</th>'
+               f'<th scope="col">Periode</th><th scope="col">Oleh</th><th scope="col">Durasi</th><th scope="col">Hasil</th></tr></thead><tbody>{trs}</tbody></table></div>'
+               if rows else '<div class="vw-box" style="padding:24px">Belum ada proses yang dijalankan dari aplikasi ini.</div>')
+    body = (
+        f'<style nonce="{nonce}">{VALIDITY_CSS}.vw-pad{{padding:24px}}.vw-jobs{{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:16px;margin-bottom:32px}}'
+        '.vw-spin{display:inline-block;width:14px;height:14px;border:2px solid #6f8199;border-top-color:#2159a9;border-radius:50%;animation:vwsp .9s linear infinite;vertical-align:-2px;margin-right:8px}'
+        '@keyframes vwsp{to{transform:rotate(360deg)}}@media (prefers-reduced-motion:reduce){.vw-spin{animation:none}}@media (max-width:480px){.vw-jobs{grid-template-columns:minmax(0,1fr)}}</style>'
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Perbarui data</span></nav>'
+        '<h1 class="vw-h1">Perbarui data</h1>'
+        '<p class="vw-lead" style="max-width:700px">Jalankan pembuatan report dan pembaruan data Performa dari sini. Prosesnya berjalan lewat n8n dan membaca Google Sheet saat tombol ditekan. Tidak ada jadwal otomatis. Analisis AI tetap dibuat dari halaman report.</p>'
+        '<div class="vw-jobs">'
+        + card("report", "Generate report", "Membuat report baru untuk satu periode memakai data Sheet dan aturan masa berlaku lead saat ini. Bila periode itu sudah punya report, versi baru ditambahkan dan versi lama tetap tersimpan.", report_fields)
+        + card("performa", "Update data Performa", "Membaca ulang lead dari Sheet dan menyimpannya sebagai data halaman Performa. Data lead tetap anonim.", performa_fields)
+        + '</div>'
+        '<section aria-label="Riwayat proses"><h2 class="vw-h2">Riwayat proses</h2><p style="margin:0 0 12px;color:#607188">Dicatat otomatis: siapa yang menjalankan, kapan, hasilnya, dan pesan galat bila gagal. Hanya satu proses per jenis yang boleh berjalan dalam satu waktu. '
+        'n8n harus melaporkan hasilnya; bila tidak ada laporan dalam 5 menit, proses dianggap tidak dijawab.</p>' + history + '</section></main>'
+    )
+    script = (
+        f'<script nonce="{nonce}">(function(){{'
+        'var csrf=document.querySelector("meta[name=csrf]").content;'
+        'var kindSel=document.getElementById("r-kind"),per=document.getElementById("r-period");'
+        'function filter(){var k=kindSel.value,first=null;[].forEach.call(per.options,function(o){var on=o.dataset.kind===k;o.hidden=!on;o.disabled=!on;if(on&&!first)first=o;});if(per.selectedOptions[0]&&per.selectedOptions[0].disabled&&first)per.value=first.value;}'
+        'if(kindSel){kindSel.addEventListener("change",filter);filter();}'
+        'function poll(kind){fetch("/api/refresh/status?kind="+kind,{credentials:"same-origin"}).then(function(r){return r.json();}).then(function(s){'
+        'if(s.state==="running"){setTimeout(function(){poll(kind);},4000);return;}location.reload();}).catch(function(){setTimeout(function(){poll(kind);},8000);});}'
+        'document.querySelectorAll("[data-kind-card]").forEach(function(card){var kind=card.dataset.kindCard,btn=card.querySelector("[data-start]"),err=card.querySelector("[data-role=start-error]");'
+        'if(card.querySelector("[aria-busy=true]"))poll(kind);'
+        'btn.addEventListener("click",function(){err.hidden=true;btn.disabled=true;btn.textContent="Sedang berjalan";'
+        'var payload={kind:kind,bu:card.querySelector("select[name=bu]").value};if(kind==="report")payload.period=per.value;'
+        'fetch("/api/refresh",{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json","X-CSRF-Token":csrf},body:JSON.stringify(payload)})'
+        '.then(function(r){return r.json().then(function(j){return {ok:r.ok,body:j};});}).then(function(res){'
+        'if(!res.ok){btn.disabled=false;btn.textContent=btn.dataset.label;err.textContent=res.body.error||"Proses tidak dimulai.";err.hidden=false;return;}location.reload();})'
+        '.catch(function(){btn.disabled=false;btn.textContent=btn.dataset.label;err.textContent="Tidak bisa menghubungi server. Coba lagi.";err.hidden=false;});});'
+        'btn.dataset.label=card.querySelector("h2").textContent;});'
+        '})();</script>'
+    )
+    return page("Perbarui data", body, nonce, csrf, menu(csrf, user, "refresh"), script)
+
+
 def access_text(user: dict, names: dict) -> str:
     if user["all_companies"]:
         return "Semua perusahaan"
@@ -497,11 +831,15 @@ def _digits(value) -> str:
     return "" if value in (None, "") else f"{int(value):,}".replace(",", ".")
 
 
-def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str, str]], rows: list[dict], weeks: list[tuple], total_text: str, as_of_text: str,
-                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "") -> str:
-    """rows: one dict per campaign {name, budget, month, weeks{key: text}} holding the texts to show in the inputs."""
+def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str, str]], rows: list[dict], picker: list[str], weeks: list[tuple], total_text: str, as_of_text: str,
+                base_id: str, today, errors: dict, history: list[dict], csrf: str, nonce: str, me: dict, notice: str = "", failed: str = "", rel: dict | None = None, grouped: dict | None = None) -> str:
+    """rows: one dict per campaign {idx, name, budget, month, weeks{key: text}} holding the texts to show in the inputs.
+    picker: every campaign name that can be added; the ones already in rows are hidden in the list.
+    grouped: lower-cased campaign name -> group name. Choosing such a campaign adds the group row, never the campaign itself."""
     from viewer.budget import month_label
 
+    grouped = grouped or {}
+    group_names = sorted(set(grouped.values()))
     label = names.get(bu, bu)
     company_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
     month_choices = "".join(f'<option value="{k}"{" selected" if k == month else ""}>{escape(t)}</option>' for k, t in month_options)
@@ -519,31 +857,48 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
 
     def name_cell(r, i, hidden=True):
         keep = f'<input type="hidden" name="n_{i}" value="{escape(r["name"])}">' if hidden else ""
-        return f'<td data-label="Campaign" data-name>{escape(r["name"])}{keep}</td>'
+        tag = ' <span class="pk-tag">Grup</span>' if r["name"] in group_names else ""
+        return f'<td data-label="Campaign" data-name>{escape(r["name"])}{tag}{keep}</td>'
+
+    def remove_cell(label: str) -> str:
+        return f'<td class="num"><button type="button" class="vw-linkbtn" data-remove aria-label="Hapus {escape(label)} dari daftar">Hapus</button></td>'
 
     budget_rows = "".join(
-        f'<tr data-row>{name_cell(r, i)}<td data-label="Budget {escape(r["name"])}" class="num cell">{money_input(f"b_{i}", r["budget"], f"Budget {r["name"]}")}</td></tr>' for i, r in enumerate(rows)
-    ) or ""
+        f'<tr data-row data-idx="{r["idx"]}">{name_cell(r, r["idx"])}<td data-label="Budget {escape(r["name"])}" class="num cell">{money_input(f"b_{r["idx"]}", r["budget"], f"Budget {r["name"]}")}</td>{remove_cell(r["name"])}</tr>' for r in rows
+    )
     week_rows = "".join(
-        f'<tr data-row>{name_cell(r, i, False)}' + "".join(
-            f'<td data-label="Spend {key.split("-")[1]} {escape(r["name"])}" class="num cell">{money_input(f"w_{i}_{key}", r["weeks"].get(key, ""), f"Spend {key.split(chr(45))[1]} {r["name"]}", " disabled" if monday > today else "")}</td>'
-            for key, monday, _ in weeks) + "</tr>" for i, r in enumerate(rows)
+        f'<tr data-row data-idx="{r["idx"]}">{name_cell(r, r["idx"], False)}' + "".join(
+            f'<td data-label="Spend {key.split("-")[1]} {escape(r["name"])}" class="num cell">{money_input(f"w_{r["idx"]}_{key}", r["weeks"].get(key, ""), f"Spend {key.split(chr(45))[1]} {r["name"]}", " disabled" if monday > today else "")}</td>'
+            for key, monday, _ in weeks) + "</tr>" for r in rows
     )
     month_rows = "".join(
-        f'<tr data-row>{name_cell(r, i, False)}<td data-label="Spend {escape(month_label(month))} {escape(r["name"])}" class="num cell">{money_input(f"m_{i}", r["month"], f"Spend {month_label(month)} {r["name"]}")}</td></tr>' for i, r in enumerate(rows)
+        f'<tr data-row data-idx="{r["idx"]}">{name_cell(r, r["idx"], False)}<td data-label="Spend {escape(month_label(month))} {escape(r["name"])}" class="num cell">{money_input(f"m_{r["idx"]}", r["month"], f"Spend {month_label(month)} {r["name"]}")}</td></tr>' for r in rows
     )
 
-    def template(body: str) -> str:
-        return body.replace("__I__", "{I}")
-
     # templates for a campaign added in the browser; the name is set from JS with textContent, never as markup
-    t_budget = f'<tr data-row><td data-label="Campaign" data-name><input type="hidden" name="n___I__"></td><td data-label="Budget" class="num cell">{money_input("b___I__", "", "Budget campaign baru")}</td></tr>'
-    t_weeks = '<tr data-row><td data-label="Campaign" data-name></td>' + "".join(
+    t_budget = (f'<tr data-row data-idx="__I__"><td data-label="Campaign" data-name><input type="hidden" name="n___I__"></td><td data-label="Budget" class="num cell">{money_input("b___I__", "", "Budget campaign baru")}</td>'
+                f'{remove_cell("campaign baru")}</tr>')
+    t_weeks = '<tr data-row data-idx="__I__"><td data-label="Campaign" data-name></td>' + "".join(
         f'<td data-label="Spend {key.split("-")[1]}" class="num cell">{money_input(f"w___I___{key}", "", f"Spend {key.split(chr(45))[1]} campaign baru", " disabled" if monday > today else "")}</td>' for key, monday, _ in weeks) + "</tr>"
-    t_month = f'<tr data-row><td data-label="Campaign" data-name></td><td data-label="Spend" class="num cell">{money_input("m___I__", "", "Spend bulanan campaign baru")}</td></tr>'
+    t_month = f'<tr data-row data-idx="__I__"><td data-label="Campaign" data-name></td><td data-label="Spend" class="num cell">{money_input("m___I__", "", "Spend bulanan campaign baru")}</td></tr>'
 
-    empty_note = '<tr data-empty><td colspan="9" data-label="" style="color:#607188">Belum ada campaign. Campaign muncul otomatis setelah report dibuat dari data yang memuat nama campaign, atau tambahkan sendiri di bawah.</td></tr>' if not rows else ""
-    table_css = ".bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
+    def parent_dd(key: str, title: str) -> str:
+        labels = sorted(rel["labels"][key], key=lambda v: (v == EMPTY_LABEL, v.casefold(), v))
+        items = "".join(f'<label class="pk-opt" data-opt data-key="{key}" data-label="{escape(v)}"><input type="checkbox" value="{escape(v)}" style="width:20px;height:20px;margin:0"><span>{escape(v)}</span></label>' for v in labels)
+        return (f'<details class="pk-dd"><summary><span class="fl">{title}</span><span class="fv">Semua</span></summary><div class="pk-panel">{items}</div></details>')
+
+    parents = (f'<div class="pk-parents" role="group" aria-label="Persempit daftar campaign">{parent_dd("channel", "Channel")}{parent_dd("source", "Source")}{parent_dd("medium", "Medium")}</div>'
+               '<div id="pk-drop" class="pk-note" role="status" aria-live="polite" hidden></div>') if rel else ""
+    used = {r["name"].casefold() for r in rows}
+    def picker_row(n: str) -> str:
+        group = grouped.get(n.casefold(), "")
+        key = group or n
+        tag = f'<span class="pk-grp" data-grp>Grup: {escape(group)}</span>' if group else ""
+        return (f'<label class="pk-opt" data-opt data-key="campaign" data-label="{escape(n)}" data-pick-name="{escape(key)}" data-group="{escape(group)}"'
+                f'{" hidden" if key.casefold() in used and not group else ""}><input type="checkbox" value="{escape(n)}" style="width:20px;height:20px;margin:0"><span>{escape(n)}</span>{tag}</label>')
+
+    picker_rows = "".join(picker_row(n) for n in picker)
+    table_css = "[hidden]{display:none!important}.pk{border:1px solid #dfe7f0;border-radius:6px;background:#f4f7fb;padding:16px;margin-top:12px}.pk-list{max-height:264px;overflow-y:auto;background:#fff;border:1px solid #dfe7f0;border-radius:6px;padding:0 12px}.pk-opt{display:flex;align-items:center;gap:10px;min-height:44px;color:#17283e;cursor:pointer}.pk-note{margin:6px 0;color:#607188}.pk-grp,.pk-tag{display:inline-flex;align-items:center;min-height:24px;padding:0 8px;border-radius:12px;background:#eef2f7;color:#394d65;font-size:13px;white-space:nowrap}.pk-tag{margin-left:8px}.pk-opt.done{cursor:default;color:#607188}.pk-preview{margin:12px 0 0;padding:10px 12px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;color:#17283e}.pk-parents{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:12px;align-items:start}.pk-dd summary{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:44px;box-sizing:border-box;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;cursor:pointer;list-style:none}.pk-dd summary::-webkit-details-marker{display:none}.pk-dd summary::after{content:\"\";width:8px;height:8px;border-right:2px solid #607188;border-bottom:2px solid #607188;transform:rotate(45deg);margin:-4px 0 0 4px;flex:none}.pk-dd[open] summary::after{transform:rotate(-135deg);margin-top:4px}.pk-dd .fl{font-weight:500;flex:1}.pk-dd .fv{color:#607188}.pk-panel{margin-top:6px;border:1px solid #dfe7f0;border-radius:6px;background:#fff;padding:4px 12px;max-height:240px;overflow-y:auto}.vw-linkbtn{display:inline-flex;align-items:center;min-height:44px;padding:0 4px;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}.bd th{white-space:normal}.bd .cell{min-width:120px}.bd input:disabled{background:#f4f7fb;color:#607188;border-color:#dfe7f0}"
     week_ths = "".join(week_head(*w) for w in weeks)
     sections = (
         f'<style nonce="{nonce}">{table_css}</style>'
@@ -555,24 +910,36 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         f'<div class="vw-field" style="flex:0 1 200px"><label for="bu">Perusahaan</label><select id="bu" name="bu" data-reload>{company_options}</select></div>'
         f'<div class="vw-field" style="flex:0 1 220px"><label for="month">Bulan</label><select id="month" name="month" data-reload>{month_choices}</select></div>'
         f'<div class="vw-field" style="flex:0 1 240px"><label for="total">Total budget (Rp)</label><input id="total" name="total" type="text" inputmode="numeric" placeholder="Angka dalam Rupiah" value="{escape(total_text)}"{invalid("total")}></div></div>'
-        '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin-bottom:12px"><div><h2 class="vw-h2">Budget per campaign</h2>'
-        '<p style="margin:0;color:#607188">Budget bulan yang dipilih. Campaign baru muncul otomatis setelah ada lead dengan campaign itu.</p></div>'
-        '<div class="vw-field" style="flex:0 1 260px"><label for="cari">Cari campaign</label><input id="cari" type="text" placeholder="Ketik nama campaign" autocomplete="off"></div></div>'
-        f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-budget"><caption class="vw-sr">Budget per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Budget (Rp)</th></tr></thead>'
-        f'<tbody>{budget_rows}{empty_note.replace("colspan=\"9\"", "colspan=\"2\"")}</tbody><tfoot><tr><td data-label="Campaign">Jumlah per campaign</td><td data-label="Budget (Rp)" class="num" data-sum="b">Rp 0</td></tr></tfoot></table></div>'
-        '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;gap:12px 16px;margin-top:16px"><div class="vw-field" style="flex:1 1 280px;max-width:420px"><label for="baru">Tambah campaign yang belum punya lead</label>'
-        '<input id="baru" type="text" maxlength="100" placeholder="Nama campaign persis seperti di Tracker" autocomplete="off"></div>'
-        '<button type="button" id="tambah" class="vw-btn alt">Tambah campaign</button></div><p id="tambah-msg" role="alert" class="vw-alert" hidden style="margin:12px 0 0"></p>'
+        '<div style="display:flex;flex-wrap:wrap;align-items:flex-end;justify-content:space-between;gap:12px 16px;margin-bottom:12px"><div><h2 class="vw-h2">Campaign</h2>'
+        '<p style="margin:0;max-width:640px;color:#607188">Tambahkan campaign dari Campaign Tracker, lalu isi budget dan spend-nya. Campaign yang sudah punya isian di bulan ini tampil otomatis.</p></div>'
+        '<button type="button" id="buka" class="vw-btn alt" aria-expanded="false" aria-controls="picker">Tambah campaign</button></div>'
+        '<div id="picker" class="pk" role="group" aria-labelledby="picker-title" hidden>'
+        '<h3 id="picker-title" style="margin:0 0 4px;font:600 15px/1.4 Inter,Arial,sans-serif;color:#17283e">Pilih campaign yang mau ditambahkan</h3>'
+        '<p style="margin:0 0 12px;color:#394d65">Daftar ini berasal dari kolom Campaign di Google Sheet Campaign Tracker. Persempit dulu dengan Channel, Source, dan Medium bila perlu, lalu centang satu atau beberapa campaign dan tekan tombol biru di bawah. Campaign dari Source Nurturing diberi keterangan grupnya: bila dicentang, yang masuk ke budget adalah grupnya, satu baris untuk semua campaign di grup itu.</p>'
+        + parents +
+        '<div class="vw-field"><label for="cari">Cari nama campaign</label><input id="cari" type="search" autocomplete="off" placeholder="Contoh: brand, gps, search"></div>'
+        '<div id="pick-note" class="pk-note" role="status" aria-live="polite"></div>'
+        f'<div class="pk-list" id="pick-list">{picker_rows}<p id="pick-empty" hidden style="margin:12px 0;color:#394d65"></p></div>'
+        '<p id="pick-preview" class="pk-preview" role="status" aria-live="polite" hidden></p>'
+        '<div style="display:flex;gap:12px;margin-top:12px"><button type="button" id="tambah" class="vw-btn" disabled>Tambahkan ke budget</button><button type="button" id="batal" class="vw-btn alt">Batal</button></div>'
+        '<p id="pick-hint" class="pk-note" style="margin:8px 0 0"></p></div>'
+        f'<div id="empty-box" class="vw-box"{" hidden" if rows else ""} style="padding:24px;margin-top:12px"><div style="font-weight:600;color:#17283e;margin-bottom:4px">Belum ada campaign di budget ini</div>'
+        '<div>Pilih Tambah campaign untuk memilih dari daftar Tracker. Budget, spend mingguan, dan spend bulanan muncul setelah ada campaign.</div></div>'
+        f'<div id="tables"{"" if rows else " hidden"}>'
+        '<h3 style="margin:16px 0 8px;font:600 14px/1.4 Inter,Arial,sans-serif;color:#17283e">Budget per campaign</h3>'
+        f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-budget"><caption class="vw-sr">Budget per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Budget (Rp)</th><th scope="col" class="num"><span class="vw-sr">Aksi</span></th></tr></thead>'
+        f'<tbody>{budget_rows}</tbody><tfoot><tr><td data-label="Campaign">Jumlah per campaign</td><td data-label="Budget (Rp)" class="num" data-sum="b">Rp 0</td><td></td></tr></tfoot></table></div>'
+        '<p style="margin:8px 0 0;color:#607188">Baris bertanda Grup mewakili semua campaign Source Nurturing dengan Medium itu, jadi spend diisi sekali untuk grupnya. Hapus mengeluarkan baris dari budget bulan ini saat disimpan. Lead dan report campaign itu tidak berubah, dan versi lama tetap ada di riwayat.</p>'
         '<h2 class="vw-h2" style="margin-top:32px">Spend per minggu</h2>'
         '<p style="margin:0 0 12px;color:#607188">Isi spend tiap minggu penuh, Senin sampai Minggu, termasuk minggu yang melewati pergantian bulan: W44 adalah 26 Okt sampai 1 Nov dan W45 lanjut dari 2 Nov. Angka ini dipakai kolom Spend Week di report. Minggu yang belum berjalan belum bisa diisi.</p>'
         f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-weeks" style="min-width:860px"><caption class="vw-sr">Spend per campaign per minggu</caption><thead><tr><th scope="col">Campaign</th>{week_ths}</tr></thead>'
-        f'<tbody>{week_rows}{empty_note.replace("colspan=\"9\"", f"colspan=\"{len(weeks) + 1}\"")}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td>'
+        f'<tbody>{week_rows}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td>'
         + "".join(f'<td data-label="{key.split("-")[1]}" class="num" data-sum="w_{key}">Rp 0</td>' for key, _, _ in weeks) + '</tr></tfoot></table></div>'
         '<h2 class="vw-h2" style="margin-top:32px">Spend bulanan</h2>'
         '<p style="margin:0 0 12px;color:#607188">Isi total spend bulan berjalan (kumulatif) per campaign, sesuai angka di platform iklan. Ini tidak dihitung dari spend mingguan, jadi bisa berbeda. Report menampilkan angka bulanan terakhir yang diisi sampai tanggal report itu.</p>'
         f'<div class="vw-field" style="flex:0 1 240px;max-width:240px;margin-bottom:12px"><label for="as_of">Spend bulan diisi sampai tanggal</label><input id="as_of" name="as_of" type="date" value="{escape(as_of_text)}"{invalid("as_of")}></div>'
         f'<div class="vw-box" style="overflow-x:auto"><table class="vw-table bd" id="t-month"><caption class="vw-sr">Spend bulanan per campaign</caption><thead><tr><th scope="col">Campaign</th><th scope="col" class="num">Spend {escape(month_label(month))} (Rp)</th></tr></thead>'
-        f'<tbody>{month_rows}{empty_note.replace("colspan=\"9\"", "colspan=\"2\"")}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td><td data-label="Spend" class="num" data-sum="m">Rp 0</td></tr></tfoot></table></div>'
+        f'<tbody>{month_rows}</tbody><tfoot><tr><td data-label="Campaign">TOTAL</td><td data-label="Spend" class="num" data-sum="m">Rp 0</td></tr></tfoot></table></div></div>'
     )
     messages = "".join(f'<p role="alert" class="vw-alert" style="margin:20px 0 0">{escape(m)}</p>' for k, m in errors.items())
     flash = f'<p role="status" class="vw-ok">{escape(notice)}</p>' if notice else ""
@@ -593,7 +960,7 @@ def budget_page(bu: str, names: dict, month: str, month_options: list[tuple[str,
         f'<section aria-label="Riwayat budget"><h2 class="vw-h2">Riwayat budget {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
         + "".join(f'<template id="tpl-{name}">{html}</template>' for name, html in (("budget", t_budget), ("weeks", t_weeks), ("month", t_month)))
     )
-    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
+    script = f'<script nonce="{nonce}">{BUDGET_JS.replace("__CASCADE__", cascade.CASCADE_JS).replace("__REL__", cascade.rel_json(rel) if rel else "null").replace("__GROUPS__", json.dumps(group_names)).replace("__WEEKS__", json.dumps([k for k, _, _ in weeks]))}</script>'
     return page("Budget", sections + tail, nonce, csrf, menu(csrf, me, "budget"), script)
 
 
@@ -617,28 +984,67 @@ BUDGET_JS = r"""
     });
   }
   form.addEventListener('input',function(e){if(e.target.matches('.cell input'))sums();});
-  var q=document.getElementById('cari');
-  q.addEventListener('input',function(){var v=q.value.trim().toLowerCase();
-    form.querySelectorAll('tr[data-row]').forEach(function(r){r.hidden=v&&r.querySelector('[data-name]').textContent.toLowerCase().indexOf(v)<0;});});
-  var next=form.querySelectorAll('#t-budget tr[data-row]').length,msg=document.getElementById('tambah-msg');
-  function add(){
-    var box=document.getElementById('baru'),name=box.value.replace(/\s+/g,' ').trim();msg.hidden=true;
-    if(!name){msg.textContent='Isi nama campaign dulu.';msg.hidden=false;return;}
-    var dup=false;form.querySelectorAll('#t-budget [data-name]').forEach(function(c){if(c.textContent.trim().toLowerCase()===name.toLowerCase())dup=true;});
-    if(dup){msg.textContent='Campaign '+name+' sudah ada di daftar.';msg.hidden=false;return;}
+  var opener=document.getElementById('buka'),box=document.getElementById('picker'),q=document.getElementById('cari'),note=document.getElementById('pick-note'),
+      empty=document.getElementById('pick-empty'),addBtn=document.getElementById('tambah'),hint=document.getElementById('pick-hint'),preview=document.getElementById('pick-preview'),tables=document.getElementById('tables'),emptyBox=document.getElementById('empty-box');
+  var opts=Array.prototype.slice.call(document.querySelectorAll('#pick-list [data-pick-name]'));
+  function norm(t){return t.toLowerCase().replace(/\s+/g,' ').trim();}
+  function used(){var u={};form.querySelectorAll('#t-budget input[name^=n_]').forEach(function(c){u[norm(c.value)]=1;});return u;}
+  var groupNames=__GROUPS__;
+  function picked(){return opts.filter(function(o){return o.querySelector('input').checked;});}
+  __CASCADE__
+  var rel=__REL__,casc=rel?makeCascade(rel):null,allOpts=[].slice.call(document.querySelectorAll('#picker [data-opt]')),drop=document.getElementById('pk-drop');
+  function keys(){var seen={},out=[];picked().forEach(function(o){var n=o.dataset.pickName;if(!seen[n]){seen[n]=1;out.push(n);}});return out;}
+  function refresh(){
+    var u=used(),v=norm(q.value),avail=0,shown=0;
+    opts.forEach(function(o){var n=o.dataset.pickName;if(u[norm(n)])o.querySelector('input').checked=false;});
+    var r=casc?casc(allOpts):{dropped:0};
+    opts.forEach(function(o){var n=o.dataset.pickName,g=o.dataset.group,free=!u[norm(n)],cut=o.dataset.cut==='1',input=o.querySelector('input');
+      var text=norm(o.dataset.label)+(g?' '+norm(g):'');
+      var match=!cut&&(!v||text.indexOf(v)>=0)&&(free||g);
+      input.disabled=!free;o.classList.toggle('done',!free);
+      var tag=o.querySelector('[data-grp]');if(tag)tag.textContent='Grup: '+g+(free?'':' (sudah di budget)');
+      o.hidden=!match;if(free)avail++;if(match&&free)shown++;});
+    allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.hidden=o.dataset.cut==='1';});
+    document.querySelectorAll('#picker .pk-dd').forEach(function(d){var n=d.querySelectorAll('input:checked').length;d.querySelector('.fv').textContent=n?n+' dipilih':'Semua';});
+    if(drop){drop.hidden=!r.dropped;drop.textContent=r.dropped?r.dropped+' pilihan dilepas karena tidak cocok dengan Channel, Source, atau Medium yang dipilih.':'';}
+    var k=picked().length,rows=keys();
+    note.textContent=(v||shown<avail?'Menampilkan '+shown+' dari '+avail+' campaign. ':avail+' campaign tersedia. ')+(k?k+' dipilih.':'Belum ada yang dipilih.');
+    empty.hidden=shown>0;empty.textContent=avail===0?'Semua campaign di Tracker sudah ditambahkan.':'Tidak ada campaign yang cocok dengan filter dan kata kunci ini.';
+    addBtn.disabled=k===0;addBtn.textContent=k?'Tambahkan '+rows.length+' baris ke budget':'Tambahkan ke budget';
+    var parts=rows.map(function(n){var c=picked().filter(function(o){return o.dataset.pickName===n;}).length;return groupNames.indexOf(n)>=0?n+' (grup, mewakili '+c+' campaign yang dicentang)':n;});
+    preview.hidden=k===0;preview.textContent=k?'Yang masuk ke tabel budget: '+parts.join(', ')+'.':'';
+    hint.textContent=k?'Setelah ditambahkan, isi budget dan spend di tabel di bawah.':'Tombol aktif setelah ada campaign yang dicentang.';
+  }
+  function resetParents(){allOpts.forEach(function(o){if(o.dataset.key!=='campaign')o.querySelector('input').checked=false;});}
+  function show(){var has=form.querySelectorAll('#t-budget tr[data-row]').length>0;tables.hidden=!has;emptyBox.hidden=has;}
+  function toggle(open){box.hidden=!open;opener.setAttribute('aria-expanded',open?'true':'false');if(open){refresh();q.focus();}}
+  opener.addEventListener('click',function(){toggle(box.hidden);});
+  document.getElementById('batal').addEventListener('click',function(){q.value='';opts.forEach(function(o){o.querySelector('input').checked=false;});resetParents();refresh();toggle(false);opener.focus();});
+  q.addEventListener('input',refresh);
+  q.addEventListener('keydown',function(e){if(e.key==='Enter')e.preventDefault();});
+  box.addEventListener('change',refresh);
+  var next=0;form.querySelectorAll('#t-budget tr[data-row]').forEach(function(r){next=Math.max(next,parseInt(r.dataset.idx,10)+1);});
+  function addRow(name){
     var i=next++;
     [['budget','#t-budget'],['weeks','#t-weeks'],['month','#t-month']].forEach(function(p){
       var html=document.getElementById('tpl-'+p[0]).innerHTML.split('__I__').join(String(i));
-      var tb=form.querySelector(p[1]+' tbody'),empty=tb.querySelector('[data-empty]');if(empty)empty.remove();
-      tb.insertAdjacentHTML('beforeend',html);
+      var tb=form.querySelector(p[1]+' tbody');tb.insertAdjacentHTML('beforeend',html);
       var row=tb.lastElementChild,cell=row.querySelector('[data-name]');cell.insertBefore(document.createTextNode(name),cell.firstChild);
+      if(groupNames.indexOf(name)>=0){var tg=document.createElement('span');tg.className='pk-tag';tg.textContent='Grup';var sp=document.createTextNode(' '),hid=cell.querySelector('input');cell.insertBefore(sp,hid);cell.insertBefore(tg,hid);}
       var hidden=row.querySelector('input[type=hidden]');if(hidden)hidden.value=name;
-      row.querySelectorAll('.cell input').forEach(function(inp){inp.setAttribute('aria-label',inp.getAttribute('aria-label').replace('campaign baru',name));});
+      row.querySelectorAll('input,button').forEach(function(el){var a=el.getAttribute('aria-label');if(a)el.setAttribute('aria-label',a.replace('campaign baru',name));});
     });
-    box.value='';sums();
   }
-  document.getElementById('tambah').addEventListener('click',add);
-  document.getElementById('baru').addEventListener('keydown',function(e){if(e.key==='Enter'){e.preventDefault();add();}});
+  addBtn.addEventListener('click',function(){
+    var chosen=keys();if(!chosen.length)return;
+    chosen.forEach(addRow);q.value='';resetParents();refresh();toggle(false);show();sums();opener.focus();
+  });
+  form.addEventListener('click',function(e){
+    var b=e.target.closest('[data-remove]');if(!b)return;
+    var idx=b.closest('tr').dataset.idx;
+    form.querySelectorAll('tr[data-idx="'+idx+'"]').forEach(function(r){r.remove();});
+    show();sums();if(!box.hidden)refresh();opener.focus();
+  });
   sums();
 })();
 """
