@@ -1,15 +1,15 @@
 # Model data
 
-Database **`marketing_reports`**, skema **`reports`**, di server PostgreSQL yang sudah ada tetapi terpisah dari database lain. Migrasi ada di `database/` dan diterapkan berurutan (aman diulang). `database/verify_install.sql` memeriksa pemasangan: **23 baris harus PASS**.
+Database **`marketing_reports`**, skema **`reports`**, di server PostgreSQL yang sudah ada tetapi terpisah dari database lain. Migrasi ada di `database/` dan diterapkan berurutan (aman diulang). `database/verify_install.sql` memeriksa pemasangan: **26 baris harus PASS**.
 
 ## Role
 
 | Role | Dipakai oleh | Hak |
 |---|---|---|
 | `report_owner` | pemilik objek (tanpa login) | memiliki skema dan tabel |
-| `report_writer` | n8n | SELECT dan INSERT pada `report_runs`, `report_analyses`, `performance_snapshots`; SELECT pada tabel lain |
+| `report_writer` | n8n | SELECT dan INSERT pada `report_runs`, `report_analyses`, `performance_snapshots`; SELECT pada tabel lain (termasuk `lead_validity_settings`, yang dibaca n8n sebelum membuat report) |
 | `report_reader` | pembacaan | SELECT |
-| `report_viewer` | web viewer | SELECT report dan analisis; INSERT `target_entries`, `analysis_edits`, `budget_snapshots`, `report_actions`; SELECT, INSERT, UPDATE pada `viewer_users` dan `company_names` |
+| `report_viewer` | web viewer | SELECT report dan analisis; INSERT `target_entries`, `analysis_edits`, `budget_snapshots`, `report_actions`, `analysis_notes`, `report_achievements`, `lead_validity_settings`; SELECT, INSERT, UPDATE pada `viewer_users` dan `company_names` |
 
 Tidak ada role yang bisa DELETE. Role penulis dan pembaca report tidak bisa membaca `viewer_users`.
 
@@ -26,6 +26,9 @@ Tidak ada role yang bisa DELETE. Role penulis dan pembaca report tidak bisa memb
 | `budget_snapshots` | 006 | append-only | Satu versi lengkap per simpan: `month`, `total_budget`, `spend_as_of`, `data.campaigns{nama: {budget, month_spend, weeks{minggu: jumlah}}}` |
 | `performance_snapshots` | 007, 008 | append-only | Snapshot halaman Performa. Format v2: satu baris anonim per lead (`leads`) dan daftar nilai filter (`dims`); lihat komentar di `008` |
 | `report_actions` | 009 | append-only | Daftar Action per (BU, periode): `items` (jsonb, maksimal 30 butir `{action, campaign, note}`) |
+| `analysis_notes` | 010 | append-only | Informasi tambahan untuk analisis per (BU, periode): `note` (teks, maksimal 1000 karakter; kosong berarti dikosongkan). Tidak tampil di report |
+| `report_achievements` | 011 | append-only | Pencapaian manual per report (BU, periode): `values` (`{hardware: {produk: angka}, semester, year}`, kunci yang tidak ada = pakai angka sistem) dan `reason` (wajib bila `values` tidak kosong; tidak tampil di report) |
+| `lead_validity_settings` | 012 | append-only | Masa berlaku lead per BU: `config` (`defaults` per tahap dan `remarks` per aturan Remark). Baris terbaru per BU berlaku; tanpa baris dipakai batas profil |
 
 View: `run_index` (run tanpa HTML), `latest_reports` (run terbaru per BU dan periode beserta analisis terbaru), `targets_latest`.
 
@@ -35,6 +38,8 @@ View: `run_index` (run tanpa HTML), `latest_reports` (run terbaru per BU dan per
 - **Bentrok simpan budget.** Menyimpan budget membawa `base` (id snapshot yang dibuka). Bila snapshot terbaru sudah berbeda, simpan ditolak agar tidak menimpa tanpa sadar.
 - **Bulan sebuah minggu** = bulan yang memuat Kamis minggu itu; ini menentukan di halaman bulan mana spend mingguan diisi.
 - **Privasi.** Snapshot Performa dan `facts` tidak memuat nama perusahaan lead, kontak, atau Record Key. Nama campaign ikut tersimpan di budget dan bisa terkirim ke analisis; nama perusahaan lead tidak.
+- **Angka manual menimpa saat tampil, bukan di data.** `report_achievements` tidak mengubah `numeric_html`; viewer menukar angka sistem dengan angka manual saat halaman, PDF, dan konteks target analisis dibuat. Angka sistem tetap terlihat di form admin.
+- **Pengaturan masa berlaku ikut identitas run.** `source_sha256` sebuah run dihitung dari isi Sheet **dan** pengaturan masa berlaku yang dipakai, sehingga mengubah pengaturan lalu membuat report lagi menghasilkan run baru, bukan dilewati sebagai duplikat.
 - **Report lama tetap utuh.** Perubahan aturan hitung tidak menulis ulang `numeric_html` lama; angka baru muncul setelah Report Generate dijalankan lagi.
 
 ## Menambah migrasi

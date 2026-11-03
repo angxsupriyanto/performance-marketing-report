@@ -52,6 +52,8 @@ class FakeStore:
         self.actions = []
         self.notes = []
         self.achievements = []
+        self.validity = []
+        self.remarks = {}
         self.snaps = []
         self.performance = {}
         self.model = {"bu1": "claude-sonnet-5-5", "bu2": "claude-sonnet-5-5"}
@@ -149,6 +151,24 @@ class FakeStore:
         if self.fail_writes:
             raise RuntimeError("write failed")
         self.actions.append({"bu": bu, "period": period, "items": items, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_validity(self, bu):
+        self._check()
+        saved = [v for v in self.validity if v["bu"] == bu]
+        return {k: saved[-1][k] for k in ("config", "saved_by", "saved_at")} if saved else None
+
+    def validity_history(self, bu, limit=20):
+        self._check()
+        return [{k: v[k] for k in ("config", "saved_by", "saved_at")} for v in reversed(self.validity) if v["bu"] == bu][:limit]
+
+    def add_validity(self, bu, config, saved_by):
+        if self.fail_writes:
+            raise RuntimeError("write failed")
+        self.validity.append({"bu": bu, "config": config, "saved_by": saved_by, "saved_at": datetime.now(UTC)})
+
+    def latest_remark_values(self, bu):
+        self._check()
+        return list(self.remarks.get(bu, []))
 
     def latest_achievements(self, bu, period):
         self._check()

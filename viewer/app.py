@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 import generate_report  # noqa: E402
 import report_view  # noqa: E402
 from service.secretfile import read_secret  # noqa: E402
-from viewer import access, achievements, actions, analysis_edits, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
+from viewer import access, achievements, actions, analysis_edits, validity, auth, budget, pdf, pages, performance, performance_pages, targets, theme  # noqa: E402
 from viewer.store import Store, UserError, facts_of  # noqa: E402
 
 BU = re.compile(r"[a-z0-9_]{1,32}")
@@ -337,6 +337,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.need_admin()
                     status = self.save_budget(form, csrf, nonce)
                     return
+                if path == "/validity":
+                    self.need_admin()
+                    status = self.save_validity(form, csrf, nonce)
+                    return
             elif path == "/":
                 status = self.list_page(csrf, nonce)
                 return
@@ -364,6 +368,10 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/budget":
                 self.need_admin()
                 status = self.budget_page(query, csrf, nonce)
+                return
+            elif path == "/validity":
+                self.need_admin()
+                status = self.validity_page(query, csrf, nonce)
                 return
             elif path == "/performa":
                 status = self.performance_page(query, csrf, nonce)
@@ -602,6 +610,54 @@ class Handler(BaseHTTPRequestHandler):
         threading.Thread(target=run_analysis, args=(self.cfg, self.jobs, bu, period, context, extra), daemon=True).start()
         self.json(202, {"state": "running"})
         return 202
+
+    def validity_state(self, bu: str) -> tuple[dict, bool, list[dict], list[str]]:
+        """(config in force, whether it was saved, history, Remark choices). Without a saved row the profile's own limits are what is in force."""
+        store = self.cfg.store
+        try:
+            latest = store.latest_validity(bu)
+            history = store.validity_history(bu)
+            remarks = store.latest_remark_values(bu)
+        except Exception:  # noqa: BLE001
+            raise HttpError(503, "Pengaturan tidak bisa dimuat. Database marketing_reports tidak menjawab; muat ulang halaman ini.")
+        config = latest["config"] if latest else validity.profile_config(bu)
+        options = list(remarks) + [r["remark"] for r in config["remarks"] if r["remark"] not in remarks]  # a saved rule's Remark must stay selectable
+        return config, latest is not None, history, options
+
+    def validity_page(self, query: dict, csrf: str, nonce: str, posted: dict | None = None, errors: dict | None = None, failed: str = "", status: int = 200) -> int:
+        names = {b: n for b, n in access.names_with_defaults(self.safe_names()).items() if b in UNITS}
+        bu = posted.get("bu", "") if posted else query.get("bu", "bu1")
+        if bu not in UNITS:
+            raise HttpError(404, "Perusahaan tidak dikenal")
+        config, saved, history, options = self.validity_state(bu)
+        values = posted if posted else validity.form_values(config)
+        notice = ""
+        if not posted and query.get("saved") == "1":
+            notice = f"Pengaturan {names.get(bu, bu)} tersimpan. Berlaku untuk report dan data Performa yang dibuat berikutnya."
+        elif not posted and query.get("saved") == "same":
+            notice = "Tidak ada perubahan yang perlu disimpan."
+        rows = [{"saved_at": h["saved_at"], "saved_by": h["saved_by"], "summary": validity.summary(h["config"])[1:]} for h in history]
+        self.send(status, pages.validity_page(bu, names, values, options, validity.summary(config), rows, errors or {}, csrf, nonce, self.user, notice, failed, not saved), nonce=nonce)
+        return status
+
+    def save_validity(self, form: dict, csrf: str, nonce: str) -> int:
+        bu = form.get("bu", "")
+        if bu not in UNITS:
+            raise HttpError(400, "Perusahaan tidak dikenal")
+        config, _, _, options = self.validity_state(bu)
+        parsed, errors = validity.parse_form(form, options)
+        if parsed is None:
+            return self.validity_page({}, csrf, nonce, posted=form, errors=errors, failed="Periksa isian yang ditandai. Belum ada yang disimpan.", status=422)
+        try:
+            saved = self.cfg.store.latest_validity(bu)
+            if saved is not None and saved["config"] == parsed:
+                self.redirect(f"/validity?bu={bu}&saved=same")
+                return 303
+            self.cfg.store.add_validity(bu, generate_report.normalize_validity(parsed), self.user["username"])
+        except Exception:  # noqa: BLE001
+            return self.validity_page({}, csrf, nonce, posted=form, failed="Pengaturan tidak tersimpan. Database marketing_reports tidak menjawab. Coba simpan lagi.", status=503)
+        self.redirect(f"/validity?bu={bu}&saved=1")
+        return 303
 
     def safe_achievements(self, bu: str, period: str):
         """The newest typed figures, or None when there are none or the table cannot be read (the report then shows the system figures)."""

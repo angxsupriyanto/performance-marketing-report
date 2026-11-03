@@ -632,6 +632,7 @@ def render_body(view: dict, tg: dict | None = None, analysis: dict | None = None
         f'<div class="cards" style="margin-top: 16px">{same_cards}</div>',
         f'<p style="margin: 12px 0 0; color: {MUTED}">Dibandingkan dengan {e(pl)}: {legend_chip("up")} {legend_chip("down")} {legend_chip("flat")}. Selisih angka diikuti persennya. '
         'Perubahan rate dalam poin persentase (pp), yaitu selisih dua persentase.</p>',
+        *([f'<p style="margin: 8px 0 0; color: {MUTED}">{e(view["validity_note"])}</p>'] if view.get("validity_note") else []),
         analysis_panel("Executive Summary", "executive_summary", analysis, f"margin-top: 16px; border: 1px solid {LINE}; border-radius: 6px; padding: 16px"),
         progress_section(view, tg, company, manual),
         sql_section(view),

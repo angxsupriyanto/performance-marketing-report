@@ -1,6 +1,6 @@
 # Celah yang diketahui
 
-Daftar hal yang **belum terbukti, belum selesai, atau diketahui rapuh** pada MVP. Dihapus dari sini hanya setelah dibuktikan. Tanggal terakhir ditinjau: 2026-10-27.
+Daftar hal yang **belum terbukti, belum selesai, atau diketahui rapuh** pada MVP. Dihapus dari sini hanya setelah dibuktikan. Tanggal terakhir ditinjau: 2026-11-03.
 
 ## Belum diverifikasi di lingkungan nyata
 
@@ -20,10 +20,13 @@ Daftar hal yang **belum terbukti, belum selesai, atau diketahui rapuh** pada MVP
 | G10 | Cloudflare Access belum terpasang | *Redirect loop* sengaja dilewati (D34). Perlindungan hanya login viewer. Rekomendasi tetap: pasang Access bila ada waktu. |
 | G11 | Tidak ada log siapa melakukan apa, dan pengguna tidak bisa mengganti password sendiri | Admin yang mengatur password. |
 | G12 | Format tanggal Tracker harus `M/D/YYYY` atau `YYYY-MM-DD` | Sheet berformat D/M/YYYY akan terbaca salah tanpa galat. |
-| G13 | Aturan umur SQL hanya untuk BU1 | BU2 tidak punya aturan serupa (belum diminta). |
+| G13 | Aturan masa berlaku lead sudah bisa diatur per perusahaan (D38) | Belum diuji dengan data asli: periksa halaman *Masa berlaku lead*, lalu angka `expired` di audit run dan paragraf catatan di report. Tanpa pengaturan tersimpan BU1 memakai batas profil (SQL 6 bulan) dan BU2 tanpa batas. |
 | G14 | Budget hanya per bulan | Belum ada rencana tahun atau semester; tidak ada hubungan budget ke target. Lihat `ROADMAP.md`. |
 | G15 | Budget memakai nama campaign Tracker, bukan nama campaign iklan di Meta atau Google | Belum ada pemetaan, sehingga ROAS per produk dan biaya per SQL belum tersedia. Lihat `ROADMAP.md`. |
 | G16 | Repo ini **publik** | Jangan commit data lead, report terisi, atau nama campaign internal. Mockup fase berikutnya memakai contoh netral. |
+| G18 | Pencapaian manual tampil **tanpa penanda** (D39) | Pembaca report dan PDF tidak bisa membedakan angka dari Sheet dan angka koreksi; alasan hanya terlihat di form admin. Edit semester atau tahun menggantikan angka sistem langsung, bukan diturunkan dari koreksi per produk, jadi koreksi per produk tidak otomatis masuk ke progress semester dan tahun. Bila pemilik ingin penanda kecil atau penurunan otomatis, ubah `report_view.manual_block` dan `viewer/achievements.py`. |
+| G19 | Daftar Remark untuk aturan masa berlaku dibaca dari report terakhir | Remark baru di Sheet baru bisa dipilih setelah satu report dibuat untuk perusahaan itu; perusahaan tanpa report belum punya daftar. Teks Remark yang lebih dari 60 karakter dilewati dan daftar dibatasi 50 nilai. |
+| G20 | Report lama tidak mengikuti pengaturan masa berlaku yang baru | Angka report sudah tersimpan; ubah pengaturan lalu jalankan Report Generate lagi. Dua report periode yang sama yang dibuat sebelum dan sesudah perubahan bisa berbeda; keduanya tersimpan. |
 | G17 | Mockup berada di artifact desain pribadi, bukan di repo | Tautan hanya terbuka bagi pemilik. Ringkasan dan tangkapan layar netral ada di `docs/mockups/`. |
 
 ## Utang teknis

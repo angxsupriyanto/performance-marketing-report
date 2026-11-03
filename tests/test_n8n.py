@@ -280,10 +280,10 @@ class CodeNodeTests(unittest.TestCase):
         self.assertIn("penyebab tidak diketahui", self.format_error({"error": {}}))
         self.assertLessEqual(len(self.format_error({"error": {"message": "x" * 5000}})), 1300)
 
-    def build_csv(self, rows, plans=None):
+    def build_csv(self, rows, plans=None, validity=None):
         code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
         plans = plans or [{"bu": "bu1", "period": "2026-W39"}, {"bu": "bu2", "period": "2026-W39"}]
-        return run_code(code, rows, {"Normalize Plan": {"items": [{"plans": plans}], "executed": True}})
+        return run_code(code, rows, {"Normalize Plan": {"items": [{"plans": plans}], "executed": True}, "Read Validity": {"items": [{"validity": validity or {}}], "executed": True}})
 
     def test_csv_drops_contacts_and_converts_serials_and_money(self):
         out = self.build_csv(sheet_rows(LEADS))
@@ -314,7 +314,7 @@ class CodeNodeTests(unittest.TestCase):
         built = self.build_csv(sheet_rows(LEADS))
         self.assertTrue(built["ok"], built)
         code = node(load("Report_Generate_v1.json"), "Build CSV")["parameters"]["jsCode"]
-        missing = run_code(code, sheet_rows(LEADS), {"Normalize Plan": {"missing": True}})
+        missing = run_code(code, sheet_rows(LEADS), {"Normalize Plan": {"missing": True}, "Read Validity": {"items": [{"validity": {}}]}})
         self.assertFalse(missing["ok"])
         self.assertIn('Node "Normalize Plan" tidak ditemukan', missing["error"])
 
@@ -332,8 +332,31 @@ class CodeNodeTests(unittest.TestCase):
     def test_a_skipped_read_tracker_is_named_as_the_cause(self):
         skipped = self.build_csv([{"trigger": "manual", "plans": [{"bu": "bu1", "period": "2026-W39"}]}])  # what a disabled node passes through
         self.assertFalse(skipped["ok"])
-        self.assertIn("keluaran node Normalize Plan, bukan baris sheet", skipped["error"])
+        self.assertIn("keluaran node Normalize Plan atau Read Validity, bukan baris sheet", skipped["error"])
+        after_validity = self.build_csv([{"validity": {}}])  # what a disabled Read Tracker passes through when the validity row arrives instead
+        self.assertFalse(after_validity["ok"])
+        self.assertIn("Read Tracker sedang dinonaktifkan", after_validity["error"])
         self.assertIn("Read Tracker sedang dinonaktifkan", skipped["error"])
+
+    def test_each_company_gets_its_own_saved_validity_setting_or_none(self):
+        setting = {"defaults": {"MQL": None, "SQL": 6, "Deal Won": None}, "remarks": [{"remark": "Trial", "MQL": "default", "SQL": 12, "Deal Won": None}]}
+        items = self.build_csv(sheet_rows(LEADS), validity={"bu1": setting})["result"]
+        self.assertEqual(json.loads(items[0]["json"]["validity"]), setting)
+        self.assertEqual(items[1]["json"]["validity"], "")  # bu2 has nothing saved: the generator falls back to its profile
+        self.assertEqual(self.build_csv(sheet_rows(LEADS))["result"][0]["json"]["validity"], "")
+
+    def test_the_validity_step_sits_between_the_plan_and_the_sheet_and_is_passed_on_to_the_service(self):
+        for name in ("Report_Generate_v1.json", "Performa_Generate_v1.json"):
+            flow = load(name)
+            links = {s: [l["node"] for b in o["main"] for l in b] for s, o in flow["connections"].items()}
+            self.assertEqual(links["Normalize Plan"], ["Read Validity"], name)
+            self.assertEqual(links["Read Validity"], ["Read Tracker"], name)
+            read = node(flow, "Read Validity")
+            self.assertEqual(read["type"], "n8n-nodes-base.postgres")
+            self.assertIn("lead_validity_settings", read["parameters"]["query"])
+            self.assertNotIn("onError", read)  # a missing table must stop the run, not silently change the numbers
+            http = node(flow, "Generate Report" if "Report" in name else "Compute Performa")
+            self.assertIn("validity", [p["name"] for p in http["parameters"]["queryParameters"]["parameters"]], name)
 
     def test_an_empty_or_unreadable_sheet_explains_which_node_and_what_to_check(self):
         none = self.build_csv([])

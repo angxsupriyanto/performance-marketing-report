@@ -78,6 +78,8 @@ class DatabaseTests(unittest.TestCase):
         cls.psql("marketing_reports", "-f", str(ROOT / "database/010_analysis_notes.sql"))  # safe to repeat
         cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))
         cls.psql("marketing_reports", "-f", str(ROOT / "database/011_report_achievements.sql"))  # safe to repeat
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))
+        cls.psql("marketing_reports", "-f", str(ROOT / "database/012_lead_validity.sql"))  # safe to repeat
         opts = ADMIN
         cls.writer = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_writer password=writer-pw", autocommit=True)
         cls.reader = lambda self=None: psycopg.connect(f"{opts} dbname=marketing_reports user=report_reader password=reader-pw", autocommit=True)
@@ -238,7 +240,7 @@ class DatabaseTests(unittest.TestCase):
         from test_table_mode import LEADS
         flow = test_n8n.load("Report_Generate_v1.json")
         csv_items = test_n8n.run_code(test_n8n.node(flow, "Build CSV")["parameters"]["jsCode"], test_n8n.sheet_rows(LEADS),
-                                      {"Normalize Plan": {"items": [{"plans": [{"bu": "bu2", "period": "2026-W39"}]}], "executed": True}})["result"]
+                                      {"Normalize Plan": {"items": [{"plans": [{"bu": "bu2", "period": "2026-W39"}]}], "executed": True}, "Read Validity": {"items": [{"validity": {}}], "executed": True}})["result"]
         report = server.generate(csv_items[0]["json"]["csv"].encode(), "bu2", "2026-W39", False)
         prepared = test_n8n.run_code(test_n8n.node(flow, "Prepare Insert")["parameters"]["jsCode"], [report])["result"]
         params = {f"p{i}": v for i, v in enumerate(prepared[0]["json"]["params"], 1)}
@@ -438,6 +440,34 @@ class DatabaseTests(unittest.TestCase):
         for bad in (("bu1", "2026-W99x", {}, ""), ("BU 1", "2026-W42", {}, ""), ("bu1", "2026-W42", [], ""), ("bu1", "2026-W42", {"year": 1}, "  "), ("bu1", "2026-W42", {}, "x" * 301)):
             with self.assertRaises(pe.CheckViolation, msg=str(bad)):
                 store.add_achievements(bad[0], bad[1], bad[2], bad[3], "admin")
+
+    def test_lead_validity_settings_are_append_only_per_company_read_by_n8n_and_the_newest_wins(self):
+        import psycopg.errors as pe
+        store = self.viewer_store()
+        self.assertIsNone(store.latest_validity("bu1"))
+        first = {"defaults": {"MQL": None, "SQL": 6, "Deal Won": None}, "remarks": []}
+        second = {"defaults": {"MQL": None, "SQL": 6, "Deal Won": None}, "remarks": [{"remark": "Trial", "MQL": "default", "SQL": 12, "Deal Won": None}]}
+        store.add_validity("bu1", first, "admin")
+        store.add_validity("bu1", second, "andi")
+        store.add_validity("bu2", first, "admin")
+        self.assertEqual((store.latest_validity("bu1")["config"], store.latest_validity("bu1")["saved_by"]), (second, "andi"))
+        self.assertEqual([h["saved_by"] for h in store.validity_history("bu1")], ["andi", "admin"])
+        with self.writer() as conn:  # n8n reads the newest setting per company with the writer role
+            rows = conn.execute("SELECT DISTINCT ON (bu) bu, config FROM reports.lead_validity_settings ORDER BY bu, saved_at DESC").fetchall()
+            self.assertEqual({bu: cfg for bu, cfg in rows}, {"bu1": second, "bu2": first})
+            with self.assertRaises(pe.InsufficientPrivilege):
+                conn.execute("INSERT INTO reports.lead_validity_settings (bu, config, saved_by) VALUES ('bu1', '{\"defaults\": {}}', 'x')")
+        with self.viewer() as conn:
+            for statement in ("UPDATE reports.lead_validity_settings SET saved_by = 'x'", "DELETE FROM reports.lead_validity_settings", "TRUNCATE reports.lead_validity_settings"):
+                with self.assertRaises(pe.InsufficientPrivilege):
+                    conn.execute(statement)
+        for bad in (("BU 1", first), ("bu1", []), ("bu1", {"defaults": []}), ("bu1", {"defaults": {}, "remarks": {}}), ("bu1", {"defaults": {}, "remarks": [{}] * 31})):
+            with self.assertRaises(pe.CheckViolation, msg=str(bad)):
+                store.add_validity(bad[0], bad[1], "admin")
+
+    def test_remark_values_come_from_the_newest_run_that_recorded_them(self):
+        store = self.viewer_store()
+        self.assertEqual(store.latest_remark_values("bu1"), [])
 
     def test_performance_snapshots_are_written_by_the_writer_once_per_export_and_day_and_only_read_by_the_viewer(self):
         import psycopg.errors as pe

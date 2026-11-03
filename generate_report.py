@@ -231,19 +231,119 @@ def add_months(day: date, months: int) -> date:
     return date(year, month, min(day.day, last))  # 31 Aug + 6 months has no 31 Feb: use the month's last day
 
 
-def drop_expired_sql(rows: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
-    """A SQL counts only when its date is at most `sql_max_age_months` calendar months after the Inbound Date (inclusive).
-    A row without an Inbound Date cannot be proven expired and stays. Other stages are not affected."""
-    months = PROFILE.get("sql_max_age_months")
-    if not months:
+EXPIRY_STAGES = ("MQL", "SQL", "Deal Won")
+MAX_EXPIRY_MONTHS = 60
+MAX_EXPIRY_RULES = 30
+VALIDITY: dict | None = None  # per-run settings from the database; None means "use the profile's own limits"
+
+
+def profile_validity(profile: dict | None = None) -> dict:
+    """The limits written in the profile: today only a SQL limit for BU1. Used when no settings are passed in."""
+    profile = profile or PROFILE
+    return {"defaults": {"MQL": profile.get("mql_max_age_months"), "SQL": profile.get("sql_max_age_months"), "Deal Won": profile.get("won_max_age_months")}, "remarks": []}
+
+
+def normalize_validity(raw) -> dict:
+    """Checks the settings an admin saved in the viewer: {"defaults": {stage: months|null}, "remarks": [{"remark", stage: "default"|null|months}]}.
+    null means no limit and "default" means "follow the general limit". Raises ValueError with a message that says what is wrong."""
+    if not isinstance(raw, dict):
+        raise ValueError("pengaturan masa berlaku harus berupa objek JSON")
+    months_ok = lambda v: isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= MAX_EXPIRY_MONTHS
+    defaults = raw.get("defaults")
+    if not isinstance(defaults, dict) or set(defaults) != set(EXPIRY_STAGES):
+        raise ValueError("pengaturan masa berlaku: defaults harus memuat " + ", ".join(EXPIRY_STAGES))
+    for stage in EXPIRY_STAGES:
+        if defaults[stage] is not None and not months_ok(defaults[stage]):
+            raise ValueError(f"pengaturan masa berlaku: batas {stage} harus kosong atau bulan bulat 1 sampai {MAX_EXPIRY_MONTHS}")
+    rules = raw.get("remarks", [])
+    if not isinstance(rules, list) or len(rules) > MAX_EXPIRY_RULES:
+        raise ValueError(f"pengaturan masa berlaku: remarks harus daftar maksimal {MAX_EXPIRY_RULES} aturan")
+    seen, remarks = set(), []
+    for rule in rules:
+        if not isinstance(rule, dict) or not isinstance(rule.get("remark"), str) or not rule["remark"].strip():
+            raise ValueError("pengaturan masa berlaku: setiap aturan Remark harus punya teks Remark")
+        key = " ".join(rule["remark"].split()).casefold()
+        if key in seen:
+            raise ValueError(f"pengaturan masa berlaku: Remark {rule['remark']!r} punya lebih dari satu aturan")
+        seen.add(key)
+        item = {"remark": " ".join(rule["remark"].split())}
+        for stage in EXPIRY_STAGES:
+            value = rule.get(stage, "default")
+            if value != "default" and value is not None and not months_ok(value):
+                raise ValueError(f"pengaturan masa berlaku: batas {stage} untuk Remark {rule['remark']!r} harus default, kosong, atau bulan bulat 1 sampai {MAX_EXPIRY_MONTHS}")
+            item[stage] = value
+        remarks.append(item)
+    return {"defaults": {stage: defaults[stage] for stage in EXPIRY_STAGES}, "remarks": remarks}
+
+
+def use_validity(config: dict | None) -> None:
+    global VALIDITY
+    VALIDITY = None if config is None else normalize_validity(config)
+
+
+def active_validity() -> dict:
+    return VALIDITY if VALIDITY is not None else profile_validity()
+
+
+def validity_limit(row: dict[str, str], stage: str, config: dict) -> int | None:
+    """Months allowed between Inbound Date and the stage date for this row: the general limit, unless a rule for its Remark says otherwise."""
+    limit = config["defaults"][stage]
+    remark = " ".join((row.get("Remark") or "").split()).casefold()
+    if remark:
+        for rule in config["remarks"]:
+            if rule["remark"].casefold() == remark:
+                if rule[stage] != "default":
+                    limit = rule[stage]
+                break
+    return limit
+
+
+def drop_expired(rows: list[dict[str, str]], stage: str) -> tuple[list[dict[str, str]], int]:
+    """A stage counts only when its date is at most the allowed calendar months after the Inbound Date (inclusive).
+    A row without an Inbound Date cannot be proven expired and stays. Submission is never dropped, and each stage is judged on its own."""
+    if stage not in EXPIRY_STAGES:
+        return rows, 0
+    config = active_validity()
+    if config["defaults"][stage] is None and not any(rule[stage] not in ("default", None) for rule in config["remarks"]):
         return rows, 0
     kept = []
     for row in rows:
-        inbound = parse_date(row.get("Inbound Date", ""), "Inbound Date")
-        if inbound and parse_date(row[STAGES["SQL"]], STAGES["SQL"]) > add_months(inbound, months):
+        months = validity_limit(row, stage, config)
+        inbound = parse_date(row.get("Inbound Date", ""), "Inbound Date") if months else None
+        if inbound and parse_date(row[STAGES[stage]], STAGES[stage]) > add_months(inbound, months):
             continue
         kept.append(row)
     return kept, len(rows) - len(kept)
+
+
+def expiry_enabled() -> bool:
+    config = active_validity()
+    return any(v is not None for v in config["defaults"].values()) or any(v not in ("default", None) for rule in config["remarks"] for k, v in rule.items() if k in EXPIRY_STAGES)
+
+
+def remark_values(rows: list[tuple[int, dict[str, str]]] | list[dict[str, str]], limit: int = 50) -> list[str]:
+    """The distinct Remark texts in a table, for the viewer's picker. Long texts are skipped; the list is capped."""
+    counts: Counter = Counter()
+    for item in rows:
+        row = item[1] if isinstance(item, tuple) else item
+        text = " ".join((row.get("Remark") or "").split())
+        if text and len(text) <= 60:
+            counts[text] += 1
+    return [text for text, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].casefold()))][:limit]
+
+
+def validity_note(info: dict | None) -> str:
+    """One paragraph for the report: which limits were applied and how many leads each one removed. Empty when no limit is in force."""
+    if not info or "expired" not in info or "validity" not in info:
+        return ""
+    config, expired = info["validity"], info["expired"]
+    limit = lambda v: "tanpa batas" if v is None else f"{v} bulan"
+    text = "Masa berlaku lead dihitung dari Inbound Date. Umum: " + ", ".join(f"{stage} {limit(config['defaults'][stage])}" for stage in EXPIRY_STAGES) + "."
+    for rule in config["remarks"]:
+        changes = [f"{stage} {limit(rule[stage])}" for stage in EXPIRY_STAGES if rule[stage] != "default"]
+        if changes:
+            text += f" Remark {rule['remark']}: " + ", ".join(changes) + "."
+    return text + " Lead yang expired dikeluarkan dari angka tahap itu: " + ", ".join(f"{stage} {expired.get(stage, 0)}" for stage in EXPIRY_STAGES) + "."
 
 
 def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
@@ -252,7 +352,7 @@ def read_stage(path: Path, stage: str) -> list[dict[str, str]]:
     if missing:
         raise ValueError(f"{path}: kolom wajib {stage} tidak ada: {', '.join(sorted(missing))}")
     kept = check_stage_rows(rows, path.name, stage)
-    return drop_expired_sql(kept)[0] if stage == "SQL" else kept
+    return drop_expired(kept, stage)[0]
 
 
 def bu_key(value: str) -> str:
@@ -290,15 +390,20 @@ def read_table(path: Path, allow_duplicate_keys: bool = False) -> tuple[dict[str
             problems.append(str(exc))
     if problems:
         raise ValueError(" || ".join(problems))
-    data["SQL"], sql_expired = drop_expired_sql(data["SQL"])
+    expired = {}
+    for stage in EXPIRY_STAGES:
+        data[stage], expired[stage] = drop_expired(data[stage], stage)
     info = {
         "rows_total": len(rows),
         "rows_in_bu": len(in_bu),
         "rows_without_bu": sum(1 for _, r in rows if not r.get(bu_column) and any(r.values())),
         "duplicate_record_keys": len(duplicates),
     }
-    if PROFILE.get("sql_max_age_months"):
-        info["sql_expired"] = sql_expired
+    if expiry_enabled():
+        info["expired"] = expired
+        info["sql_expired"] = expired["SQL"]
+        info["validity"] = active_validity()
+    info["remark_values"] = remark_values(in_bu)
     return data, info
 
 
@@ -578,11 +683,11 @@ def performance(data: dict[str, list[dict[str, str]]], as_of: date) -> dict:
         for row in data[stage]:
             unique.setdefault(id(row), row)
 
-    sql_ids = {id(row) for row in data["SQL"]}  # the same row also sits in other stage lists after its SQL was dropped as expired
+    kept_ids = {stage: {id(row) for row in data[stage]} for stage in EXPIRY_STAGES}  # the same row also sits in other stage lists after one stage was dropped as expired
 
     def day(row: dict[str, str], stage: str) -> int:
         cell = row.get(STAGES[stage], "")
-        if stage == "SQL" and id(row) not in sql_ids:
+        if stage in kept_ids and id(row) not in kept_ids[stage]:
             return 0
         return parse_date(cell, STAGES[stage]).toordinal() if cell else 0
 
@@ -625,6 +730,7 @@ def main():
     parser.add_argument("--sql",type=Path)
     parser.add_argument("--won",type=Path)
     parser.add_argument("--performa-json",type=Path,help="tulis baris lead anonim untuk halaman Performa ke berkas ini, tanpa membuat report; --period tidak dipakai")
+    parser.add_argument("--validity",type=Path,help="JSON berisi masa berlaku MQL, SQL, dan Deal Won (dari pengaturan di viewer); tanpa ini dipakai batas di profil")
     parser.add_argument("--as-of",help="tanggal acuan cohort (YYYY-MM-DD), default hari ini menurut WIB")
     parser.add_argument("--period","--week",dest="period",default=None,help="YYYY-Www untuk mingguan (contoh 2026-W39) atau YYYY-MM untuk bulanan (contoh 2026-09)")
     parser.add_argument("--output",type=Path,help="default: output/<BU>_<periode>.html")
@@ -632,12 +738,16 @@ def main():
     try:
         profile=load_profile(args.bu)
         use_profile(profile)
+        if args.validity:
+            use_validity(json.loads(args.validity.read_text(encoding="utf-8")))
         if args.performa_json:
             if not args.table:parser.error("--performa-json memerlukan --table")
             data,table_info=read_table(args.table,args.allow_duplicate_keys)
             as_of=date.fromisoformat(args.as_of) if args.as_of else datetime.now(timezone(timedelta(hours=7))).date()
             result=performance(data,as_of)
-            result["audit"]={"bu":profile["name"],"rows_total":table_info["rows_total"],"rows_in_bu":table_info["rows_in_bu"],"source_sha256":hashlib.sha256(args.table.read_bytes()).hexdigest()}
+            digest=hashlib.sha256(args.table.read_bytes())
+            if VALIDITY is not None:digest.update(b"\nvalidity:"+json.dumps(VALIDITY,sort_keys=True).encode())  # other settings, other numbers: not a duplicate of the earlier snapshot
+            result["audit"]={"bu":profile["name"],"rows_total":table_info["rows_total"],"rows_in_bu":table_info["rows_in_bu"],"source_sha256":digest.hexdigest()}
             args.performa_json.parent.mkdir(parents=True,exist_ok=True)
             args.performa_json.write_text(json.dumps(result,ensure_ascii=False,default=json_default)+"\n",encoding="utf-8")
             print(f"OK: {args.performa_json} ({len(result['leads'])} lead)")
@@ -661,6 +771,8 @@ def main():
         if not period_rows(data["Submission"], "Submission", period):
             raise ValueError(f"tidak ada Submission pada {args.period}; periksa periode dan file input")
         view,metrics,same,facts,lists=build(data,period)
+        note=validity_note(table_info)
+        if note:view["validity_note"]=note
         output.parent.mkdir(parents=True,exist_ok=True)
         output.write_text(report_view.render_document(view),encoding="utf-8")
         audit = {
@@ -680,7 +792,7 @@ def main():
             "analysis_keys": view["analysis_keys"],
         }
         if period.kind=="week":audit["week"]=args.period
-        if table_info:facts["data_quality"]=table_info
+        if table_info:facts["data_quality"]={k:v for k,v in table_info.items() if k not in ("remark_values","validity")}  # facts go to the model: it gets counts, not Remark texts or settings
         output.with_suffix(".audit.json").write_text(json.dumps(audit,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
         output.with_suffix(".facts.json").write_text(json.dumps(facts,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")
         output.with_suffix(".lists.json").write_text(json.dumps(lists,ensure_ascii=False,indent=2,default=json_default)+"\n",encoding="utf-8")

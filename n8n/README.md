@@ -34,7 +34,7 @@ Untuk menyerahkan pemasangan Docker kepada Gordon (asisten AI Docker), gunakan `
    | Read Tracker | Google Sheets OAuth2, cukup scope read-only |
    | Generate Report, Apply Analysis | Header Auth: `Authorization` = `Bearer <isi report_service_token.txt>` |
    | Ask Model | Header Auth: `Authorization` = `Bearer <API key 9router>` (untuk `PROVIDER = 'openai'`, bawaan). Untuk `PROVIDER = 'anthropic'`: `x-api-key` = kunci API Anthropic |
-   | Save Run, Save Analysis, Load Latest Run, Save Snapshot | Postgres sebagai `report_writer` |
+   | Save Run, Save Analysis, Load Latest Run, Save Snapshot, Read Validity | Postgres sebagai `report_writer` |
    | Webhook Generate, Webhook Analysis | Header Auth (token pemanggil) |
    | Notify, Notify Error | Telegram |
 

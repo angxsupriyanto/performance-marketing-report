@@ -64,8 +64,8 @@ for (const item of items) {
   const values = ALL.map((column) => cell(column, byName[column]));
   if (values.slice(0, COLUMNS.length).some((v) => v !== '')) rows.push(values.map(quote).join(','));
 }
-if (items.length && items[0].json && items[0].json.plans !== undefined) {
-  throw new Error('Build CSV menerima keluaran node Normalize Plan, bukan baris sheet. Node Read Tracker sedang dinonaktifkan (disabled, tampil abu-abu atau dicoret) atau sambungannya terputus. Aktifkan node itu dan pastikan urutannya Normalize Plan, Read Tracker, Build CSV.');
+if (items.length && items[0].json && (items[0].json.plans !== undefined || items[0].json.validity !== undefined)) {
+  throw new Error('Build CSV menerima keluaran node Normalize Plan atau Read Validity, bukan baris sheet. Node Read Tracker sedang dinonaktifkan (disabled, tampil abu-abu atau dicoret) atau sambungannya terputus. Aktifkan node itu dan pastikan urutannya Normalize Plan, Read Validity, Read Tracker, Build CSV.');
 }
 if (!items.length) throw new Error('Node Read Tracker tidak mengembalikan satu baris pun. Periksa ID spreadsheet, nama tab (NEW Customers List), rentang A:DR, dan credential Google Sheets pada node itu.');
 if (!rows.length) {
@@ -84,4 +84,6 @@ if (missing.length) {
 
 const csv = [ALL.map(quote).join(','), ...rows].join('\n') + '\n';
 const plans = ref('Normalize Plan').first().json.plans;
-return plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length } }));
+// The lead-validity settings saved in the viewer, one object per company ({bu1: {...}}). A company without a saved setting gets '' and the generator uses the limits in its profile.
+const validity = ref('Read Validity').first().json.validity || {};
+return plans.map((plan) => ({ json: { bu: plan.bu, period: plan.period, csv, rows: rows.length, validity: validity[plan.bu] ? JSON.stringify(validity[plan.bu]) : '' } }));

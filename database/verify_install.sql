@@ -93,5 +93,12 @@ SELECT check_name, CASE WHEN ok THEN 'PASS' ELSE 'FAIL' END AS status FROM (
          AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'INSERT')
                       AND NOT (has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'DELETE')
                                OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.report_achievements'), 'TRUNCATE')), false)
+  UNION ALL SELECT 26, 'lead_validity_settings exists; report_viewer can SELECT and INSERT, report_writer and report_reader can SELECT, nobody can UPDATE, DELETE or TRUNCATE',
+         to_regclass('reports.lead_validity_settings') IS NOT NULL
+         AND coalesce(has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'SELECT') AND has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'INSERT')
+                      AND has_table_privilege('report_writer', to_regclass('reports.lead_validity_settings'), 'SELECT') AND has_table_privilege('report_reader', to_regclass('reports.lead_validity_settings'), 'SELECT')
+                      AND NOT (has_table_privilege('report_writer', to_regclass('reports.lead_validity_settings'), 'INSERT') OR has_table_privilege('report_reader', to_regclass('reports.lead_validity_settings'), 'INSERT')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'UPDATE') OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'DELETE')
+                               OR has_table_privilege(to_regrole('report_viewer'), to_regclass('reports.lead_validity_settings'), 'TRUNCATE')), false)
 ) checks
 ORDER BY n;

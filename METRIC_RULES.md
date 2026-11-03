@@ -7,7 +7,7 @@ Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan da
 | Submission | Jumlah baris Raw Submission dengan `Inbound Date` di minggu tersebut. |
 | MQL | Jumlah baris Raw MQL dengan `MQL Date` di minggu tersebut. |
 | MQL Rate KPI | MQL event minggu tersebut ÷ Submission event minggu tersebut. |
-| SQL | Jumlah baris Raw SQL dengan `Proposal Price Quote Date` di minggu tersebut. Khusus BU1, baris hanya dihitung bila tanggal SQL paling lambat 6 bulan kalender setelah `Inbound Date` (inklusif; bila bulan tujuan lebih pendek, dipakai tanggal terakhir bulan itu, mis. 31 Agu menjadi 28/29 Feb; tanpa `Inbound Date` tetap dihitung). Baris yang lewat dikeluarkan dari semua angka SQL dan SQL Value, termasuk Same-week, tabel, Top Contributor, Performa, dan progress Target. Submission, MQL, dan Deal Won tidak terpengaruh. Jumlahnya tercatat di audit sebagai `sql_expired`. |
+| SQL | Jumlah baris Raw SQL dengan `Proposal Price Quote Date` di minggu tersebut, setelah aturan **masa berlaku lead** (bagian di bawah tabel ini). Baris SQL yang expired dikeluarkan dari semua angka SQL dan SQL Value, termasuk Same-week, tabel, Top Contributor, Performa, dan progress Target. Jumlahnya tercatat di audit (`expired.SQL`, dan `sql_expired` untuk laporan lama). |
 | SQL Rate KPI | SQL event minggu tersebut ÷ MQL event minggu tersebut. |
 | SQL Value | Jumlah `SUM of ARR + OTF (Tanpa PPN)` pada baris Raw SQL tersebut. `Rp -` dan kosong menjadi 0. |
 | Deal Won | Jumlah baris Raw Deal Won dengan `Deal Won Date` di minggu tersebut. |
@@ -24,6 +24,17 @@ Aturan ini mendeskripsikan generator, bukan instruksi bebas untuk menafsirkan da
 | Campaign Hardware | Hanya `Dashcam`, `GPS Tracker` (tag `GPS`), `Fuel`, `MDVR`, `OBD`. Salah ketik `OND` menjadi OBD hanya bila nama campaign mengandung OBD. Kosong, Unknown, dan Others dikecualikan. Tiap stage mengikuti tanggal event stage-nya. |
 | Campaign Detail MQL Rate | Baris Submission pada campaign/minggu yang sudah memiliki MQL Date **pada snapshot CSV**, walaupun tanggal MQL jatuh pada minggu sesudahnya, ÷ Submission campaign/minggu. Ini berbeda dari Same-week MQL dan dari Cross-stage MQL Rate. Hanya campaign hardware yang memiliki Submission di minggu terbaru ditampilkan. |
 | Highlight | Top SQL Value campaign; campaign dengan Submission terbanyak namun 0 SQL event; campaign dengan jumlah Remark `Junk leads` terbanyak. Seri diputuskan alfabetis. Jika tidak ada kandidat, tampilkan `—`. |
+
+### Masa berlaku lead (MQL, SQL, Deal Won)
+
+Sebuah tahap (MQL, SQL, atau Deal Won) hanya dihitung bila tanggal tahap itu paling lambat **N bulan kalender** setelah `Inbound Date` (inklusif; bulan tujuan yang lebih pendek memakai tanggal terakhir bulan itu, mis. 31 Agu + 6 bulan = 28 atau 29 Feb).
+
+- **Batas per tahap.** Tiap perusahaan punya batas umum untuk MQL, SQL, dan Deal Won; masing-masing bisa kosong (tanpa batas) atau 1 sampai 60 bulan. Tiap tahap dinilai sendiri: MQL yang expired keluar dari angka MQL saja, SQL dari lead yang sama tetap dihitung bila SQL-nya sendiri belum expired. Submission tidak pernah dikeluarkan.
+- **Aturan khusus Remark.** Lead dengan `Remark` tertentu (cocok persis setelah spasi dirapikan, tanpa membedakan huruf besar kecil; Remark dipilih dari nilai yang ada di Sheet) boleh punya batas sendiri per tahap: ikut batas umum, tanpa batas, atau N bulan. Satu Remark hanya punya satu aturan; "Trial 14 hari" bukan "Trial".
+- **Tanpa Inbound Date** tidak bisa dibuktikan expired, jadi tetap dihitung.
+- **Asal pengaturan.** Admin mengaturnya di halaman *Masa berlaku lead* (tabel `lead_validity_settings`); n8n membacanya dan mengirimnya ke generator (`--validity`, atau parameter `validity` di layanan). Bila perusahaan belum pernah menyimpan, dipakai batas di profilnya (`sql_max_age_months`: BU1 = 6, BU2 = kosong).
+- **Jejak.** Setiap report mencatat pengaturan yang dipakai dan jumlah lead yang dikeluarkan per tahap (audit `inputs.table.validity` dan `expired`) dan menampilkannya sebagai satu paragraf di bawah kartu report. Pengaturan ikut identitas masukan sebuah run, jadi mengubahnya lalu membuat report lagi menghasilkan run baru; run lama tidak berubah.
+- Model AI tidak menerima teks Remark maupun pengaturannya, hanya jumlah yang dikeluarkan (`data_quality.expired`).
 
 ## Perbedaan per BU
 

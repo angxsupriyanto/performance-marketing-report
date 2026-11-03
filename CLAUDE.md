@@ -13,7 +13,7 @@ Dashboard laporan **digital marketing** untuk dua perusahaan (id internal `bu1` 
 | `generate_report.py`, `report_view.py`, `profiles/` | Generator angka dan tampilan report. Aturan hitung: `METRIC_RULES.md` |
 | `service/` | Layanan HTTP kecil (Docker) yang membungkus generator; dipanggil n8n |
 | `n8n/` | Tiga workflow, **dihasilkan** oleh `n8n/build_workflows.py` dari `n8n/code`, `n8n/sql`, `n8n/prompts` |
-| `database/` | Migrasi SQL `000`–`009`, `verify_install.sql` |
+| `database/` | Migrasi SQL `000`–`012`, `verify_install.sql` |
 | `viewer/` | Web app: login, report, Performa, Budget, Target, Action, PDF, pengguna, dark mode |
 | `deploy/` | Docker compose contoh, skrip pasang, `VIEWER.md` |
 | `tests/` | Uji otomatis (±300 tes) |

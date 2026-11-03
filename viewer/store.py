@@ -146,6 +146,27 @@ class Store:
         with self._connect() as conn:
             conn.execute("INSERT INTO reports.report_actions (bu, period, items, saved_by) VALUES (%s, %s, %s, %s)", (bu, period, psycopg.types.json.Jsonb(items), saved_by))
 
+    # ---- how long MQL, SQL and Deal Won stay valid
+    def latest_validity(self, bu: str) -> dict | None:
+        with self._connect() as conn:
+            return conn.execute("SELECT config, saved_by, saved_at FROM reports.lead_validity_settings WHERE bu = %s ORDER BY saved_at DESC LIMIT 1", (bu,)).fetchone()
+
+    def validity_history(self, bu: str, limit: int = 20) -> list[dict]:
+        with self._connect() as conn:
+            return conn.execute("SELECT config, saved_by, saved_at FROM reports.lead_validity_settings WHERE bu = %s ORDER BY saved_at DESC LIMIT %s", (bu, limit)).fetchall()
+
+    def add_validity(self, bu: str, config: dict, saved_by: str) -> None:
+        with self._connect() as conn:
+            conn.execute("INSERT INTO reports.lead_validity_settings (bu, config, saved_by) VALUES (%s, %s, %s)", (bu, psycopg.types.json.Jsonb(config), saved_by))
+
+    def latest_remark_values(self, bu: str) -> list[str]:
+        """The Remark texts seen in the company's newest report run that recorded them (audit.inputs.table.remark_values), most common first."""
+        with self._connect() as conn:
+            row = conn.execute(
+                "SELECT audit #> '{inputs,table,remark_values}' AS values FROM reports.report_runs WHERE bu = %s AND jsonb_typeof(audit #> '{inputs,table,remark_values}') = 'array' "
+                "ORDER BY generated_at DESC LIMIT 1", (bu,)).fetchone()
+        return [v for v in (row["values"] if row else []) if isinstance(v, str)]
+
     # ---- achievement figures typed by hand
     def latest_achievements(self, bu: str, period: str) -> dict | None:
         with self._connect() as conn:

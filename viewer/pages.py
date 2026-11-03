@@ -110,7 +110,7 @@ def menu(csrf: str, user: dict | None, current: str = "") -> str:
     if user is not None:
         main = link("daftar", "/", "Daftar report") + link("performa", "/performa", "Performa")
         if user["role"] == "admin":
-            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target")
+            main += (sep + link("budget", "/budget", "Budget") + link("targets", "/targets", "Pengaturan target") + link("validity", "/validity", "Masa berlaku lead")
                      + sep + link("users", "/users", "Pengguna") + link("companies", "/companies", "Nama perusahaan"))
         who = f'<span style="color:#607188">{escape(user["username"])} ({ROLE_TEXT.get(user["role"], "")})</span>{sep}'
     return (
@@ -544,6 +544,105 @@ def targets_page(bu: str, unit: str, products: list[str], months: list[tuple[str
         'location.href=u.toString();});});</script>'
     )
     return page("Pengaturan target", body, nonce, csrf, menu(csrf, user, "targets"), script)
+
+
+VALIDITY_CSS = """
+.vw-in{width:100%;height:44px;padding:0 12px;border:1px solid #6f8199;border-radius:6px;background:#fff;color:#17283e;font:14px Inter,Arial,sans-serif}
+.vw-linkbtn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0;border:0;background:none;color:#2159a9;font:600 14px Inter,Arial,sans-serif;cursor:pointer}
+""" + """.vw-rrow{display:grid;grid-template-columns:minmax(0,1fr) repeat(3,minmax(0,1.5fr)) 72px;gap:8px;align-items:start;margin-bottom:8px}
+.vw-cell{display:flex;flex-wrap:wrap;gap:8px;min-width:0}.vw-cell select{flex:1 1 130px;min-width:0}.vw-cell input{flex:1 1 72px;min-width:0}
+@media (max-width:760px){.vw-rrow{grid-template-columns:1fr}}
+"""
+
+
+def validity_page(bu: str, names: dict, values: dict, remark_options: list[str], summary_lines: list[str], history: list[dict], errors: dict,
+                  csrf: str, nonce: str, user: dict, notice: str = "", failed: str = "", saved_with_profile: bool = False) -> str:
+    """The admin page for how long MQL, SQL and Deal Won stay valid. values holds the form fields (see viewer.validity.form_values)."""
+    label = names.get(bu, bu)
+    bu_options = "".join(f'<option value="{escape(b)}"{" selected" if b == bu else ""}>{escape(n)}</option>' for b, n in names.items())
+    stages = (("MQL", "mql"), ("SQL", "sql"), ("Deal Won", "won"))
+
+    def err(name: str) -> str:
+        return f'<span role="alert" style="color:#ac3d3d;display:block;margin-top:4px">{escape(errors[name])}</span>' if name in errors else ""
+
+    def cell(prefix: str, key: str, stage: str, general: bool, mode: str, n: str) -> str:
+        opts = ([] if general else [("default", "Ikut batas umum")]) + [("none", "Tanpa batas"), ("bulan", "Batasi")]
+        options = "".join(f'<option value="{v}"{" selected" if v == mode else ""}>{t}</option>' for v, t in opts)
+        field = f"{prefix}_{key}"
+        invalid = ' aria-invalid="true"' if f"{field}_n" in errors else ""
+        disabled = "" if mode == "bulan" else " disabled"
+        return (f'<div class="vw-cell"><select class="vw-in" name="{field}_mode" data-mode aria-label="Masa berlaku {escape(stage)}">{options}</select>'
+                f'<input class="vw-in" name="{field}_n" type="text" inputmode="numeric" maxlength="3" placeholder="Bulan" aria-label="Bulan batas {escape(stage)}" value="{escape(n)}"{invalid}{disabled} style="text-align:right">'
+                f'{err(field + "_n")}</div>')
+
+    general = "".join(
+        f'<div style="flex:1 1 220px"><div style="font-weight:500;color:#17283e;margin-bottom:6px">Masa berlaku {escape(stage)}</div>'
+        f'{cell("g", key, stage, True, values.get(f"g_{key}_mode", "none"), values.get(f"g_{key}_n", ""))}</div>'
+        for stage, key in stages
+    )
+
+    def rule_row(i: int) -> str:
+        chosen = values.get(f"r{i}_remark", "")
+        options = '<option value="">Pilih Remark</option>' + "".join(f'<option value="{escape(r)}"{" selected" if r == chosen else ""}>{escape(r)}</option>' for r in remark_options)
+        cells = "".join(cell(f"r{i}", key, stage, False, values.get(f"r{i}_{key}_mode", "default"), values.get(f"r{i}_{key}_n", "")) for stage, key in stages)
+        return (f'<div class="vw-rrow" data-rule><div><select class="vw-in" name="r{i}_remark" aria-label="Remark aturan">{options}</select>{err(f"r{i}_remark")}</div>{cells}'
+                '<button type="button" class="vw-linkbtn" data-rule-remove style="width:72px">Hapus</button></div>')
+
+    count = int(values.get("rule_count", "0") or 0)
+    rows = "".join(rule_row(i) for i in range(count))
+    empty = ('<p style="margin:0 0 12px;color:#607188" data-role="no-rules"' + ("" if count else "") + f'{" hidden" if count else ""}>Belum ada aturan khusus untuk {escape(label)}.</p>')
+    no_options = "" if remark_options else ('<p style="margin:0 0 12px;color:#607188">Belum ada daftar Remark. Daftar muncul setelah report pertama dibuat untuk perusahaan ini.</p>')
+    summary_html = "".join(f'<li style="margin-bottom:4px">{escape(line)}</li>' for line in summary_lines)
+    if history:
+        trs = "".join(f'<tr><td data-label="Waktu">{escape(dt_text(h["saved_at"]))}</td><td data-label="Oleh">{escape(h["saved_by"])}</td>'
+                      f'<td data-label="Ringkasan">{escape(" ".join(h["summary"]))}</td></tr>' for h in history)
+        hist = (f'<div class="vw-box"><table class="vw-table"><caption class="vw-sr">Riwayat masa berlaku lead {escape(label)}</caption><thead><tr><th scope="col">Waktu</th><th scope="col">Oleh</th>'
+                f'<th scope="col">Ringkasan</th></tr></thead><tbody>{trs}</tbody></table></div>')
+    else:
+        hist = f'<div class="vw-box" style="padding:24px">Belum ada pengaturan tersimpan untuk {escape(label)}. Yang berlaku sekarang adalah batas bawaan dari profil perusahaan.</div>'
+    note = ('<p style="margin:0 0 16px;color:#607188">Belum ada pengaturan tersimpan; yang tampil adalah batas bawaan dari profil perusahaan. Menyimpan akan menggantikannya.</p>' if saved_with_profile else "")
+    body = (
+        f'<style nonce="{nonce}">{VALIDITY_CSS}</style>'
+        '<main class="vw-main"><nav class="vw-crumbs" aria-label="Posisi halaman"><a class="vw-link" href="/">Daftar report</a><span class="sep" aria-hidden="true">/</span><span aria-current="page" style="color:#17283e">Masa berlaku lead</span></nav>'
+        '<h1 class="vw-h1">Masa berlaku lead</h1>'
+        '<p class="vw-lead" style="max-width:700px">Lead dianggap expired bila jarak dari <strong>Inbound Date</strong> ke tanggal MQL, tanggal SQL, atau tanggal Deal Won melebihi batas bulan di bawah. '
+        'Lead expired dikeluarkan dari angka tahap itu saja: MQL expired keluar dari MQL, SQL expired keluar dari SQL, Deal Won expired keluar dari Deal Won. Submission tidak berubah.</p>'
+        '<p style="margin:0 0 24px;max-width:700px;color:#607188">Pengaturan berlaku untuk report dan data Performa yang dibuat setelah disimpan. Report lama tidak berubah. Lead tanpa Inbound Date tetap dianggap valid.</p>'
+        f'<div class="vw-field" style="margin-bottom:24px;max-width:200px"><label for="bu">Perusahaan</label><select id="bu" data-reload="bu">{bu_options}</select></div>'
+        + (f'<p role="status" class="vw-ok">{escape(notice)}</p>' if notice else "")
+        + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(failed)}</p>' if failed else "")
+        + (f'<p role="alert" class="vw-alert" style="margin-bottom:16px">{escape(errors["_rules"])}</p>' if "_rules" in errors else "")
+        + f'<form method="post" action="/validity"><input type="hidden" name="csrf" value="{escape(csrf)}"><input type="hidden" name="bu" value="{escape(bu)}">'
+        f'<section aria-label="Batas umum" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2">Batas umum {escape(label)}</h2>{note}'
+        '<p style="margin:0 0 16px;max-width:680px;color:#607188">Berlaku untuk semua lead yang tidak punya aturan khusus Remark. Acuan tanggal selalu Inbound Date.</p>'
+        f'<div style="display:flex;flex-wrap:wrap;gap:16px 32px">{general}</div></section>'
+        '<section aria-label="Aturan khusus Remark" class="vw-box" style="padding:24px;margin-bottom:24px"><h2 class="vw-h2">Aturan khusus berdasarkan Remark</h2>'
+        '<p style="margin:0 0 16px;max-width:680px;color:#607188">Lead dengan Remark tertentu bisa punya masa berlaku sendiri, misalnya Trial 12 bulan. Remark dipilih dari nilai yang ada di Sheet '
+        '(dibaca dari report terakhir), dan harus sama persis, tanpa membedakan huruf besar dan kecil. Remark baru muncul di daftar setelah report berikutnya dibuat.</p>'
+        f'{no_options}{empty}'
+        '<div class="vw-rrow" style="color:#607188" aria-hidden="true"><span>Remark</span><span>MQL</span><span>SQL</span><span>Deal Won</span><span></span></div>'
+        f'<div data-role="rules">{rows}</div><template id="vw-rule-tpl">{rule_row(0).replace("r0_", "r__I___")}</template>'
+        f'<input type="hidden" name="rule_count" value="{count}" data-role="rule-count">'
+        '<button type="button" class="vw-linkbtn" data-rule-add style="justify-content:flex-start">+ Tambah aturan Remark</button></section>'
+        f'<section aria-label="Ringkasan" class="vw-box" style="padding:16px 24px;margin-bottom:24px;border-color:#6f8199"><h2 class="vw-h2">Ringkasan yang akan berlaku</h2><ul style="margin:0;padding-left:20px">{summary_html}</ul>'
+        '<p style="margin:8px 0 0;color:#607188">Ringkasan yang sama tampil di report sebagai catatan, bersama jumlah lead yang dikeluarkan.</p></section>'
+        '<div style="margin-bottom:32px"><button class="vw-btn" type="submit">Simpan pengaturan</button></div></form>'
+        f'<section aria-label="Riwayat perubahan"><h2 class="vw-h2">Riwayat perubahan {escape(label)}</h2><p style="margin:0 0 12px;color:#607188">Setiap penyimpanan menambah satu baris. Riwayat lama tidak ditimpa.</p>{hist}</section></main>'
+    )
+    script = (
+        f'<script nonce="{nonce}">(function(){{'
+        'var sel=document.getElementById("bu");if(sel)sel.addEventListener("change",function(){var u=new URL(location.href);u.searchParams.set("bu",sel.value);location.href=u.toString();});'
+        'var form=document.querySelector("form[action=\"/validity\"]"),box=form.querySelector("[data-role=rules]"),tpl=document.getElementById("vw-rule-tpl"),cnt=form.querySelector("[data-role=rule-count]"),none=form.querySelector("[data-role=no-rules]");'
+        'function sync(row){row.querySelectorAll("[data-mode]").forEach(function(m){var n=m.parentNode.querySelector("input");n.disabled=m.value!=="bulan";if(n.disabled)n.value="";});}'
+        'function refresh(){if(none)none.hidden=box.querySelector("[data-rule]")!==null;}'
+        'form.querySelectorAll("[data-mode]").forEach(function(m){m.addEventListener("change",function(){sync(m.parentNode);});});'
+        'form.addEventListener("click",function(ev){'
+        'if(ev.target.closest("[data-rule-add]")){var i=Number(cnt.value);var html=tpl.innerHTML.split("__I__").join(String(i));var d=document.createElement("div");d.innerHTML=html;var row=d.firstElementChild;'
+        'row.querySelectorAll("[data-mode]").forEach(function(m){m.addEventListener("change",function(){sync(m.parentNode);});});box.appendChild(row);cnt.value=String(i+1);refresh();row.querySelector("select").focus();return;}'
+        'var rm=ev.target.closest("[data-rule-remove]");if(rm){rm.closest("[data-rule]").remove();refresh();}});'
+        '})();</script>'
+    )
+    return page("Masa berlaku lead", body, nonce, csrf, menu(csrf, user, "validity"), script)
 
 
 def access_text(user: dict, names: dict) -> str:
